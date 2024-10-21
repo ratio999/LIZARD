@@ -58,7 +58,7 @@ def size_fair_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp
 def replace_with_subtree(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Sostituisce un nodo con un sottoalbero casuale."""
     cdef function_treeC.Node node_to_replace = select_random_node(tree.root)
-    new_subtree = tree.build_tree(random.randint(1, 3), functions, x)
+    cdef function_treeC.Node new_subtree = tree.build_tree(random.randint(1, 3), functions, x)
     node_to_replace.left = new_subtree.left
     node_to_replace.right = new_subtree.right
 
@@ -69,11 +69,29 @@ def add_node(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t
     cdef function_treeC.Node node_to_expand = select_random_node(tree.root)
     new_func_str = random.choice(functions)
     cdef function_treeC.Node new_node = function_treeC.Node(real_functionC.RealFunctionC.from_string(new_func_str, x))
-    if random.choice([True, False]):
-        node_to_expand.left = new_node
+    print(tree)
+    if node_to_expand.is_leaf():
+        print('leaf')
+        if random.choice([True, False]):
+            node_to_expand.left = new_node
+            print(node_to_expand)
+        else:
+            node_to_expand.right = new_node
+            print(node_to_expand)
     else:
-        node_to_expand.right = new_node
-
+        print('noleaf')
+        # Se il nodo ha già dei figli, scegli uno dei figli da sostituire o aggiungere
+        if node_to_expand.left is None:
+            node_to_expand.left = new_node
+        elif node_to_expand.right is None:
+            node_to_expand.right = new_node
+        else:
+            # Sostituisci casualmente uno dei due figli
+            if random.choice([True, False]):
+                node_to_expand.left = new_node
+            else:
+                node_to_expand.right = new_node
+    
 # Funzioni di utilità per operare sui nodi
 @cython.boundscheck(False)
 @cython.wraparound(False)
