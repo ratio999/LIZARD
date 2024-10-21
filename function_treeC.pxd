@@ -8,7 +8,11 @@ cdef class Node:
     cdef object right
     cdef str op_symbol
 
+    cpdef get_fun(self)
     cpdef is_leaf(self)
+    cpdef get_left(self)
+    cpdef get_right(self)
+    cpdef get_op(self)
 
 cdef class Tree:
     cdef Node root

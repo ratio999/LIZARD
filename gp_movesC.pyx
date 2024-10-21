@@ -7,16 +7,16 @@ cimport numpy as cnp
 
 @cython.boundscheck(False)  # Per migliorare le prestazioni
 @cython.wraparound(False)
-def subtree_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
+def subtree_mutation( function_treeC.Tree tree,list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Sostituisce un sottoalbero con un nuovo sottoalbero generato casualmente."""
     cdef function_treeC.Node node_to_replace = select_random_node(tree.root)
     cdef int max_depth = random.randint(1, 3)
-    node_to_replace.left = tree.build_tree(max_depth, functions, x).left
-    node_to_replace.right = tree.build_tree(max_depth, functions, x).right
+    node_to_replace.left = tree.build_tree(max_depth, functions, x).get_left()
+    node_to_replace.right = tree.build_tree(max_depth, functions, x).get_right()
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def subtree_crossover(function_treeC.Tree parent1, function_treeC.Tree parent2):
+def subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent2):
     """Esegue il crossover tra due alberi sostituendo un sottoalbero di parent1 con un sottoalbero di parent2."""
     cdef function_treeC.Node node1 = select_random_node(parent1.root)
     cdef function_treeC.Node node2 = select_random_node(parent2.root)
@@ -49,7 +49,7 @@ def size_fair_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp
     """Effettua una mutazione preservando la dimensione dell'albero, sostituendo una parte con un'altra di dimensioni simili."""
     cdef function_treeC.Node node_to_replace = select_random_node(tree.root)
     cdef int subtree_size = compute_subtree_size(node_to_replace)
-    new_subtree = generate_subtree_with_size(subtree_size, functions, x)
+    cdef function_treeC.Node new_subtree = generate_subtree_with_size(subtree_size, functions, x)
     node_to_replace.left = new_subtree.left
     node_to_replace.right = new_subtree.right
 
@@ -68,7 +68,7 @@ def add_node(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t
     """Aggiunge un nodo a un albero esistente."""
     cdef function_treeC.Node node_to_expand = select_random_node(tree.root)
     new_func_str = random.choice(functions)
-    new_node = function_treeC.Node(real_functionC.RealFunctionC.from_string(new_func_str, x))
+    cdef function_treeC.Node new_node = function_treeC.Node(real_functionC.RealFunctionC.from_string(new_func_str, x))
     if random.choice([True, False]):
         node_to_expand.left = new_node
     else:
@@ -77,7 +77,7 @@ def add_node(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t
 # Funzioni di utilità per operare sui nodi
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def select_random_node(function_treeC.Node node):
+cdef select_random_node(function_treeC.Node node):
     """Seleziona un nodo casuale in un albero."""
     if node.is_leaf():
         return node
@@ -88,7 +88,7 @@ def select_random_node(function_treeC.Node node):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def find_parent(function_treeC.Node root, function_treeC.Node child):
+cdef find_parent(function_treeC.Node root, function_treeC.Node child):
     """Trova il nodo genitore di un dato nodo."""
     if root is None or root.is_leaf():
         return None
@@ -104,7 +104,7 @@ def find_parent(function_treeC.Node root, function_treeC.Node child):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def compute_subtree_size(function_treeC.Node node):
+cdef compute_subtree_size(function_treeC.Node node):
     """Calcola la dimensione di un sottoalbero."""
     if node is None:
         return 0
@@ -115,5 +115,8 @@ def compute_subtree_size(function_treeC.Node node):
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Genera un nuovo sottoalbero di una dimensione specifica."""
     depth = size // 2  # Calcola una profondità approssimativa
-    tree = function_treeC.Tree(depth, functions, x)
+    cdef function_treeC.Tree tree = function_treeC.Tree(depth, functions, x)
     return tree.root
+
+#Se fai cdef su tutto forse puoi tornare a cpdef nel file .pxd
+#add_node causa segmentation fault

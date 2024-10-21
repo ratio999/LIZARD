@@ -7,7 +7,7 @@ cimport real_functionC # cimport per accedere a RealFunctionC a livello di Cytho
 import random
 
 cdef class Node:
-
+    
     def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=''):
         self.function = function
         self.left = left
@@ -16,6 +16,18 @@ cdef class Node:
 
     cpdef is_leaf(self):
         return self.left is None and self.right is None
+    
+    cpdef get_left(self):
+        return self.left
+    
+    cpdef get_right(self):
+        return self.right
+    
+    cpdef get_op(self):
+        return self.op_symbol
+    
+    cpdef get_fun(self):
+        return self.function
 
 cdef class Tree:
     
@@ -63,6 +75,7 @@ cdef class Tree:
             op_symbol = '∘'  # Composizione di funzioni
 
         # Crea il nodo con la funzione e i simboli dell'operazione
+        
         return Node(function=func, left=left, right=right, symbol=op_symbol)
 
     cpdef evaluate(self,  x):
