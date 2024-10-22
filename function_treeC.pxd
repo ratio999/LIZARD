@@ -7,15 +7,21 @@ cdef class Node:
     cdef object left
     cdef object right
     cdef str op_symbol
+    cdef int node_depth
+    
 
     cpdef get_fun(self)
     cpdef is_leaf(self)
     cpdef get_left(self)
     cpdef get_right(self)
     cpdef get_op(self)
+    cpdef get_depth(self)
+    cpdef depth(self)
+    cpdef update_func(self)
 
 cdef class Tree:
     cdef Node root
+    cdef str current_description
 
     cpdef build_tree(self, depth, functions, x )
 
@@ -25,3 +31,5 @@ cdef class Tree:
     #cpdef tree_to_string(self,  node,  prefix=?,  is_left=?)
 
     cpdef tree_get_description(self)
+
+    cpdef update_tree_description(self)

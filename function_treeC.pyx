@@ -13,9 +13,34 @@ cdef class Node:
         self.left = left
         self.right = right
         self.op_symbol = symbol
+        self.node_depth = self.depth()
 
     cpdef is_leaf(self):
         return self.left is None and self.right is None
+    
+    cpdef update_func(self):
+        if self.is_leaf():
+            return 
+        else:
+            if self.op_symbol == '+':
+                self.function = self.left.get_fun() + self.right.get_fun()
+                
+            elif self.op_symbol == '-':
+                self.function = self.left.get_fun() - self.right.get_fun()
+                
+            elif self.op_symbol == '*':
+                self.function = self.left.get_fun() * self.right.get_fun()
+                
+            elif self.op_symbol == '/':
+                self.function = self.left.get_fun() / self.right.get_fun()
+                
+            elif self.op_symbol == '**':
+                self.function = self.left.get_fun() ** self.right.get_fun()  # Operazione di potenza
+                
+            elif self.op_symbol == '∘':
+                self.function = self.left.get_fun().compose(self.right.get_fun())
+                
+             
     
     cpdef get_left(self):
         return self.left
@@ -29,6 +54,17 @@ cdef class Node:
     cpdef get_fun(self):
         return self.function
 
+    cpdef get_depth(self):
+        return self.node_depth
+
+    cpdef depth(self):
+        if self.is_leaf():
+            return 0
+        else:
+            left_depth = self.left.depth() if self.left is not None else 0
+            right_depth = self.right.depth() if self.right is not None else 0
+            return 1 + max(left_depth, right_depth)
+
 cdef class Tree:
     
 
@@ -37,6 +73,7 @@ cdef class Tree:
             self.root = self.build_tree(depth, functions, x)
         else:
             self.root = node
+        self.current_description = self.root.function.get_description()
     cpdef get_root(self):
         return self.root
         
@@ -100,6 +137,21 @@ cdef class Tree:
         result += self.tree_to_string(node.right, prefix, False)
 
         return result
+        
+    
 
     cpdef tree_get_description(self):
-        return self.root.function.get_description()
+        return self.current_description
+
+    cpdef update_tree_description(self):
+        """Ricalcola la descrizione dell'intero albero."""
+        # Chiamare il metodo per ottenere la descrizione dalla radice
+        
+        #self.update_root()
+        
+        
+        self.current_description = self.root.function.get_description()
+
+
+        
+        
