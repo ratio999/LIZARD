@@ -27,9 +27,9 @@ cdef assign_operation(function_treeC.Node left, function_treeC.Node right, str o
 @cython.wraparound(False)
 def subtree_mutation( function_treeC.Tree tree,list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Sostituisce un sottoalbero con un nuovo sottoalbero generato casualmente."""
-    cdef function_treeC.Node node_to_replace = select_random_node(tree.root)
+    cdef function_treeC.Node node_to_replace = tree.root.select_random_node()
     cdef int max_depth = node_to_replace.depth()
-    cdef function_treeC.Node parent_node = find_parent(tree.root, node_to_replace)
+    cdef function_treeC.Node parent_node = tree.root.find_parent(node_to_replace)
     cdef str parent_op = parent_node.op_symbol
     
     cdef function_treeC.Node new_subtree = tree.build_tree(max_depth, functions, x)
@@ -46,41 +46,65 @@ def subtree_mutation( function_treeC.Tree tree,list functions, cnp.ndarray[cnp.f
         
     #print('op_new: ', new_subtree.function.get_description(),new_subtree.depth(), new_subtree.is_leaf())
     
-    tree_update(tree, parent_node)
+    tree.tree_update(parent_node)
     #print('nuova descr: ', tree.tree_get_description())
-
-cdef tree_update(function_treeC.Tree tree, function_treeC.Node node):
-    current_node = node
-    while current_node is not None:
-        current_node.update_func()
-        current_node = find_parent(tree.root, current_node)
-
-    tree.update_tree_description()
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent2):
     """Esegue il crossover tra due alberi sostituendo un sottoalbero di parent1 con un sottoalbero di parent2."""
-    cdef function_treeC.Node node1 = select_random_node(parent1.root)
-    cdef function_treeC.Node node2 = select_random_node(parent2.root)
-    node1.left = node2.left
-    node1.right = node2.right
+    cdef function_treeC.Node node1 = parent1.root.select_random_node()
+    cdef function_treeC.Node node2 = parent2.root.select_random_node()
+    cdef function_treeC.Node parent_node = parent1.root.find_parent(node1)
+    #print("Prima del crossover:", node1.function.get_description(), node2.function.get_description())
+
+    # Sostituisci il sottoalbero in parent1 con node2
+    if parent_node is None:
+        # Se node1 è la radice, sostituisci direttamente la radice
+        parent1.root = node2
+    elif parent_node.left == node1:
+        parent_node.left = node2
+    elif parent_node.right == node1:
+        parent_node.right = node2
+
+    # Aggiorna la struttura dell'albero
+    parent1.tree_update(parent_node)
+
+    
+    
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def point_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
+def point_mutation(function_treeC.Tree tree, list functions, list operations, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Modifica un singolo nodo cambiando la funzione o l'operazione."""
-    cdef function_treeC.Node node_to_mutate = select_random_node(tree.root)
-    cdef str new_func_str = random.choice(functions)
-    node_to_mutate.function = real_functionC.RealFunctionC.from_string(new_func_str, x)
+    cdef function_treeC.Node node_to_mutate = tree.root.select_random_node()
+    cdef str new_func_str
+    cdef function_treeC.Node parent = tree.root.find_parent(node_to_mutate)
+    if node_to_mutate.is_leaf():
+        new_func_str= random.choice(functions)
+        node_to_mutate.function = real_functionC.RealFunctionC.from_string(new_func_str, x)
+    else:
+        node_to_mutate.op_symbol = random.choice(operations)
+        node_to_mutate.update_func()
 
+    if parent is None:
+        # Se node1 è la radice, sostituisci direttamente la radice
+        tree.root = node_to_mutate
+    elif parent.left == node_to_mutate:
+        parent.left = node_to_mutate
+    elif parent.right == node_to_mutate:
+        parent.right = node_to_mutate
+
+    # Aggiorna la struttura dell'albero
+    tree.tree_update(parent)
+    
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def hoist_mutation(function_treeC.Tree tree):
     """Sostituisce un sottoalbero con uno dei suoi sottoalberi."""
-    cdef function_treeC.Node subtree = select_random_node(tree.root)
+    cdef function_treeC.Node subtree = tree.root.select_random_node()
     if not subtree.is_leaf():
-        parent_node = find_parent(tree.root, subtree)
+        parent_node = tree.root.find_parent(subtree)
         if random.choice([True, False]):
             parent_node.left = subtree.left
         else:
@@ -90,8 +114,8 @@ def hoist_mutation(function_treeC.Tree tree):
 @cython.wraparound(False)
 def size_fair_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Effettua una mutazione preservando la dimensione dell'albero, sostituendo una parte con un'altra di dimensioni simili."""
-    cdef function_treeC.Node node_to_replace = select_random_node(tree.root)
-    cdef int subtree_size = compute_subtree_size(node_to_replace)
+    cdef function_treeC.Node node_to_replace = tree.root.select_random_node()
+    cdef int subtree_size = node_to_replace.compute_subtree_size()
     cdef function_treeC.Node new_subtree = generate_subtree_with_size(subtree_size, functions, x)
     node_to_replace.left = new_subtree.left
     node_to_replace.right = new_subtree.right
@@ -100,7 +124,7 @@ def size_fair_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp
 @cython.wraparound(False)
 def replace_with_subtree(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Sostituisce un nodo con un sottoalbero casuale."""
-    cdef function_treeC.Node node_to_replace = select_random_node(tree.root)
+    cdef function_treeC.Node node_to_replace = tree.root.select_random_node()
     cdef function_treeC.Node new_subtree = tree.build_tree(random.randint(1, 3), functions, x)
     node_to_replace.left = new_subtree.left
     node_to_replace.right = new_subtree.right
@@ -109,7 +133,7 @@ def replace_with_subtree(function_treeC.Tree tree, list functions, cnp.ndarray[c
 @cython.wraparound(False)
 def add_node(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Aggiunge un nodo a un albero esistente."""
-    cdef function_treeC.Node node_to_expand = select_random_node(tree.root)
+    cdef function_treeC.Node node_to_expand = tree.root.select_random_node()
     new_func_str = random.choice(functions)
     cdef function_treeC.Node new_node = function_treeC.Node(real_functionC.RealFunctionC.from_string(new_func_str, x))
     if node_to_expand.is_leaf():
@@ -131,56 +155,9 @@ def add_node(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t
                 node_to_expand.right = new_node
     
 # Funzioni di utilità per operare sui nodi
-@cython.boundscheck(False)
-@cython.wraparound(False)
-cdef select_random_node(function_treeC.Node node, float threshold=0.1):
-    """
-    Seleziona un nodo casuale in un albero, con probabilità influenzata dalla sua fitness.
-    Nodi con fitness bassa hanno una maggiore probabilità di essere selezionati.
-    """
-    #cdef float fitness = compute_fitness(node)
-    cdef float fitness = 0.8
-    # Più è bassa la fitness, più è alta la probabilità di selezionare il nodo
-    selection_prob = max(1.0 - fitness, threshold)
-    
-    if random.random() < selection_prob:
-        return node
-    
-    if node.is_leaf():
-        return node
-    
-    # Se il nodo non viene selezionato, passa casualmente ai figli
-    if random.random() < 0.5:  # 50% di probabilità di andare verso il nodo sinistro
-        return select_random_node(node.left, threshold)
-    else:  # 50% di probabilità di andare verso il nodo destro
-        return select_random_node(node.right, threshold)
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
-cdef find_parent(function_treeC.Node root, function_treeC.Node child):
-    """Trova il nodo genitore di un dato nodo."""
-    if root is None or root.is_leaf():
-        return None
-    if root.left == child or root.right == child:
-        return root
-    if root.left:
-        parent = find_parent(root.left, child)
-        if parent:
-            return parent
-    if root.right:
-        return find_parent(root.right, child)
-    return None
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
-cdef compute_subtree_size(function_treeC.Node node):
-    """Calcola la dimensione di un sottoalbero."""
-    if node is None:
-        return 0
-    return 1 + compute_subtree_size(node.left) + compute_subtree_size(node.right)
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Genera un nuovo sottoalbero di una dimensione specifica."""
     depth = size // 2  # Calcola una profondità approssimativa

@@ -15,6 +15,50 @@ cdef class Node:
         self.op_symbol = symbol
         self.node_depth = self.depth()
 
+    
+    cpdef find_parent(self, child):
+        """Trova il nodo genitore di un dato nodo."""
+        if self is None or self.is_leaf():
+            return None
+        if self.left == child or self.right == child:
+            return self
+        if self.left:
+            parent = self.left.find_parent(child)
+            if parent:
+                return parent
+        if self.right:
+            return self.right.find_parent(child)
+        return None
+    
+    
+    cpdef select_random_node(self, threshold=0.1):
+        """
+        Seleziona un nodo casuale in un albero, con probabilità influenzata dalla sua fitness.
+        Nodi con fitness bassa hanno una maggiore probabilità di essere selezionati.
+        """
+        #cdef float fitness = compute_fitness(node)
+        cdef float fitness = 0.8
+        # Più è bassa la fitness, più è alta la probabilità di selezionare il nodo
+        cdef float selection_prob = max(1.0 - fitness, threshold)
+        
+        if random.random() < selection_prob:
+            return self
+        
+        if self.is_leaf():
+            return self
+        
+        # Se il nodo non viene selezionato, passa casualmente ai figli
+        if random.random() < 0.5:  # 50% di probabilità di andare verso il nodo sinistro
+            return self.left.select_random_node(threshold)
+        else:  # 50% di probabilità di andare verso il nodo destro
+            return self.right.select_random_node(threshold)
+
+    cpdef compute_subtree_size(self):
+        """Calcola la dimensione di un sottoalbero."""
+        if self is None:
+            return 0
+        return 1 + self.left.compute_subtree_size() + self.right.compute_subtree_size()
+
     cpdef is_leaf(self):
         return self.left is None and self.right is None
     
@@ -152,6 +196,15 @@ cdef class Tree:
         
         self.current_description = self.root.function.get_description()
 
+    cpdef tree_update(self, node):
+        current_node = node
+        while current_node is not None:
+            current_node.update_func()
+            current_node = self.root.find_parent(current_node)
+
+        self.update_tree_description()
+
+    
 
         
         

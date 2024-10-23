@@ -10,6 +10,9 @@ cdef class Node:
     cdef int node_depth
     
 
+    cpdef find_parent(self, child)
+    cpdef select_random_node(self, threshold=?)
+    cpdef compute_subtree_size(self)
     cpdef get_fun(self)
     cpdef is_leaf(self)
     cpdef get_left(self)
@@ -33,3 +36,5 @@ cdef class Tree:
     cpdef tree_get_description(self)
 
     cpdef update_tree_description(self)
+
+    cpdef tree_update(self, node)
