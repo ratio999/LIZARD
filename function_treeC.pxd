@@ -9,7 +9,8 @@ cdef class Node:
     cdef str op_symbol
     cdef int node_depth
     
-
+    cpdef assign_left(self, node)
+    cpdef assign_right(self, node)
     cpdef find_parent(self, child)
     cpdef select_random_node(self, threshold=?)
     cpdef compute_subtree_size(self)

@@ -23,14 +23,16 @@ cdef assign_operation(function_treeC.Node left, function_treeC.Node right, str o
     #print(func)
     return function_treeC.Node(function=func, left=left, right=right, symbol=op_symbol)
 
-@cython.boundscheck(False)  # Per migliorare le prestazioni
-@cython.wraparound(False)
+@cython.boundscheck(True)  # Per migliorare le prestazioni
 def subtree_mutation( function_treeC.Tree tree,list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Sostituisce un sottoalbero con un nuovo sottoalbero generato casualmente."""
-    cdef function_treeC.Node node_to_replace = tree.root.select_random_node()
-    cdef int max_depth = node_to_replace.depth()
-    cdef function_treeC.Node parent_node = tree.root.find_parent(node_to_replace)
-    cdef str parent_op = parent_node.op_symbol
+    
+    parent_node = None
+    while parent_node is None:
+        node_to_replace = tree.root.select_random_node()
+        max_depth = node_to_replace.depth()
+        parent_node = tree.root.find_parent(node_to_replace)
+    cdef str parent_op = parent_node.get_op()
     
     cdef function_treeC.Node new_subtree = tree.build_tree(max_depth, functions, x)
     #print('op: ', node_to_replace.function.get_description(), node_to_replace.depth(), node_to_replace.is_leaf())
@@ -38,19 +40,18 @@ def subtree_mutation( function_treeC.Tree tree,list functions, cnp.ndarray[cnp.f
     if parent_node is None:
         # Se non c'è genitore, significa che stai sostituendo la radice
         tree.root = new_subtree
-    elif parent_node.left == node_to_replace:
-        parent_node.left = new_subtree
+    elif parent_node.get_left() == node_to_replace:
+        parent_node.assign_left(new_subtree)
         
-    elif parent_node.right == node_to_replace:
-        parent_node.right = new_subtree
+    elif parent_node.get_right() == node_to_replace:
+        parent_node.assign_right(new_subtree)
         
     #print('op_new: ', new_subtree.function.get_description(),new_subtree.depth(), new_subtree.is_leaf())
     
     tree.tree_update(parent_node)
     #print('nuova descr: ', tree.tree_get_description())
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
+@cython.boundscheck(True)
 def subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent2):
     """Esegue il crossover tra due alberi sostituendo un sottoalbero di parent1 con un sottoalbero di parent2."""
     cdef function_treeC.Node node1 = parent1.root.select_random_node()
@@ -73,8 +74,7 @@ def subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent2)
     
     
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
+@cython.boundscheck(True)
 def point_mutation(function_treeC.Tree tree, list functions, list operations, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Modifica un singolo nodo cambiando la funzione o l'operazione."""
     cdef function_treeC.Node node_to_mutate = tree.root.select_random_node()
@@ -98,20 +98,39 @@ def point_mutation(function_treeC.Tree tree, list functions, list operations, cn
     # Aggiorna la struttura dell'albero
     tree.tree_update(parent)
     
-@cython.boundscheck(False)
-@cython.wraparound(False)
+@cython.boundscheck(True)
+@cython.wraparound(True)
 def hoist_mutation(function_treeC.Tree tree):
+    #print(tree)
     """Sostituisce un sottoalbero con uno dei suoi sottoalberi."""
-    cdef function_treeC.Node subtree = tree.root.select_random_node()
-    if not subtree.is_leaf():
-        parent_node = tree.root.find_parent(subtree)
-        if random.choice([True, False]):
-            parent_node.left = subtree.left
-        else:
-            parent_node.right = subtree.right
-
-@cython.boundscheck(False)
-@cython.wraparound(False)
+    if not tree.root.is_leaf():
+        check=False
+        while not check:
+            subtree = tree.root.select_random_node()
+            parent_node = tree.root.find_parent(subtree)
+            check = parent_node is not None
+        
+        if not subtree.is_leaf():
+            #print('subtree node: ', subtree.get_fun().get_description(), 'left:', subtree.left.get_fun().get_description(),
+            # 'right: ', subtree.right.get_fun().get_description())
+            choice = random.choice([True, False])
+            if choice:
+                try:
+                    parent_node.assign_left(subtree.get_left())
+                except:
+                    parent_node.assign_right(subtree.get_right())
+            else:
+                try:
+                    parent_node.assign_right(subtree.get_right())
+                except:
+                    parent_node.assign_left(subtree.get_left())
+            tree.tree_update(parent_node)
+            #print('new parent node: ', parent_node.get_fun().get_description(), 'left: ', parent_node.left.get_fun().get_description(),
+            # 'right: ', parent_node.right.get_fun().get_description())
+        
+        
+#@cython.boundscheck(False)
+#@cython.wraparound(False)
 def size_fair_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Effettua una mutazione preservando la dimensione dell'albero, sostituendo una parte con un'altra di dimensioni simili."""
     cdef function_treeC.Node node_to_replace = tree.root.select_random_node()

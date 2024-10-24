@@ -15,7 +15,12 @@ cdef class Node:
         self.op_symbol = symbol
         self.node_depth = self.depth()
 
+    cpdef assign_left(self, node):
+        self.left = node
     
+    cpdef assign_right(self, node):
+        self.right = node
+        
     cpdef find_parent(self, child):
         """Trova il nodo genitore di un dato nodo."""
         if self is None or self.is_leaf():
