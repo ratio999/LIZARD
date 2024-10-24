@@ -8,10 +8,13 @@ cdef class Node:
     cdef object right
     cdef str op_symbol
     cdef int node_depth
+
+    cpdef assign_operation(self, operation)
     
     cpdef assign_left(self, node)
     cpdef assign_right(self, node)
     cpdef find_parent(self, child)
+    cpdef select_random_leaf(self)
     cpdef select_random_node(self, threshold=?)
     cpdef compute_subtree_size(self)
     cpdef get_fun(self)
@@ -26,10 +29,14 @@ cdef class Node:
 cdef class Tree:
     cdef Node root
     cdef str current_description
+    cdef domain
+    cdef int depth
 
-    cpdef build_tree(self, depth, functions, x )
+    cpdef get_domain(self)
 
-    cpdef evaluate(self, x)
+    #cpdef build_tree(self, depth, functions, x )
+
+    cpdef evaluate(self, x=?)
 
     cpdef get_root(self)
     #cpdef tree_to_string(self,  node,  prefix=?,  is_left=?)
@@ -39,3 +46,5 @@ cdef class Tree:
     cpdef update_tree_description(self)
 
     cpdef tree_update(self, node)
+
+cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, str output_type=?)

@@ -2,13 +2,14 @@ cimport numpy as cnp
 cimport real_functionC
 cimport function_treeC
 
-#cpdef subtree_mutation(tree, functions, x)
-#cpdef subtree_crossover(parent1, parent2)
-#cpdef point_mutation(tree, functions, x)
-#cpdef hoist_mutation(tree)
+cpdef subtree_mutation(function_treeC.Tree tree, functions, random_depth=?)
+cpdef subtree_crossover(function_treeC.Tree parent1, function_treeC.Tree parent2)
+cpdef point_mutation(function_treeC.Tree tree, functions,operations, x)
+cpdef hoist_mutation(function_treeC.Tree tree)
 #cpdef size_fair_mutation(tree, functions, x)
 #cpdef replace_with_subtree(tree, functions, x)
-#cpdef add_node(tree, functions, x)
+#cpdef add_node(function_treeC.Tree tree, functions, operations)
+cpdef add_node(function_treeC.Tree tree, functions, operations, random_depth=?)
 #cpdef select_random_node(node)
 #cpdef find_parent(root, child)
 #cpdef compute_subtree_size(node)

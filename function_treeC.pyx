@@ -15,12 +15,16 @@ cdef class Node:
         self.op_symbol = symbol
         self.node_depth = self.depth()
 
+    cpdef assign_operation(self, operation):
+        self.op_symbol = operation
+        self.update_func()
+
     cpdef assign_left(self, node):
         self.left = node
     
     cpdef assign_right(self, node):
         self.right = node
-        
+
     cpdef find_parent(self, child):
         """Trova il nodo genitore di un dato nodo."""
         if self is None or self.is_leaf():
@@ -35,7 +39,15 @@ cdef class Node:
             return self.right.find_parent(child)
         return None
     
-    
+    cpdef select_random_leaf(self):
+        if self.is_leaf():
+            return self
+        else:
+            if random.choice([True, False]):
+                return self.left.select_random_leaf()
+            else:
+                return self.right.select_random_leaf()
+
     cpdef select_random_node(self, threshold=0.1):
         """
         Seleziona un nodo casuale in un albero, con probabilità influenzata dalla sua fitness.
@@ -62,15 +74,19 @@ cdef class Node:
         """Calcola la dimensione di un sottoalbero."""
         if self is None:
             return 0
-        return 1 + self.left.compute_subtree_size() + self.right.compute_subtree_size()
+        left_size = self.left.compute_subtree_size() if self.left is not None else 0
+        right_size = self.right.compute_subtree_size() if self.right is not None else 0
+        return 1 + left_size + right_size
 
     cpdef is_leaf(self):
         return self.left is None and self.right is None
     
     cpdef update_func(self):
         if self.is_leaf():
+            
             return 
         else:
+            
             if self.op_symbol == '+':
                 self.function = self.left.get_fun() + self.right.get_fun()
                 
@@ -118,55 +134,27 @@ cdef class Tree:
     
 
     def __init__(self, int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, Node node=None):
+        self.domain = x
+        self.depth = depth
         if node==None:
-            self.root = self.build_tree(depth, functions, x)
+            self.root = build_tree(depth, functions, self.domain)
         else:
             self.root = node
         self.current_description = self.root.function.get_description()
+
     cpdef get_root(self):
         return self.root
-        
-    cpdef build_tree(self, depth, functions, x ):
-        cdef str func_str
-        if depth == 0:
-            func_str = random.choice(functions)
-            return Node(function=real_functionC.RealFunctionC.from_string(func_str, x))  # Usa il tipo Cython
 
-        # Ricorsione per costruire l'albero
-        cdef Node left = self.build_tree(depth - 1, functions, x)
-        cdef Node right = self.build_tree(depth - 1, functions, x)
+    cpdef get_domain(self):
+        return self.domain
 
-        # Seleziona casualmente un'operazione tra quelle disponibili
-        cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
-        cdef real_functionC.RealFunctionC func  # Usa il tipo Cython
-        cdef str op_symbol
-
-        if operation == 'add':
-            func = left.function + right.function
-            op_symbol = '+'
-        elif operation == 'sub':
-            func = left.function - right.function
-            op_symbol = '-'
-        elif operation == 'mul':
-            func = left.function * right.function
-            op_symbol = '*'
-        elif operation == 'div':
-            func = left.function / right.function
-            op_symbol = '/'
-        elif operation == 'pow':
-            func = left.function ** right.function  # Operazione di potenza
-            op_symbol = '**'
-        elif operation == 'compose':
-            func = left.function.compose(right.function)
-            op_symbol = '∘'  # Composizione di funzioni
-
-        # Crea il nodo con la funzione e i simboli dell'operazione
-        
-        return Node(function=func, left=left, right=right, symbol=op_symbol)
-
-    cpdef evaluate(self,  x):
+    cpdef evaluate(self,  x=None):
+        if x is None:
         # Valuta la funzione nell'albero radicato
-        return self.root.function.evaluate(x)
+            return self.root.function.evaluate(self.domain)
+        else:
+            
+            return self.root.function.evaluate(x)
 
     def __str__(self):
         # Stampa la rappresentazione dell'albero
@@ -208,6 +196,48 @@ cdef class Tree:
             current_node = self.root.find_parent(current_node)
 
         self.update_tree_description()
+
+cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, str output_type=None):
+        cdef str func_str
+        #cdef cnp.ndarray[cnp.float32_t, ndim=1] x = self.domain
+        if depth == 0:
+            func_str = random.choice(functions)
+            return Node(function=real_functionC.RealFunctionC.from_string(func_str, x))  # Usa il tipo Cython
+
+        # Ricorsione per costruire l'albero
+        cdef Node left = build_tree(depth - 1, functions, x)
+        cdef Node right = build_tree(depth - 1, functions, x)
+
+        # Seleziona casualmente un'operazione tra quelle disponibili
+        cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
+        cdef real_functionC.RealFunctionC func  # Usa il tipo Cython
+        cdef str op_symbol
+
+        if operation == 'add':
+            func = left.function + right.function
+            op_symbol = '+'
+        elif operation == 'sub':
+            func = left.function - right.function
+            op_symbol = '-'
+        elif operation == 'mul':
+            func = left.function * right.function
+            op_symbol = '*'
+        elif operation == 'div':
+            func = left.function / right.function
+            op_symbol = '/'
+        elif operation == 'pow':
+            func = left.function ** right.function  # Operazione di potenza
+            op_symbol = '**'
+        elif operation == 'compose':
+            func = left.function.compose(right.function)
+            op_symbol = '∘'  # Composizione di funzioni
+
+        # Crea il nodo con la funzione e i simboli dell'operazione
+        if output_type is None or output_type=='node' or output_type=='Node':
+            return Node(function=func, left=left, right=right, symbol=op_symbol)
+        else:
+            return Tree(depth, functions, x, 
+                    node =Node(function=func, left=left, right=right, symbol=op_symbol))
 
     
 
