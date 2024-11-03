@@ -8,9 +8,9 @@ cdef class Node:
     cdef object right
     cdef str op_symbol
     cdef int node_depth
-
+    cpdef is_param(self)
     cpdef assign_operation(self, operation)
-    
+    cpdef get_leaves(self, leaves_list=?)
     cpdef assign_left(self, node)
     cpdef assign_right(self, node)
     cpdef find_parent(self, child)
@@ -31,6 +31,8 @@ cdef class Tree:
     cdef str current_description
     cdef domain
     cdef int depth
+    cdef list leaves
+    cdef list params
 
     cpdef get_domain(self)
 
@@ -39,6 +41,11 @@ cdef class Tree:
     cpdef evaluate(self, x=?)
 
     cpdef get_root(self)
+    
+    cpdef get_leaves(self)
+
+    cpdef get_params(self, params_list=?)
+
     #cpdef tree_to_string(self,  node,  prefix=?,  is_left=?)
 
     cpdef tree_get_description(self)

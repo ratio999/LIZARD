@@ -8,22 +8,26 @@ import random
 
 cdef class Node:
     
-    def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=''):
+    def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=None):
         self.function = function
         self.left = left
         self.right = right
         self.op_symbol = symbol
         self.node_depth = self.depth()
-
+    cpdef is_param(self):
+        return False
     cpdef assign_operation(self, operation):
-        self.op_symbol = operation
-        self.update_func()
+        if not self.is_param():
+            self.op_symbol = operation
+            self.update_func()
 
     cpdef assign_left(self, node):
-        self.left = node
+        if not self.is_param():
+            self.left = node
     
     cpdef assign_right(self, node):
-        self.right = node
+        if not self.is_param():
+            self.right = node
 
     cpdef find_parent(self, child):
         """Trova il nodo genitore di un dato nodo."""
@@ -82,6 +86,10 @@ cdef class Node:
         return self.left is None and self.right is None
     
     cpdef update_func(self):
+        if self.is_param():
+            self.op_symbol=None
+            self.right = None
+            self.left = None
         if self.is_leaf():
             
             return 
@@ -105,7 +113,16 @@ cdef class Node:
             elif self.op_symbol == '∘':
                 self.function = self.left.get_fun().compose(self.right.get_fun())
                 
-             
+    cpdef get_leaves(self, leaves_list = []):
+        if self.is_leaf():
+            leaves_list.append(self)
+        else:
+            self.left.get_leaves(leaves_list = leaves_list)
+            self.right.get_leaves(leaves_list = leaves_list)
+        
+        return leaves_list
+
+         
     
     cpdef get_left(self):
         return self.left
@@ -123,13 +140,30 @@ cdef class Node:
         return self.node_depth
 
     cpdef depth(self):
-        if self.is_leaf():
+        if self.is_leaf() or self.is_param():
             return 0
         else:
             left_depth = self.left.depth() if self.left is not None else 0
             right_depth = self.right.depth() if self.right is not None else 0
             return 1 + max(left_depth, right_depth)
+'''
+cdef class ParameterNode(Node):
+    cdef double value  # Valore del parametro
 
+    def __init__(self, double value):
+        super().__init__()  # Inizializza la classe padre
+        self.value = value  # Imposta il valore del parametro
+
+    def __repr__(self):
+        return f"ParameterNode(value={self.value})"
+
+    def mutate(self, double mutation_rate):
+        """Mutazione del valore del parametro."""
+        import random
+        if random.random() < mutation_rate:
+            # Varia il valore del parametro con un piccolo scostamento
+            self.value += random.uniform(-, 0.1)
+'''
 cdef class Tree:
     
 
@@ -141,9 +175,20 @@ cdef class Tree:
         else:
             self.root = node
         self.current_description = self.root.function.get_description()
+        self.leaves = self.get_leaves()
+        self.params = self.get_params()
 
     cpdef get_root(self):
         return self.root
+    
+    cpdef get_leaves(self):
+         return self.root.get_leaves()
+
+    cpdef get_params(self, params_list = []):
+        for leaf in self.leaves:
+            if leaf.is_param():
+                params_list.append(leaf)
+        return params_list
 
     cpdef get_domain(self):
         return self.domain
