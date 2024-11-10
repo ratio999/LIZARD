@@ -14,8 +14,14 @@ cdef class Node:
         self.right = right
         self.op_symbol = symbol
         self.node_depth = self.depth()
+        self.domain = self.function.domain
+
+    def get_domain(self):
+        return self.domain
+
     cpdef is_param(self):
-        return False
+        return self.function.is_param()
+
     cpdef assign_operation(self, operation):
         if not self.is_param():
             self.op_symbol = operation
@@ -110,7 +116,7 @@ cdef class Node:
             elif self.op_symbol == '**':
                 self.function = self.left.get_fun() ** self.right.get_fun()  # Operazione di potenza
                 
-            elif self.op_symbol == '∘':
+            elif self.op_symbol == '∘':   # Composition symbol
                 self.function = self.left.get_fun().compose(self.right.get_fun())
                 
     cpdef get_leaves(self, leaves_list = []):
@@ -247,7 +253,9 @@ cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x,
         #cdef cnp.ndarray[cnp.float32_t, ndim=1] x = self.domain
         if depth == 0:
             func_str = random.choice(functions)
-            return Node(function=real_functionC.RealFunctionC.from_string(func_str, x))  # Usa il tipo Cython
+ 
+            #print(funct.get_domain()) 
+            return Node(real_functionC.RealFunctionC.from_string(func_str, x))  # Usa il tipo Cython
 
         # Ricorsione per costruire l'albero
         cdef Node left = build_tree(depth - 1, functions, x)
@@ -276,9 +284,11 @@ cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x,
         elif operation == 'compose':
             func = left.function.compose(right.function)
             op_symbol = '∘'  # Composizione di funzioni
-
+        
         # Crea il nodo con la funzione e i simboli dell'operazione
         if output_type is None or output_type=='node' or output_type=='Node':
+            
+ 
             return Node(function=func, left=left, right=right, symbol=op_symbol)
         else:
             return Tree(depth, functions, x, 

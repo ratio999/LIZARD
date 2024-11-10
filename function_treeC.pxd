@@ -7,6 +7,7 @@ cdef class Node:
     cdef object left
     cdef object right
     cdef str op_symbol
+    cdef object domain
     cdef int node_depth
     cpdef is_param(self)
     cpdef assign_operation(self, operation)

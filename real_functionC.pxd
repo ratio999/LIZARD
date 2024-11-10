@@ -9,10 +9,10 @@ cdef class RealFunctionC:
     cdef str description  # Descrizione della funzione
     cdef list params
 
+    cpdef get_domain(self) 
+    cpdef is_param(self) 
     
- 
-    
-    cpdef  evaluate(self,  x)
+    #cpdef  evaluate(self,  cnp.ndarray[cnp.float32_t, ndim=1] x)
     
     cpdef mutate_parameters(self)
 

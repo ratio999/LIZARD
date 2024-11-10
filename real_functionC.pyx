@@ -13,6 +13,7 @@ cdef class RealFunctionC:
         self.description = str(expr)  # Imposta la descrizione come stringa dell'espressione
         self.regular = False  # Inizializza a False
         self.params = params
+        self.domain = domain
 
         if isinstance(domain, (np.ndarray)):  # Controlla se domain è un array
             if self.is_defined(domain).any():
@@ -25,12 +26,17 @@ cdef class RealFunctionC:
             else:
                 self.description = None
                 self.regular = False
+    cpdef get_domain(self):
+        return self.domain
 
-    cpdef evaluate(self,  x):
-        """Valuta l'espressione simbolica per un array di input x, sostituendo x con i valori dell'array.""" 
+    def evaluate(self,   x):
+        """Valuta l'espressione simbolica per un array di input x, sostituendo x con i valori dell'array."""
+ 
         cdef int n = x.size
+
         cdef cnp.ndarray[cnp.float32_t, ndim=1] results = np.zeros(n, dtype=np.float32)
         cdef object substituted_expr
+
         # Definisci il simbolo per x
         cdef object x_sym = sp.symbols('x')
       
@@ -44,6 +50,13 @@ cdef class RealFunctionC:
                 results[i] = np.nan  # Converti l'espressione sostituita in float e memorizza
 
         return results
+
+    cpdef is_param(self):
+        cdef cnp.ndarray[cnp.float32_t, ndim=1] y
+        
+    
+        y = self.evaluate(self.domain)
+        return np.all(np.isclose(y, y[0]))
 
     cpdef mutate_parameters(self):
         """Modifica i valori dei parametri in modo casuale."""
@@ -116,7 +129,7 @@ cdef class RealFunctionC:
         def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
             return self.evaluate(x) + other.evaluate(x)
 
-        return RealFunctionC(new_func, new_expr, None)
+        return RealFunctionC(new_func, new_expr, self.domain)
 
     def __sub__(self, RealFunctionC other):
         """Subtraction of two RealFunctions."""
@@ -125,7 +138,7 @@ cdef class RealFunctionC:
         def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
             return self.evaluate(x) - other.evaluate(x)
 
-        return RealFunctionC(new_func, new_expr, None)
+        return RealFunctionC(new_func, new_expr, self.domain)
 
     def __mul__(self, RealFunctionC other):
         """Multiplication of two RealFunctions."""
@@ -134,7 +147,7 @@ cdef class RealFunctionC:
         def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
             return self.evaluate(x) * other.evaluate(x)
 
-        return RealFunctionC(new_func, new_expr, None)
+        return RealFunctionC(new_func, new_expr, self.domain)
 
     def __truediv__(self, RealFunctionC other):
         """Division of two RealFunctions with protection against division by zero."""
@@ -145,7 +158,7 @@ cdef class RealFunctionC:
             cdef object denominator = other.evaluate(x)
             return np.where(denominator == 0, np.inf, numerator / denominator)
 
-        return RealFunctionC(safe_div, new_expr, None)
+        return RealFunctionC(safe_div, new_expr, self.domain)
 
     def compose(self, RealFunctionC other):
         """Composition of two RealFunctions (f1(f2(x)))."""
@@ -160,7 +173,7 @@ cdef class RealFunctionC:
             result[is_defined_mask] = self.evaluate(evaluated_inner[is_defined_mask])
             return result
 
-        return RealFunctionC(new_func, new_expr, None)
+        return RealFunctionC(new_func, new_expr, self.domain)
 
     def __pow__(self, RealFunctionC other):
         """Exponentiation of a RealFunction."""
@@ -169,7 +182,7 @@ cdef class RealFunctionC:
         def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
             return self.evaluate(x) ** other.evaluate(x)
 
-        return RealFunctionC(new_func, new_expr, None)
+        return RealFunctionC(new_func, new_expr, self.domain)
 
     cpdef fitness(self, x, y_true):
         predictions = self.evaluate(x)
