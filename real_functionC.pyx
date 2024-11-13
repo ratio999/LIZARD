@@ -14,18 +14,24 @@ cdef class RealFunctionC:
         self.regular = False  # Inizializza a False
         self.params = params
         self.domain = domain
-
+        '''
         if isinstance(domain, (np.ndarray)):  # Controlla se domain è un array
             if self.is_defined(domain).any():
                 self.description = str(expr)
         elif domain is None:
             self.description = str(expr)
-        else:  # Se domain è scalare
+        '''
+        if not isinstance(domain, (np.ndarray)):  # Se domain è scalare
             if self.is_defined(domain):
                 self.description = str(expr)
+                self.regular = True
             else:
                 self.description = None
-                self.regular = False
+               
+        else:
+            self.description = str(expr)
+            self.regular = True
+    
     cpdef get_domain(self):
         return self.domain
 
@@ -70,7 +76,7 @@ cdef class RealFunctionC:
         cdef list results = []
         #cdef object results = np.zeros(n, dtype=np.bool_)
         cdef object x_sym = sp.symbols('x')
-        def check_single_value(cnp.float32_t x_val):
+        def check_single_value(cnp.float64_t x_val):
             try:
                 expr_eval = self.expr.subs(x_sym, x_val)
                 return expr_eval.is_real and expr_eval.is_finite
