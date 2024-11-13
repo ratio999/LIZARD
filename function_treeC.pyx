@@ -245,7 +245,7 @@ cdef class Tree:
         while current_node is not None:
             current_node.update_func()
             current_node = self.root.find_parent(current_node)
-
+            
         self.update_tree_description()
 
 cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, str output_type=None):

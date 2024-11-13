@@ -177,41 +177,58 @@ cpdef add_node(function_treeC.Tree tree, functions, operations):
 cpdef add_node( function_treeC.Tree tree, functions, operations, random_depth=False):
     """Sostituisce un sottoalbero con un nuovo sottoalbero generato casualmente."""
     cdef str op = random.choice(operations)
-    parent_node = None
-    while parent_node is None:
-        node_to_replace = tree.root.select_random_leaf()
-        parent_node = tree.root.find_parent(node_to_replace)
-    cdef str parent_op = parent_node.get_op()
-    if not random_depth:
-        max_depth = tree.root.depth()
-    else:
-        max_depth = random.choice(list(np.arange(1, tree.root.depth()+1)))
-    cdef function_treeC.Node new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
-    if random.choice([True, False]):
-        node_to_replace.assign_left(node_to_replace)
-        node_to_replace.assign_right(new_subtree)
-    else:
-        node_to_replace.assign_right(node_to_replace)
-        node_to_replace.assign_left(new_subtree)
+    if not tree.root.is_leaf():
+        parent_node = None
+        while parent_node is None:
+            node_to_replace = tree.root.select_random_leaf()
+            parent_node = tree.root.find_parent(node_to_replace)
+        parent_op = parent_node.get_op()
+        if not random_depth:
+            max_depth = tree.root.depth()
+        else:
+            max_depth = random.choice(list(np.arange(1, tree.root.depth()+1)))
+        new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
+        if random.choice([True, False]):
+            node_to_replace.assign_left(node_to_replace)
+            node_to_replace.assign_right(new_subtree)
+        else:
+            node_to_replace.assign_right(node_to_replace)
+            node_to_replace.assign_left(new_subtree)
 
-    node_to_replace.assign_operation(op)
+        node_to_replace.assign_operation(op)
     #node_to_replace.update_func()
 
-    if parent_node is None:
-        # Se non c'è genitore, significa che stai sostituendo la radice
-        tree.root = new_subtree
-    elif parent_node.get_left() == node_to_replace:
-        parent_node.assign_left(new_subtree)
+        if parent_node is None:
+            # Se non c'è genitore, significa che stai sostituendo la radice
+            tree.root = new_subtree
+        elif parent_node.get_left() == node_to_replace:
+            parent_node.assign_left(new_subtree)
         
-    elif parent_node.get_right() == node_to_replace:
-        parent_node.assign_right(new_subtree)
+        elif parent_node.get_right() == node_to_replace:
+            parent_node.assign_right(new_subtree)
         
     #print('op_new: ', new_subtree.function.get_description(),new_subtree.depth(), new_subtree.is_leaf())
     
-    tree.tree_update(parent_node)
+        tree.tree_update(parent_node)
     #print('nuova descr: ', tree.tree_get_description())
-
-
+    else:
+        parent_node = function_treeC.Node(function=tree.root.get_fun())
+        max_depth = random.choice([1,2])
+        new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
+        if random.choice([True, False]):
+            tree.root.assign_right(parent_node)
+            tree.root.assign_left(new_subtree)
+        else:
+            tree.root.assign_left(parent_node)
+            tree.root.assign_right(new_subtree)
+       
+        tree.root.assign_operation(op)
+        #print(tree.root.get_fun().get_description(), parent_node.is_leaf())
+        
+        #print(tree.root.get_fun().get_description(), tree.root.is_leaf(), parent_node.is_leaf())
+        #print(parent_node, tree.root)
+        tree.tree_update(parent_node)
+        
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Genera un nuovo sottoalbero di una dimensione specifica."""
     depth = size // 2  # Calcola una profondità approssimativa
