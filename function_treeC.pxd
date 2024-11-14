@@ -1,5 +1,5 @@
 cimport numpy as cnp
-import sympy as sp
+#import sympy as sp
 cimport real_functionC
 
 cdef class Node:
@@ -9,6 +9,9 @@ cdef class Node:
     cdef str op_symbol
     cdef object domain
     cdef int node_depth
+    
+    cdef reinit_to_par(self,set existent_pars) 
+    
     cpdef is_param(self)
     cpdef assign_operation(self, operation)
     cpdef get_leaves(self, leaves_list=?)
@@ -56,3 +59,5 @@ cdef class Tree:
     cpdef tree_update(self, node)
 
 cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, str output_type=?)
+
+cpdef new_par(set existing_params, str user_choice=?)

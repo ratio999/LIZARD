@@ -5,7 +5,8 @@ cimport sympy as csp
 cimport real_functionC # cimport per accedere a RealFunctionC a livello di Cython
 #from real_functionC import RealFunctionC  # Importa l'API ad alto livello di RealFunctionC se necessario
 import random
-
+import re
+#cimport re as cre
 cdef class Node:
     
     def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=None):
@@ -22,10 +23,10 @@ cdef class Node:
     cpdef is_param(self):
         return self.function.is_param()
    
-   #PERICOLOSISSIMO
-    cdef reinit_to_par(self, existent_pars):
-        cdef object new_par = 
-        self.function = real_functionC.RealFunctionC.from_string(str(new_par), self.domain)
+    #PERICOLOSISSIMO
+    cdef reinit_to_par(self, set existing_pars):
+        cdef object new_param = new_par(existing_pars) 
+        self.function = real_functionC.RealFunctionC.from_string(str(new_param), self.domain)
         self.left, self.right, self.op_symbol, self.node_depth = None, None, None, 0
         
     cpdef assign_operation(self, operation):
@@ -301,6 +302,23 @@ cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x,
                     node =Node(function=func, left=left, right=right, symbol=op_symbol))
 
     
+cpdef new_par(set existing_params, str user_choice=None):
+    cdef object param_pattern = re.compile(r"([a-zA-Z]+)(\d+)")
+    cdef list param_names = [param_pattern.match(param).groups()[0] for param in existing_params if param_pattern.match(param)]
+    cdef set unique_prefixes = set(param_names)
+    if user_choice not in unique_prefixes or user_choice==None:
+        user_choice = random.choice(list(unique_prefixes))
+    cdef list new_params = []
 
-        
-        
+
+    indices = sorted([int(param_pattern.match(param).groups()[1]) for param in existing_params if param.startswith(user_choice)])
+    next_index = 0
+    for index in indices:
+        if index == next_index:
+            next_index += 1
+        else:
+            break
+
+    new_params.append(f"{user_choice}{next_index}")
+    
+    return new_params
