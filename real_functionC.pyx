@@ -2,6 +2,8 @@ import numpy as np
 cimport numpy as cnp
 import sympy as sp
 cimport sympy as csp
+
+import re
 from libc.stdlib cimport malloc, free  # Importa malloc e free per la gestione della memoria se necessario
 
 cdef class RealFunctionC:
@@ -14,6 +16,8 @@ cdef class RealFunctionC:
         self.regular = False  # Inizializza a False
         self.params = params
         self.domain = domain
+        self.symbols = self.expr.free_symbols
+        self.params, self.variables = self.classify_symbols()
         '''
         if isinstance(domain, (np.ndarray)):  # Controlla se domain è un array
             if self.is_defined(domain).any():
@@ -32,8 +36,24 @@ cdef class RealFunctionC:
             self.description = str(expr)
             self.regular = True
     
+    cdef classify_symbols(self):
+        
+        cdef set params = set()
+        cdef set variables = set()
+
+        for s in self.symbols:
+            if re.match(r"^[a-zA-Z]\d+$", str(s)):
+                params.add(s)
+            elif re.match(r"[a-zA-Z]$", str(s)):
+                variables.add(s)
+
+        return params, variables
+
+
     cpdef get_domain(self):
         return self.domain
+
+
 
     def evaluate(self,   x):
         """Valuta l'espressione simbolica per un array di input x, sostituendo x con i valori dell'array."""
@@ -64,12 +84,6 @@ cdef class RealFunctionC:
         y = self.evaluate(self.domain)
         return np.all(np.isclose(y, y[0]))
 
-    cpdef mutate_parameters(self):
-        """Modifica i valori dei parametri in modo casuale."""
-        for i in range(len(self.params)):
-            # Esempio di mutazione: incremento casuale
-            self.params[i] += np.random.normal(0, 0.1)  # Aggiunge un rumore normale
-
     def is_defined(self, cnp.ndarray[cnp.float32_t, ndim=1] x):
         """Verifica se la funzione è definita per un array di input x."""
         cdef int n = x.size
@@ -90,17 +104,7 @@ cdef class RealFunctionC:
             return np.array(results, dtype=np.bool_)
         else:
             return check_single_value(x)
-        '''
-        for i in range(n):
-            try:
-                # Verifica se la funzione può essere valutata
-                _ = self.func(x[i])
-                results[i] = True
-            except Exception:
-                results[i] = False
-
-        return results
-        '''
+    
     cpdef derivative(self,  x,  h=1e-5):
         """Calcola la derivata della funzione in x usando il metodo delle differenze finite."""
         return (self.evaluate(x + h) - self.evaluate(x - h)) / (2 * h)
@@ -190,8 +194,13 @@ cdef class RealFunctionC:
 
         return RealFunctionC(new_func, new_expr, self.domain)
 
-    cpdef fitness(self, x, y_true):
-        predictions = self.evaluate(x)
-        mse = np.mean((predictions - y_true) ** 2)
-        complexity = len(self.params)  # O qualsiasi misura di complessità
-        return mse + complexity * 0.01  # Penalizzazione per complessità
+    def get_params(self):
+        return self.params
+
+    def get_variables(self):
+        return self.variables
+
+    def get_symbols(self):
+        return self.symbols
+
+
