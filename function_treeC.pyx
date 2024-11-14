@@ -24,8 +24,8 @@ cdef class Node:
         return self.function.is_param()
    
     #PERICOLOSISSIMO
-    cdef reinit_to_par(self, set existing_pars):
-        cdef object new_param = new_par(existing_pars) 
+    cdef reinit_to_par(self, set existing_pars, str user_prefix=None):
+        cdef object new_param = new_par(existing_pars, user_prefix) 
         self.function = real_functionC.RealFunctionC.from_string(str(new_param), self.domain)
         self.left, self.right, self.op_symbol, self.node_depth = None, None, None, 0
         
@@ -98,11 +98,10 @@ cdef class Node:
     cpdef is_leaf(self):
         return self.left is None and self.right is None
     
-    cpdef update_func(self):
+    cpdef update_func(self, set params_list=set(), str user_prefix=None):
         if self.is_param():
-            self.op_symbol=None
-            self.right = None
-            self.left = None
+            self.reinit_to_par(params_list, user_prefix)
+           
         if self.is_leaf():
             
             return 
@@ -303,22 +302,30 @@ cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x,
 
     
 cpdef new_par(set existing_params, str user_choice=None):
-    cdef object param_pattern = re.compile(r"([a-zA-Z]+)(\d+)")
-    cdef list param_names = [param_pattern.match(param).groups()[0] for param in existing_params if param_pattern.match(param)]
-    cdef set unique_prefixes = set(param_names)
-    if user_choice not in unique_prefixes or user_choice==None:
-        user_choice = random.choice(list(unique_prefixes))
-    cdef list new_params = []
+    if len(existing_params) > 0:
+        param_pattern = re.compile(r"([a-zA-Z]+)(\d+)")
+        param_names = [param_pattern.match(param).groups()[0] for param in existing_params if param_pattern.match(param)]
+        unique_prefixes = set(param_names)
+        if user_choice not in unique_prefixes or user_choice==None:
+            user_choice = random.choice(list(unique_prefixes))
+       
 
 
-    indices = sorted([int(param_pattern.match(param).groups()[1]) for param in existing_params if param.startswith(user_choice)])
-    next_index = 0
-    for index in indices:
-        if index == next_index:
-            next_index += 1
+        indices = sorted([int(param_pattern.match(param).groups()[1]) for param in existing_params if param.startswith(user_choice)])
+        next_index = 0
+        for index in indices:
+            if index == next_index:
+                next_index += 1
+            else:
+                break
+
+        #new_params.append(f"{user_choice}{next_index}")
+        existing_params.add(f"{user_choice}{next_index}")
+        return f"{user_choice}{next_index}" 
+    else:
+        if user_choice is None:
+            existing_params.add('a0')
+            return 'a0'
         else:
-            break
-
-    new_params.append(f"{user_choice}{next_index}")
-    
-    return new_params
+            existing_params.add(f"{user_choice}{0}")
+            return f"{user_choice}{0}" 

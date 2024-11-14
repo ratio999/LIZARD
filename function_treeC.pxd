@@ -10,7 +10,7 @@ cdef class Node:
     cdef object domain
     cdef int node_depth
     
-    cdef reinit_to_par(self,set existent_pars) 
+    cdef reinit_to_par(self,set existent_pars, str user_prefix=?) 
     
     cpdef is_param(self)
     cpdef assign_operation(self, operation)
@@ -28,7 +28,7 @@ cdef class Node:
     cpdef get_op(self)
     cpdef get_depth(self)
     cpdef depth(self)
-    cpdef update_func(self)
+    cpdef update_func(self, set params_list=?, str user_prefix=?)
 
 cdef class Tree:
     cdef Node root
