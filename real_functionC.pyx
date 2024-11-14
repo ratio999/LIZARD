@@ -78,6 +78,8 @@ cdef class RealFunctionC:
         return results
 
     cpdef is_param(self):
+        if len(self.get_variables())==0:
+            return True
         cdef cnp.ndarray[cnp.float32_t, ndim=1] y
         
     
