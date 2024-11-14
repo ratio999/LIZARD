@@ -21,7 +21,13 @@ cdef class Node:
 
     cpdef is_param(self):
         return self.function.is_param()
-
+   
+   #PERICOLOSISSIMO
+    cdef reinit_to_par(self, existent_pars):
+        cdef object new_par = 
+        self.function = real_functionC.RealFunctionC.from_string(str(new_par), self.domain)
+        self.left, self.right, self.op_symbol, self.node_depth = None, None, None, 0
+        
     cpdef assign_operation(self, operation):
         if not self.is_param():
             self.op_symbol = operation
