@@ -58,6 +58,11 @@ cdef class Tree:
 
     cpdef tree_update(self, node)
 
-cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, str output_type=?)
+cpdef build_tree(int depth, list functions, 
+    cnp.ndarray[cnp.float32_t, ndim=1] x, str output_type=?, 
+    int Npars=?, int param_count=?, bint first_call=?,
+    list params_used=?)
+
+cdef parameter_parser(int Npars)
 
 cpdef new_par(set existing_params, str user_choice=?)

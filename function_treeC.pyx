@@ -21,7 +21,12 @@ cdef class Node:
         return self.domain
 
     cpdef is_param(self):
-        return self.function.is_param()
+        if self.is_leaf() and len(self.function.variables)==0:
+            return True
+        elif self.is_leaf() and len(self.function.variables)>0:
+            return False
+        else:
+            return self.function.is_param()
    
     #PERICOLOSISSIMO
     cdef reinit_to_par(self, set existing_pars, str user_prefix=None):
@@ -152,7 +157,7 @@ cdef class Node:
         return self.node_depth
 
     cpdef depth(self):
-        if self.is_leaf() or self.is_param():
+        if self.is_leaf():
             return 0
         else:
             left_depth = self.left.depth() if self.left is not None else 0
@@ -254,19 +259,50 @@ cdef class Tree:
             
         self.update_tree_description()
 
-cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, str output_type=None):
+cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, 
+            str output_type=None, int Npars=0, int param_count=0, 
+            bint first_call = True, list params_used=None):
         cdef str func_str
-        #cdef cnp.ndarray[cnp.float32_t, ndim=1] x = self.domain
-        if depth == 0:
+        cdef list par_list = parameter_parser(Npars)
+        cdef int max_leaves = int(2**depth)
+        cdef str param_name
+        #print(max_leaves)
+        
+        if first_call:
+            if Npars > max_leaves:
+                print('More parameters than leaves --> constant function')
+                Npars = max_leaves
+
+            if params_used is None:
+                params_used = []
+            #param_frequency = max_leaves // Npars if Npars > 0 else max_leaves + 1
+            
+        if depth==0:
+            if param_count < Npars and (param_count%3) < 2:
+                for p in par_list:
+                    if p not in params_used:
+                        param_name = p
+                        #print(param_name, p)
+                        params_used.append(param_name)  # Aggiungi il parametro alla lista
+                        param_count += 1
+                        break
+                else:
+                    func_str = random.choice(functions)
+                    return Node(real_functionC.RealFunctionC.from_string(func_str, x))  # Usa il tipo Cython
+                #print(param_count, Npars)
+                #print(param_name)
+                #print(type(real_functionC.RealFunctionC.from_string(param_name, x)))
+                return Node(real_functionC.RealFunctionC.from_string(param_name, x))
+
             func_str = random.choice(functions)
- 
-            #print(funct.get_domain()) 
-            return Node(real_functionC.RealFunctionC.from_string(func_str, x))  # Usa il tipo Cython
+            return Node(real_functionC.RealFunctionC.from_string(func_str, x))
 
         # Ricorsione per costruire l'albero
-        cdef Node left = build_tree(depth - 1, functions, x)
-        cdef Node right = build_tree(depth - 1, functions, x)
-
+        cdef Node left = build_tree(depth - 1, functions, x,
+                'node', Npars, param_count, False, params_used)
+        cdef Node right = build_tree(depth - 1, functions, x, 
+                'node', Npars, param_count, False, params_used)
+       
         # Seleziona casualmente un'operazione tra quelle disponibili
         cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
         cdef real_functionC.RealFunctionC func  # Usa il tipo Cython
@@ -300,6 +336,13 @@ cdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x,
             return Tree(depth, functions, x, 
                     node =Node(function=func, left=left, right=right, symbol=op_symbol))
 
+cdef parameter_parser(int Npars):
+    cdef list parameters = []
+    cdef str prefix = 'a'
+    for i in range(Npars):
+        parameters.append(f"{prefix}{i}")
+
+    return parameters
     
 cpdef new_par(set existing_params, str user_choice=None):
     if len(existing_params) > 0:
