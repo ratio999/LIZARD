@@ -2,13 +2,13 @@ import numpy as np
 cimport numpy as cnp
 import sympy as sp
 cimport sympy as csp
-cimport real_functionC # cimport per accedere a RealFunctionC a livello di Cython
-#from real_functionC import RealFunctionC  # Importa l'API ad alto livello di RealFunctionC se necessario
+cimport real_functionC 
+
 import random
 import re
-#cimport re as cre
+
 cdef class Node:
-    
+    '''Node of a Tree: either a leaf, or an operation on two other nodes'''    
     def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=None):
         self.function = function
         self.left = left
@@ -18,9 +18,11 @@ cdef class Node:
         self.domain = self.function.domain
 
     def get_domain(self):
+        '''Obtain domain from Python.'''
         return self.domain
-
+    # def?
     cpdef is_param(self):
+        '''Is Node a constant function?'''
         if self.is_leaf() and len(self.function.variables)==0:
             return True
         elif self.is_leaf() and len(self.function.variables)>0:
@@ -28,27 +30,28 @@ cdef class Node:
         else:
             return self.function.is_param()
    
-    #PERICOLOSISSIMO
+    # DANGEROUS!!! Use cases need be minimized!
     cdef reinit_to_par(self, set existing_pars, str user_prefix=None):
+        '''Re-initializes a node to a constant.'''
         cdef object new_param = new_par(existing_pars, user_prefix) 
         self.function = real_functionC.RealFunctionC.from_string(str(new_param), self.domain)
         self.left, self.right, self.op_symbol, self.node_depth = None, None, None, 0
-        
+    #Useless not supported so far    
     cpdef assign_operation(self, operation):
         if not self.is_param():
             self.op_symbol = operation
             self.update_func()
-
+    #Useless not supported so far
     cpdef assign_left(self, node):
         if not self.is_param():
             self.left = node
-    
+    #Useless not supported so far
     cpdef assign_right(self, node):
         if not self.is_param():
             self.right = node
-
+    #cdef?
     cpdef find_parent(self, child):
-        """Trova il nodo genitore di un dato nodo."""
+        """Find the node whose left or right branch is child node"""
         if self is None or self.is_leaf():
             return None
         if self.left == child or self.right == child:
@@ -60,8 +63,9 @@ cdef class Node:
         if self.right:
             return self.right.find_parent(child)
         return None
-    
+    #cdef?
     cpdef select_random_leaf(self):
+        """Select a random leaf (used by genetic operations)"""
         if self.is_leaf():
             return self
         else:
@@ -69,15 +73,12 @@ cdef class Node:
                 return self.left.select_random_leaf()
             else:
                 return self.right.select_random_leaf()
-
+    #cdef?
     cpdef select_random_node(self, threshold=0.1):
-        """
-        Seleziona un nodo casuale in un albero, con probabilità influenzata dalla sua fitness.
-        Nodi con fitness bassa hanno una maggiore probabilità di essere selezionati.
-        """
+        """Select a random node with probability influenced by node fitness (NOT IMPLEMENTED YET)"""
         #cdef float fitness = compute_fitness(node)
         cdef float fitness = 0.8
-        # Più è bassa la fitness, più è alta la probabilità di selezionare il nodo
+
         cdef float selection_prob = max(1.0 - fitness, threshold)
         
         if random.random() < selection_prob:
@@ -86,14 +87,14 @@ cdef class Node:
         if self.is_leaf():
             return self
         
-        # Se il nodo non viene selezionato, passa casualmente ai figli
-        if random.random() < 0.5:  # 50% di probabilità di andare verso il nodo sinistro
+        
+        if random.random() < 0.5:
             return self.left.select_random_node(threshold)
-        else:  # 50% di probabilità di andare verso il nodo destro
+        else: 
             return self.right.select_random_node(threshold)
 
     cpdef compute_subtree_size(self):
-        """Calcola la dimensione di un sottoalbero."""
+        """A figure of merit for Tree or subTree dimension"""
         if self is None:
             return 0
         left_size = self.left.compute_subtree_size() if self.left is not None else 0
@@ -101,9 +102,11 @@ cdef class Node:
         return 1 + left_size + right_size
 
     cpdef is_leaf(self):
+        """Am I a leaf?"""
         return self.left is None and self.right is None
-    
+    #cdef?
     cpdef update_func(self, set params_list=set(), str user_prefix=None):
+        """Update function after attribute changes"""
         if self.is_param():
             self.reinit_to_par(params_list, user_prefix)
            
@@ -131,6 +134,7 @@ cdef class Node:
                 self.function = self.left.get_fun().compose(self.right.get_fun())
                 
     cpdef get_leaves(self, leaves_list = []):
+        """ Find leaves in the subtree rooted by self"""
         if self.is_leaf():
             leaves_list.append(self)
         else:
@@ -140,49 +144,38 @@ cdef class Node:
         return leaves_list
 
          
-    
+    #def?
     cpdef get_left(self):
+        """Access self.left from Python"""
         return self.left
-    
+    #def?
     cpdef get_right(self):
+        """Access self.right from Python"""
         return self.right
-    
+    #def?
     cpdef get_op(self):
+        """Access self.op_symbol from Python"""
         return self.op_symbol
-    
+    #def?
     cpdef get_fun(self):
+        """Acces self.function from Python"""
         return self.function
-
+    #def?
     cpdef get_depth(self):
+        """Access self.depth from Python"""
         return self.node_depth
-
+    #cdef?
     cpdef depth(self):
+        """Compute how deep self is"""
         if self.is_leaf():
             return 0
         else:
             left_depth = self.left.depth() if self.left is not None else 0
             right_depth = self.right.depth() if self.right is not None else 0
             return 1 + max(left_depth, right_depth)
-'''
-cdef class ParameterNode(Node):
-    cdef double value  # Valore del parametro
 
-    def __init__(self, double value):
-        super().__init__()  # Inizializza la classe padre
-        self.value = value  # Imposta il valore del parametro
-
-    def __repr__(self):
-        return f"ParameterNode(value={self.value})"
-
-    def mutate(self, double mutation_rate):
-        """Mutazione del valore del parametro."""
-        import random
-        if random.random() < mutation_rate:
-            # Varia il valore del parametro con un piccolo scostamento
-            self.value += random.uniform(-, 0.1)
-'''
 cdef class Tree:
-    
+     
 
     def __init__(self, int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, Node node=None):
         self.domain = x
@@ -194,37 +187,43 @@ cdef class Tree:
         self.current_description = self.root.function.get_description()
         self.leaves = self.get_leaves()
         self.params = self.get_params()
-
-    cpdef get_root(self):
-        return self.root
     
+    #def?
+    cpdef get_root(self):
+        """Access Tree's root from Python"""
+        return self.root
+    #def?
     cpdef get_leaves(self):
-         return self.root.get_leaves()
-
+        """Access Tree's leaves from Python"""
+        return self.root.get_leaves()
+    
     cpdef get_params(self, params_list = []):
+        """How many constants in the Tree?"""
         for leaf in self.leaves:
             if leaf.is_param():
                 params_list.append(leaf)
         return params_list
-
+    #def?
     cpdef get_domain(self):
+        """Access root's function domain from Python"""
         return self.domain
-
+    #cdef?
     cpdef evaluate(self,  x=None):
+        """Evaluate root on its domain or on a specified one"""
         if x is None:
-        # Valuta la funzione nell'albero radicato
+
             return self.root.function.evaluate(self.domain)
         else:
             
             return self.root.function.evaluate(x)
 
     def __str__(self):
-        # Stampa la rappresentazione dell'albero
+        """print the Tree fancy scheme. REVERSE POLISH"""
         
         return self.tree_to_string(self.root)
 
     def tree_to_string(self,  Node node, str prefix='', bint is_left=True):
-        # Rappresentazione visiva dell'albero
+        """Creation of fancy scheme. REVERSE POLISH"""
         
         if node.is_leaf():
             return f"{prefix}{'└── ' if is_left else '├── '}{str(node.function.get_description())}\n"
@@ -238,20 +237,18 @@ cdef class Tree:
         return result
         
     
-
+    #def?
     cpdef tree_get_description(self):
+        """access root function description from Python""" 
         return self.current_description
-
+    #cdef?
     cpdef update_tree_description(self):
-        """Ricalcola la descrizione dell'intero albero."""
-        # Chiamare il metodo per ottenere la descrizione dalla radice
-        
-        #self.update_root()
-        
-        
-        self.current_description = self.root.function.get_description()
+        """Update the whole tree nodes' functions' descriptions"""
 
+        self.current_description = self.root.function.get_description()
+    #cdef?
     cpdef tree_update(self, node):
+        """Update the whole tree nodes' functions"""
         current_node = node
         while current_node is not None:
             current_node.update_func()
@@ -259,14 +256,16 @@ cdef class Tree:
             
         self.update_tree_description()
 
+#cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, 
             str output_type=None, int Npars=0, int param_count=0, 
             bint first_call = True, list params_used=None):
+        '''Builds a Tree from scratch'''
         cdef str func_str
         cdef list par_list = parameter_parser(Npars)
         cdef int max_leaves = int(2**depth)
         cdef str param_name
-        #print(max_leaves)
+
         
         if first_call:
             if Npars > max_leaves:
@@ -275,37 +274,37 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x
 
             if params_used is None:
                 params_used = []
-            #param_frequency = max_leaves // Npars if Npars > 0 else max_leaves + 1
+
             
         if depth==0:
             if param_count < Npars and (param_count%3) < 2:
                 for p in par_list:
                     if p not in params_used:
                         param_name = p
-                        #print(param_name, p)
-                        params_used.append(param_name)  # Aggiungi il parametro alla lista
+                        
+                        params_used.append(param_name) 
                         param_count += 1
                         break
                 else:
                     func_str = random.choice(functions)
-                    return Node(real_functionC.RealFunctionC.from_string(func_str, x))  # Usa il tipo Cython
-                #print(param_count, Npars)
-                #print(param_name)
-                #print(type(real_functionC.RealFunctionC.from_string(param_name, x)))
+                    return Node(real_functionC.RealFunctionC.from_string(func_str, x)) 
+
+
+
                 return Node(real_functionC.RealFunctionC.from_string(param_name, x))
 
             func_str = random.choice(functions)
             return Node(real_functionC.RealFunctionC.from_string(func_str, x))
 
-        # Ricorsione per costruire l'albero
+        #Recursion needed
         cdef Node left = build_tree(depth - 1, functions, x,
                 'node', Npars, param_count, False, params_used)
         cdef Node right = build_tree(depth - 1, functions, x, 
                 'node', Npars, param_count, False, params_used)
        
-        # Seleziona casualmente un'operazione tra quelle disponibili
+       
         cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
-        cdef real_functionC.RealFunctionC func  # Usa il tipo Cython
+        cdef real_functionC.RealFunctionC func  
         cdef str op_symbol
 
         if operation == 'add':
@@ -321,13 +320,13 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x
             func = left.function / right.function
             op_symbol = '/'
         elif operation == 'pow':
-            func = left.function ** right.function  # Operazione di potenza
+            func = left.function ** right.function 
             op_symbol = '**'
         elif operation == 'compose':
             func = left.function.compose(right.function)
-            op_symbol = '∘'  # Composizione di funzioni
+            op_symbol = '∘' 
         
-        # Crea il nodo con la funzione e i simboli dell'operazione
+
         if output_type is None or output_type=='node' or output_type=='Node':
             
  
@@ -337,14 +336,17 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x
                     node =Node(function=func, left=left, right=right, symbol=op_symbol))
 
 cdef parameter_parser(int Npars):
+    """Create parameter names list(str())"""
     cdef list parameters = []
     cdef str prefix = 'a'
     for i in range(Npars):
         parameters.append(f"{prefix}{i}")
 
     return parameters
-    
+
+#Naming parameters requires fix!    
 cpdef new_par(set existing_params, str user_choice=None):
+    '''Add a new parameter named with a specific logic'''
     if len(existing_params) > 0:
         param_pattern = re.compile(r"([a-zA-Z]+)(\d+)")
         param_names = [param_pattern.match(param).groups()[0] for param in existing_params if param_pattern.match(param)]
@@ -362,7 +364,7 @@ cpdef new_par(set existing_params, str user_choice=None):
             else:
                 break
 
-        #new_params.append(f"{user_choice}{next_index}")
+       
         existing_params.add(f"{user_choice}{next_index}")
         return f"{user_choice}{next_index}" 
     else:
