@@ -1,13 +1,16 @@
 cimport numpy as cnp
 import sympy as sp
 
+
+
 cdef class RealFunctionC:
     cdef object func  # Funzione callable in Python
     cdef object expr, symbols # Espressione simbolica
     cdef bint regular  # Flag per la regolarizzazione
     cdef object domain  # Non utilizzato, puoi rimuoverlo se non serve
     cdef str description  # Descrizione della funzione
-    cdef set params, variables
+    cdef set params
+    cdef list variables    
     cdef classify_symbols(self)
 
     cpdef get_domain(self) 

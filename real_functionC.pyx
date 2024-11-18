@@ -5,10 +5,17 @@ cimport sympy as csp
 
 import re
 from libc.stdlib cimport malloc, free  # Not needed so far 
+from cython.cimports.libc.string import memcpy
+def safe_convert(value):
+        try:
+            return np.float64(value)
+        except (TypeError, ValueError):
+            #print('!\n!\n|\n!\n!')
+            return np.nan
 
 cdef class RealFunctionC:
 
-    def __init__(self, object func, object expr, cnp.ndarray[cnp.float32_t, ndim=1] domain, list params=None):
+    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None):
         """Initialization"""
         self.func = func
         self.expr = expr 
@@ -38,13 +45,13 @@ cdef class RealFunctionC:
     cdef classify_symbols(self):
         
         cdef set params = set()
-        cdef set variables = set()
+        cdef list variables = []
 
         for s in self.symbols:
             if re.match(r"^[a-zA-Z]\d+$", str(s)):
                 params.add(s)
             elif re.match(r"[a-zA-Z]$", str(s)):
-                variables.add(s)
+                variables.append(s)
 
         return params, variables
 
@@ -52,47 +59,32 @@ cdef class RealFunctionC:
     cpdef get_domain(self):
         return self.domain
 
+    def evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x):
+        #cdef object f = sp.lambdify(self.variables, self.expr, "numpy")
+        return self.func(x)
 
-    #cpdef?
-    def evaluate(self,   x):
-        """Evaluate function on domain"""
- 
-        cdef int n = x.size
-
-        cdef cnp.ndarray[cnp.float32_t, ndim=1] results = np.zeros(n, dtype=np.float32)
-        cdef object substituted_expr
-
-        cdef object x_sym = sp.symbols('x')
-      
-        # Substituting x values  
-        for i in range(n):
-            substituted_expr = self.expr.subs(x_sym, x[i])
-
-            if substituted_expr.is_real and substituted_expr.is_finite:
-                results[i] = float(substituted_expr)  
-            else:
-                results[i] = np.nan  
-
-        return results
     #cdef?
     cpdef is_param(self):
         """Is function a constant?"""
         if len(self.get_variables())==0:
             return True
-        cdef cnp.ndarray[cnp.float32_t, ndim=1] y
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] y
         
     
         y = self.evaluate(self.domain)
         return np.all(np.isclose(y, y[0]))
         
+    
     # Use as less as possible: loop on check_single_value is bottleneck --> NEEDS FIX! 
     #ONLY DEF SUPPORTS INNER DEFs!
-    def is_defined(self, cnp.ndarray[cnp.float32_t, ndim=1] x):
+    def is_defined(self, cnp.ndarray[cnp.float64_t, ndim=1] x):
         """ Verify if function is defined on domain"""
+        '''
         cdef int n = x.size
-        cdef list results = []
-
+        #cdef list results = []
+        
         cdef object x_sym = sp.symbols('x')
+        
         def check_single_value(cnp.float64_t x_val):
             try:
                 expr_eval = self.expr.subs(x_sym, x_val)
@@ -107,17 +99,26 @@ cdef class RealFunctionC:
             return np.array(results, dtype=np.bool_)
         else:
             return check_single_value(x)
+        '''
+        try:
+            y = self.evaluate(x)
+            vector_safe_convert = np.vectorize(safe_convert)
+            y_safe = vector_safe_convert(y)
+            return np.isfinite(y_safe) & np.isreal(y_safe)
+        except Exception as e:
+            return np.full_like(x, False, dtype=np.bool_)
+    
     #needs improvement. useless so far. cdef?.
     cpdef derivative(self,  x,  h=1e-5):
         """Compute derivative"""
         return (self.evaluate(x + h) - self.evaluate(x - h)) / (2 * h)
 
-    def __call__(self, cnp.ndarray[cnp.float32_t, ndim=1] x):
+    def __call__(self, cnp.ndarray[cnp.float64_t, ndim=1] x):
         """Allows standard calling"""
         return self.evaluate(x)
     # Very important: keep it Python func    
     @classmethod
-    def from_string(cls, expr_str,  cnp.ndarray[cnp.float32_t, ndim=1] x):
+    def from_string(cls, expr_str,  cnp.ndarray[cnp.float64_t, ndim=1] x):
         """Creates function class from string"""
        
       
@@ -126,8 +127,11 @@ cdef class RealFunctionC:
         cdef object expr
         
         expr = sp.sympify(expr_str)
-        def func(cnp.float32_t input_x):
-            return np.array(sp.lambdify(x_sym, expr)(input_x), dtype=np.float32)
+        def func(cnp.ndarray[cnp.float64_t, ndim=1] input_x):
+            result = sp.lambdify(x_sym, expr, "numpy")(input_x)
+            vector_safe_convert = np.vectorize(safe_convert)
+            result_safe = vector_safe_convert(result)
+            return np.array(result_safe, dtype=np.float64)
         
         return cls(func, expr, x) 
 
@@ -139,7 +143,7 @@ cdef class RealFunctionC:
         """Addition of two RealFunctions."""
         cdef object new_expr = self.expr + other.expr
 
-        def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
             return self.evaluate(x) + other.evaluate(x)
 
         return RealFunctionC(new_func, new_expr, self.domain)
@@ -148,7 +152,7 @@ cdef class RealFunctionC:
         """Subtraction of two RealFunctions."""
         cdef object new_expr = self.expr - other.expr
 
-        def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
             return self.evaluate(x) - other.evaluate(x)
 
         return RealFunctionC(new_func, new_expr, self.domain)
@@ -157,7 +161,7 @@ cdef class RealFunctionC:
         """Multiplication of two RealFunctions."""
         cdef object new_expr = self.expr * other.expr
 
-        def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
             return self.evaluate(x) * other.evaluate(x)
 
         return RealFunctionC(new_func, new_expr, self.domain)
@@ -166,7 +170,7 @@ cdef class RealFunctionC:
         """Division of two RealFunctions with protection against division by zero."""
         cdef object new_expr = self.expr / other.expr
 
-        def safe_div(cnp.ndarray[cnp.float32_t, ndim=1] x):
+        def safe_div(cnp.ndarray[cnp.float64_t, ndim=1] x):
             cdef object numerator = self.evaluate(x)
             cdef object denominator = other.evaluate(x)
             return np.where(denominator == 0, np.inf, numerator / denominator)
@@ -178,7 +182,7 @@ cdef class RealFunctionC:
         cdef object x_sym = sp.symbols('x')
         cdef object new_expr = self.expr.subs(x_sym, other.expr)
 
-        def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
             cdef object is_defined_mask = other.is_defined(x)
             cdef object evaluated_inner = other.evaluate(x)
             cdef object result = np.zeros_like(x)
@@ -192,7 +196,7 @@ cdef class RealFunctionC:
         """Exponentiation of a RealFunction."""
         cdef object new_expr = self.expr ** other.expr
 
-        def new_func(cnp.ndarray[cnp.float32_t, ndim=1] x):
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
             return self.evaluate(x) ** other.evaluate(x)
 
         return RealFunctionC(new_func, new_expr, self.domain)

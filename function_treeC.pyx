@@ -177,7 +177,7 @@ cdef class Node:
 cdef class Tree:
      
 
-    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, Node node=None):
+    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None):
         self.domain = x
         self.depth = depth
         if node==None:
@@ -257,7 +257,7 @@ cdef class Tree:
         self.update_tree_description()
 
 #cdef --> is cpdef for testing purposes only
-cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x, 
+cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
             str output_type=None, int Npars=0, int param_count=0, 
             bint first_call = True, list params_used=None):
         '''Builds a Tree from scratch'''
