@@ -113,7 +113,12 @@ cpdef hoist_mutation(function_treeC.Tree tree):
                 elif granpa.right == parent_node:
                     granpa.assign_right(subtree)
                 tree.tree_update(granpa) 
-            
+            else:
+
+                tree.root.assign_left(None)
+                tree.root.assign_right(None)
+                tree.root.assign_operation(None)
+                tree.root = function_treeC.Node(subtree.get_fun())
             #parent_node.assign_left(None)
             #parent_node.assign_right(None)
             #parent_node.assign_operation(None)
