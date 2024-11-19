@@ -44,12 +44,12 @@ cdef class RealFunctionC:
 
     cdef classify_symbols(self):
         
-        cdef set params = set()
+        cdef list params = []
         cdef list variables = []
 
         for s in self.symbols:
             if re.match(r"^[a-zA-Z]\d+$", str(s)):
-                params.add(s)
+                params.append(s)
             elif re.match(r"[a-zA-Z]$", str(s)):
                 variables.append(s)
 
@@ -66,7 +66,7 @@ cdef class RealFunctionC:
     #cdef?
     cpdef is_param(self):
         """Is function a constant?"""
-        if len(self.get_variables())==0:
+        if len(self.variables)==0:
             return True
         cdef cnp.ndarray[cnp.float64_t, ndim=1] y
         
@@ -78,28 +78,6 @@ cdef class RealFunctionC:
     # Use as less as possible: loop on check_single_value is bottleneck --> NEEDS FIX! 
     #ONLY DEF SUPPORTS INNER DEFs!
     def is_defined(self, cnp.ndarray[cnp.float64_t, ndim=1] x):
-        """ Verify if function is defined on domain"""
-        '''
-        cdef int n = x.size
-        #cdef list results = []
-        
-        cdef object x_sym = sp.symbols('x')
-        
-        def check_single_value(cnp.float64_t x_val):
-            try:
-                expr_eval = self.expr.subs(x_sym, x_val)
-                return expr_eval.is_real and expr_eval.is_finite
-            except ValueError as e:
-                return False
-
-        if isinstance(x, np.ndarray):
-            for i in range(n):
-                results.append(check_single_value(x[i])) 
-
-            return np.array(results, dtype=np.bool_)
-        else:
-            return check_single_value(x)
-        '''
         try:
             y = self.evaluate(x)
             vector_safe_convert = np.vectorize(safe_convert)

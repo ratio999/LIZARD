@@ -10,13 +10,14 @@ b0, b1, b2 = sp.symbols('b0 b1 b2')
 expr2 = b0*sp.exp(-x/b1 + b2)
 expr3 = b0
 # Definisce il dominio
-domain = np.linspace(-10, 10, 100, dtype=np.float32)
+domain = np.linspace(-10, 10, 100, dtype=np.float64)
 print(str(expr1), str(expr2))
 # Crea un'istanza di RealFunctionC
 real_func1 = RealFunctionC.from_string(str(expr1), domain)
 real_func2 = RealFunctionC.from_string(str(expr2), domain)
 real_func3 = RealFunctionC.from_string(str(expr3), domain)
 print('Is third function constant? ', real_func3.is_param())
+print(type(real_func3.get_expr()), type(real_func2.get_expr()))
 real_func =real_func3 + real_func1.compose(real_func2)
 # Ottieni variabili e parametri
 params = real_func.get_params()

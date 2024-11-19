@@ -8,7 +8,7 @@ def test_build_tree():
     functions = ['sin(x)', 'cos(x)', 'exp(x)', 'log(x)', 'sqrt(x)']
 
     # Creazione di un array x (dominio su cui valutare le funzioni)
-    x = np.linspace(0, 10, 100, dtype=np.float32)
+    x = np.linspace(0, 10, 100, dtype=np.float64)
 
     # Numero di parametri da inserire nelle foglie (es. 3 parametri)
     Npars = 3

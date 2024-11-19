@@ -9,7 +9,7 @@ cdef class RealFunctionC:
     cdef bint regular  # Flag per la regolarizzazione
     cdef object domain  # Non utilizzato, puoi rimuoverlo se non serve
     cdef str description  # Descrizione della funzione
-    cdef set params
+    cdef list params
     cdef list variables    
     cdef classify_symbols(self)
 

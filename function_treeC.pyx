@@ -31,21 +31,21 @@ cdef class Node:
             return self.function.is_param()
    
     # DANGEROUS!!! Use cases need be minimized!
-    cdef reinit_to_par(self, set existing_pars, str user_prefix=None):
+    cdef reinit_to_par(self, list existing_pars, str user_prefix=None):
         '''Re-initializes a node to a constant.'''
         cdef object new_param = new_par(existing_pars, user_prefix) 
         self.function = real_functionC.RealFunctionC.from_string(str(new_param), self.domain)
         self.left, self.right, self.op_symbol, self.node_depth = None, None, None, 0
-    #Useless not supported so far    
+    
     cpdef assign_operation(self, operation):
         if not self.is_param():
             self.op_symbol = operation
             self.update_func()
-    #Useless not supported so far
+   
     cpdef assign_left(self, node):
         if not self.is_param():
             self.left = node
-    #Useless not supported so far
+  
     cpdef assign_right(self, node):
         if not self.is_param():
             self.right = node
@@ -105,7 +105,7 @@ cdef class Node:
         """Am I a leaf?"""
         return self.left is None and self.right is None
     #cdef?
-    cpdef update_func(self, set params_list=set(), str user_prefix=None):
+    cpdef update_func(self, list params_list=[], str user_prefix=None):
         """Update function after attribute changes"""
         if self.is_param():
             self.reinit_to_par(params_list, user_prefix)
@@ -345,14 +345,14 @@ cdef parameter_parser(int Npars):
     return parameters
 
 #Naming parameters requires fix!    
-cpdef new_par(set existing_params, str user_choice=None):
+cpdef new_par(list existing_params, str user_choice=None):
     '''Add a new parameter named with a specific logic'''
     if len(existing_params) > 0:
         param_pattern = re.compile(r"([a-zA-Z]+)(\d+)")
         param_names = [param_pattern.match(param).groups()[0] for param in existing_params if param_pattern.match(param)]
-        unique_prefixes = set(param_names)
-        if user_choice not in unique_prefixes or user_choice==None:
-            user_choice = random.choice(list(unique_prefixes))
+        #unique_prefixes = set(param_names)
+        if user_choice not in param_names or user_choice==None:
+            user_choice = random.choice(param_names)
        
 
 
@@ -365,12 +365,12 @@ cpdef new_par(set existing_params, str user_choice=None):
                 break
 
        
-        existing_params.add(f"{user_choice}{next_index}")
+        existing_params.append(f"{user_choice}{next_index}")
         return f"{user_choice}{next_index}" 
     else:
         if user_choice is None:
-            existing_params.add('a0')
+            existing_params.append('a0')
             return 'a0'
         else:
-            existing_params.add(f"{user_choice}{0}")
+            existing_params.append(f"{user_choice}{0}")
             return f"{user_choice}{0}" 
