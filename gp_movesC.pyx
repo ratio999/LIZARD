@@ -119,6 +119,7 @@ cpdef hoist_mutation(function_treeC.Tree tree):
                 tree.root.assign_right(None)
                 tree.root.assign_operation(None)
                 tree.root = function_treeC.Node(subtree.get_fun())
+                tree.tree_update(tree.root)
             #parent_node.assign_left(None)
             #parent_node.assign_right(None)
             #parent_node.assign_operation(None)
@@ -229,7 +230,8 @@ cpdef add_node( function_treeC.Tree tree, functions, operations, random_depth=Fa
             parent_node = tree.root.find_parent(node_to_replace)
         parent_op = parent_node.get_op()
         if not random_depth:
-            max_depth = tree.root.depth()
+            #max_depth = tree.root.depth()
+            max_depth = 2
         else:
             max_depth = random.choice(list(np.arange(1, tree.root.depth()+1)))
         new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
@@ -241,7 +243,7 @@ cpdef add_node( function_treeC.Tree tree, functions, operations, random_depth=Fa
             node_to_replace.assign_left(new_subtree)
 
         node_to_replace.assign_operation(op)
-    #node_to_replace.update_func()
+       
 
         if parent_node is None:
             # Se non c'è genitore, significa che stai sostituendo la radice
@@ -251,7 +253,8 @@ cpdef add_node( function_treeC.Tree tree, functions, operations, random_depth=Fa
         
         elif parent_node.get_right() == node_to_replace:
             parent_node.assign_right(new_subtree)
-        
+ 
+        node_to_replace.update_func()  
     #print('op_new: ', new_subtree.function.get_description(),new_subtree.depth(), new_subtree.is_leaf())
     
         tree.tree_update(parent_node)
