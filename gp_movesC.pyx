@@ -87,20 +87,43 @@ cpdef point_mutation(function_treeC.Tree tree, functions, operations, x):
 @cython.wraparound(True)
 cpdef hoist_mutation(function_treeC.Tree tree):
     #print(tree)
-    cdef function_treeC.Node subtree, parent_node
+    cdef function_treeC.Node subtree, parent_node, granpa
     """Sostituisce un sottoalbero con uno dei suoi sottoalberi."""
     if not tree.root.is_leaf():
         check=False
         while not check:
             subtree = tree.root.select_random_node()
             parent_node = tree.root.find_parent(subtree)
+            
             check = parent_node is not None
         #parent_node = subtree
         #Still causing issues when subtree is a leaf
-        parent_node.assign_left(subtree.left)
-        parent_node.assign_right(subtree.right)
-        parent_node.assign_operation(subtree.get_op())
-        tree.tree_update(parent_node)
+        if not subtree.is_leaf():
+            parent_node.assign_left(subtree.left)
+            parent_node.assign_right(subtree.right)
+            parent_node.assign_operation(subtree.get_op())
+            tree.tree_update(parent_node)
+
+        else:
+            granpa = tree.root.find_parent(parent_node)
+            if granpa is not None:
+
+                if granpa.left == parent_node:
+                    granpa.assign_left(subtree)
+                elif granpa.right == parent_node:
+                    granpa.assign_right(subtree)
+                tree.tree_update(granpa) 
+            
+            #parent_node.assign_left(None)
+            #parent_node.assign_right(None)
+            #parent_node.assign_operation(None)
+            #print(subtree.get_fun().get_description())
+            #parent_node = function_treeC.Node(subtree.get_fun())
+            #print(parent_node.get_fun().get_description()) 
+            #granpa = tree.root.find_parent(parent_node)
+            #if granpa is not None:
+            #    if granpa.get_left() == parent_node
+              
         '''
         if not subtree.is_leaf():
             #print('subtree node: ', subtree.get_fun().get_description(), 'left:', subtree.left.get_fun().get_description(),
