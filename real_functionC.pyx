@@ -129,10 +129,13 @@ cdef class RealFunctionC:
         expr = sp.sympify(expr_str)
         def func(cnp.ndarray[cnp.float64_t, ndim=1] input_x):
             result = sp.lambdify(x_sym, expr, "numpy")(input_x)
-            vector_safe_convert = np.vectorize(safe_convert)
-            result_safe = vector_safe_convert(result)
-            return np.array(result_safe, dtype=np.float64)
-        
+            try: 
+                vector_safe_convert = np.vectorize(safe_convert)
+                result_safe = vector_safe_convert(result)
+                return np.array(result_safe, dtype=np.float64)
+            except:
+                return np.full_like(input_x, np.nan, dtype=np.float64)
+           
         return cls(func, expr, x) 
 
     def get_description(self):

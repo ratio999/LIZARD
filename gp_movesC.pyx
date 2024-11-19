@@ -71,15 +71,15 @@ cpdef point_mutation(function_treeC.Tree tree, functions, operations, x):
     else:
         node_to_mutate.op_symbol = random.choice(operations)
         node_to_mutate.update_func()
-
+    '''
     if parent is None:
-        # Se node1 è la radice, sostituisci direttamente la radice
+      
         tree.root = node_to_mutate
     elif parent.left == node_to_mutate:
         parent.left = node_to_mutate
     elif parent.right == node_to_mutate:
         parent.right = node_to_mutate
-
+    '''
     # Aggiorna la struttura dell'albero
     tree.tree_update(parent)
     
@@ -87,6 +87,7 @@ cpdef point_mutation(function_treeC.Tree tree, functions, operations, x):
 @cython.wraparound(True)
 cpdef hoist_mutation(function_treeC.Tree tree):
     #print(tree)
+    cdef function_treeC.Node subtree, parent_node
     """Sostituisce un sottoalbero con uno dei suoi sottoalberi."""
     if not tree.root.is_leaf():
         check=False
@@ -94,7 +95,13 @@ cpdef hoist_mutation(function_treeC.Tree tree):
             subtree = tree.root.select_random_node()
             parent_node = tree.root.find_parent(subtree)
             check = parent_node is not None
-        
+        #parent_node = subtree
+        #Still causing issues when subtree is a leaf
+        parent_node.assign_left(subtree.left)
+        parent_node.assign_right(subtree.right)
+        parent_node.assign_operation(subtree.get_op())
+        tree.tree_update(parent_node)
+        '''
         if not subtree.is_leaf():
             #print('subtree node: ', subtree.get_fun().get_description(), 'left:', subtree.left.get_fun().get_description(),
             # 'right: ', subtree.right.get_fun().get_description())
@@ -102,14 +109,24 @@ cpdef hoist_mutation(function_treeC.Tree tree):
             if choice:
                 try:
                     parent_node.assign_left(subtree.get_left())
-                except:
+                except: 
                     parent_node.assign_right(subtree.get_right())
             else:
                 try:
                     parent_node.assign_right(subtree.get_right())
                 except:
                     parent_node.assign_left(subtree.get_left())
+            
             tree.tree_update(parent_node)
+        '''
+        '''
+        elif subtree.is_leaf():
+            parent_node.assign_left(None)
+            parent_node.assign_right(None)
+            parent_node.assign_operation(None)
+            parent_node = subtree
+        '''
+           
             #print('new parent node: ', parent_node.get_fun().get_description(), 'left: ', parent_node.left.get_fun().get_description(),
             # 'right: ', parent_node.right.get_fun().get_description())
     
