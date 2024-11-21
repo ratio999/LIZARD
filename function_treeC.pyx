@@ -25,10 +25,10 @@ cdef class Node:
         '''Is Node a constant function?'''
         if self.is_leaf() and len(self.function.variables)==0:
             return True
-        elif self.is_leaf() and len(self.function.variables)>0:
-            return False
-        else:
-            return self.function.is_param()
+        #elif self.is_leaf() and len(self.function.variables)>0:
+        
+        return False
+        
    
     # DANGEROUS!!! Use cases need be minimized!
     cdef reinit_to_par(self, list existing_pars, str user_prefix=None):
@@ -107,8 +107,10 @@ cdef class Node:
     #cdef?
     cpdef update_func(self, list params_list=[], str user_prefix=None):
         """Update function after attribute changes"""
+        '''
         if self.is_param():
             self.reinit_to_par(params_list, user_prefix)
+        '''
            
         if self.is_leaf():
             
@@ -133,14 +135,18 @@ cdef class Node:
             elif self.op_symbol == '∘':   # Composition symbol
                 self.function = self.left.get_fun().compose(self.right.get_fun())
                 
-    cpdef get_leaves(self, leaves_list = []):
+    cpdef get_leaves(self, leaves_list = None):
         """ Find leaves in the subtree rooted by self"""
+        if leaves_list is None:
+            leaves_list = []
         if self.is_leaf():
             leaves_list.append(self)
+            #print(self.get_fun().get_description())
         else:
+            
             self.left.get_leaves(leaves_list = leaves_list)
             self.right.get_leaves(leaves_list = leaves_list)
-        
+    
         return leaves_list
 
          
@@ -177,11 +183,11 @@ cdef class Node:
 cdef class Tree:
      
 
-    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None):
+    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0):
         self.domain = x
         self.depth = depth
         if node==None:
-            self.root = build_tree(depth, functions, self.domain)
+            self.root = build_tree(depth, functions, self.domain, Npars=Npars)
         else:
             self.root = node
         self.current_description = self.root.function.get_description()
@@ -197,11 +203,18 @@ cdef class Tree:
         """Access Tree's leaves from Python"""
         return self.root.get_leaves()
     
-    cpdef get_params(self, params_list = []):
+    cpdef get_params(self, params_list = None):
         """How many constants in the Tree?"""
+        if params_list is None:
+            params_list = []
+        
         for leaf in self.leaves:
+            #print(leaf.get_fun().get_description())
             if leaf.is_param():
+                
+               
                 params_list.append(leaf)
+                
         return params_list
     #def?
     cpdef get_domain(self):
@@ -249,12 +262,19 @@ cdef class Tree:
     #cdef?
     cpdef tree_update(self, node):
         """Update the whole tree nodes' functions"""
+       
         current_node = node
         while current_node is not None:
             current_node.update_func()
             current_node = self.root.find_parent(current_node)
             
         self.update_tree_description()
+        self.leaves = self.get_leaves()
+        self.params = self.get_params()
+        #self.update_tree_description()
+        #for j in range (0, len(self.get_params())):
+        #    print(self.get_params()[j].get_fun().get_description())
+
 
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
@@ -347,30 +367,21 @@ cdef parameter_parser(int Npars):
 #Naming parameters requires fix!    
 cpdef new_par(list existing_params, str user_choice=None):
     '''Add a new parameter named with a specific logic'''
+    
     if len(existing_params) > 0:
         param_pattern = re.compile(r"([a-zA-Z]+)(\d+)")
         param_names = [param_pattern.match(param).groups()[0] for param in existing_params if param_pattern.match(param)]
+        
         #unique_prefixes = set(param_names)
-        if user_choice not in param_names or user_choice==None:
+        if user_choice not in param_names or user_choice is None:
             user_choice = random.choice(param_names)
        
 
 
-        indices = sorted([int(param_pattern.match(param).groups()[1]) for param in existing_params if param.startswith(user_choice)])
-        next_index = 0
-        for index in indices:
-            if index == next_index:
-                next_index += 1
-            else:
-                break
+        indices = [int(param_pattern.match(param).groups()[1]) for param in existing_params if param.startswith(user_choice)]
+        new_index = max(indices) + 1 if indices else 0
 
-       
-        existing_params.append(f"{user_choice}{next_index}")
-        return f"{user_choice}{next_index}" 
-    else:
-        if user_choice is None:
-            existing_params.append('a0')
-            return 'a0'
-        else:
-            existing_params.append(f"{user_choice}{0}")
-            return f"{user_choice}{0}" 
+        return f"{user_choice}{new_index}"
+    
+    user_choice = user_choice if user_choice else 'a'
+    return f"{user_choice}0"

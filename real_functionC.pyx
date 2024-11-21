@@ -68,12 +68,13 @@ cdef class RealFunctionC:
         """Is function a constant?"""
         if len(self.variables)==0:
             return True
-        cdef cnp.ndarray[cnp.float64_t, ndim=1] y
+        ''''
+        cdf cnp.ndarray[cnp.float64_t, ndim=1] y
         
     
         y = self.evaluate(self.domain)
         return np.all(np.isclose(y, y[0]))
-        
+        '''
     
     # Use as less as possible: loop on check_single_value is bottleneck --> NEEDS FIX! 
     #ONLY DEF SUPPORTS INNER DEFs!
@@ -168,7 +169,10 @@ cdef class RealFunctionC:
             cdef object evaluated_inner = other.evaluate(x)
             cdef object result = np.zeros_like(x)
             result[:] = np.nan
-            result[is_defined_mask] = self.evaluate(evaluated_inner[is_defined_mask])
+            try:
+                result[is_defined_mask] = self.evaluate(evaluated_inner[is_defined_mask])
+            except:
+                pass
             return result
 
         return RealFunctionC(new_func, new_expr, self.domain)

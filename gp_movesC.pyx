@@ -39,25 +39,71 @@ cpdef subtree_mutation( function_treeC.Tree tree, functions, random_depth=False)
 @cython.boundscheck(True)
 cpdef subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent2):
     """Esegue il crossover tra due alberi sostituendo un sottoalbero di parent1 con un sottoalbero di parent2."""
-    cdef function_treeC.Node node1 = parent1.root.select_random_node()
-    cdef function_treeC.Node node2 = parent2.root.select_random_node()
-    cdef function_treeC.Node parent_node = parent1.root.find_parent(node1)
+    #cdef function_treeC.Node node1 = parent1.root.select_random_node()
+    #cdef function_treeC.Node node2 = parent2.root.select_random_node()
+    #cdef function_treeC.Node parent_node = parent1.root.find_parent(node1)
     #print("Prima del crossover:", node1.function.get_description(), node2.function.get_description())
-
-    # Sostituisci il sottoalbero in parent1 con node2
+    cdef function_treeC.Tree  old2 = parent2
+    rename_prefix(old2)
+    
+    cdef function_treeC.Node node1 = parent1.root.select_random_node()
+    cdef function_treeC.Node node2 = old2.root.select_random_node()
+    cdef function_treeC.Node parent_node = parent1.root.find_parent(node1)
+    
     if parent_node is None:
-        # Se node1 è la radice, sostituisci direttamente la radice
         parent1.root = node2
     elif parent_node.left == node1:
         parent_node.left = node2
     elif parent_node.right == node1:
         parent_node.right = node2
-
-    # Aggiorna la struttura dell'albero
     parent1.tree_update(parent_node)
+    
+    # Aggiorna la struttura dell'albero
+    refresh_params(parent1)
+    
 
+cdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
+    cdef function_treeC.Node node
     
     
+    for node in tree.params:
+        old_rep = node.function.get_description()
+        param_suffix = old_rep[1:]
+        node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain)
+
+cdef refresh_params(function_treeC.Tree tree):
+    
+    cdef list params = [tree.params[j].get_fun().get_description() for j in range (0, len(tree.params))]
+    cdef dict rename_map = {}
+    cdef int max_index = -1
+    for param in params:
+        if param[0] == 'a' and param[1:].isdigit():  # Controlla che dopo 'a' ci siano solo cifre
+            max_index = max(max_index, int(param[1:]))
+    cdef int counter = max_index + 1    
+    for param in params:
+        if param[0] =='b' :
+            rename_map[param] = f"a{counter}"
+            counter += 1
+    
+    cdef function_treeC.Node node
+    for node in tree.params:
+        param_name = node.function.get_description()
+        if param_name in rename_map:
+            parent_node = tree.root.find_parent(node)
+            old_node = node
+            node.function = real_functionC.RealFunctionC.from_string(rename_map[param_name], tree.domain)
+            node.update_func()
+            if parent_node is None:
+        # Se non c'è genitore, significa che stai sostituendo la radice
+                tree.root = node
+            elif parent_node.get_left() == old_node:
+                parent_node.assign_left(node)
+        
+            elif parent_node.get_right() == old_node:
+                parent_node.assign_right(node)
+            
+            tree.tree_update(parent_node)
+
 
 @cython.boundscheck(True)
 cpdef point_mutation(function_treeC.Tree tree, functions, operations, x):
