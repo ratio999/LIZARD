@@ -278,16 +278,25 @@ cdef class Tree:
 
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
-            str output_type=None, int Npars=0, int param_count=0, 
-            bint first_call = True, list params_used=None):
+        str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None, 
+             list params_used=None):
         '''Builds a Tree from scratch'''
+        if leaves_count is None:
+            leaves_count = [-1]
         cdef str func_str
         cdef list par_list = parameter_parser(Npars)
         cdef int max_leaves = int(2**depth)
         cdef str param_name
+        cdef bint first_call = False
+        if arr_indices is None:
+            raw_indices = np.linspace(0, max_leaves - 1, Npars, dtype = float)
+            noise = np.random.uniform(-0.5, 0.5)
+            arr_indices = np.floor(raw_indices + noise).astype(int)
+            arr_indices = np.sort(np.where(arr_indices<0, arr_indices + max_leaves, arr_indices))
+            arr_indices = np.unique(arr_indices)
+            
+            first_call = True
 
-        
-        if first_call:
             if Npars > max_leaves:
                 print('More parameters than leaves --> constant function')
                 Npars = max_leaves
@@ -295,15 +304,25 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             if params_used is None:
                 params_used = []
 
-            
+
         if depth==0:
-            if param_count < Npars and (param_count%3) < 2:
+            leaves_count[0] += 1
+
+            if leaves_count in arr_indices:
+                if len(params_used) < Npars:
+                    param_name = par_list[len(params_used)]
+                    params_used.append(param_name)
+                    return Node(real_functionC.RealFunctionC.from_string(param_name, x))
+                else:
+                    print('ParamsError')
+            func_str = random.choice(functions)
+            return Node(real_functionC.RealFunctionC.from_string(func_str, x))
+        '''
                 for p in par_list:
                     if p not in params_used:
                         param_name = p
-                        
+ 
                         params_used.append(param_name) 
-                        param_count += 1
                         break
                 else:
                     func_str = random.choice(functions)
@@ -315,12 +334,12 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
 
             func_str = random.choice(functions)
             return Node(real_functionC.RealFunctionC.from_string(func_str, x))
-
+        '''
         #Recursion needed
         cdef Node left = build_tree(depth - 1, functions, x,
-                'node', Npars, param_count, False, params_used)
+                'node', Npars, leaves_count,  arr_indices, params_used)
         cdef Node right = build_tree(depth - 1, functions, x, 
-                'node', Npars, param_count, False, params_used)
+                'node', Npars, leaves_count, arr_indices, params_used)
        
        
         cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
@@ -345,8 +364,8 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
         elif operation == 'compose':
             func = left.function.compose(right.function)
             op_symbol = '∘' 
-        
-
+        if first_call:
+            print(len(params_used), Npars) 
         if output_type is None or output_type=='node' or output_type=='Node':
             
  

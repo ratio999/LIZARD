@@ -60,7 +60,7 @@ cdef class Tree:
 
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
-    int Npars=?, int param_count=?, bint first_call=?,
+    int Npars=?, object leaves_count=?, object arr_indices=?,
     list params_used=?)
 
 cdef parameter_parser(int Npars)
