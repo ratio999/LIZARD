@@ -193,7 +193,16 @@ cdef class Tree:
         self.current_description = self.root.function.get_description()
         self.leaves = self.get_leaves()
         self.params = self.get_params()
-    
+        self.param_values = None
+        #self.param_values = self.init_params(init_val = 1)
+    cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val):
+        '''
+        cdef Node par
+        for par in self.params:
+            par.set_value(init_val)
+        '''
+        pass
+
     #def?
     cpdef get_root(self):
         """Access Tree's root from Python"""
@@ -279,7 +288,7 @@ cdef class Tree:
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
         str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None, 
-             list params_used=None):
+             dict params_used=None):
         '''Builds a Tree from scratch'''
         if leaves_count is None:
             leaves_count = [-1]
@@ -288,13 +297,14 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
         cdef int max_leaves = int(2**depth)
         cdef str param_name
         cdef bint first_call = False
+        cdef Node return_node
         if arr_indices is None:
             raw_indices = np.linspace(0, max_leaves - 1, Npars, dtype = float)
             noise = np.random.uniform(-0.5, 0.5)
             arr_indices = np.floor(raw_indices + noise).astype(int)
             arr_indices = np.sort(np.where(arr_indices<0, arr_indices + max_leaves, arr_indices))
             arr_indices = np.unique(arr_indices)
-            
+            print(arr_indices) 
             first_call = True
 
             if Npars > max_leaves:
@@ -302,7 +312,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
                 Npars = max_leaves
 
             if params_used is None:
-                params_used = []
+                params_used = {}
 
 
         if depth==0:
@@ -311,12 +321,15 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             if leaves_count in arr_indices:
                 if len(params_used) < Npars:
                     param_name = par_list[len(params_used)]
-                    params_used.append(param_name)
-                    return Node(real_functionC.RealFunctionC.from_string(param_name, x))
+                    return_node = Node(real_functionC.RealFunctionC.from_string(param_name, x))
+ 
+                    params_used[param_name] = return_node
+                    return return_node 
                 else:
                     print('ParamsError')
             func_str = random.choice(functions)
-            return Node(real_functionC.RealFunctionC.from_string(func_str, x))
+            return_node =Node(real_functionC.RealFunctionC.from_string(func_str, x)) 
+            return return_node 
         '''
                 for p in par_list:
                     if p not in params_used:
@@ -368,8 +381,8 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             print(len(params_used), Npars) 
         if output_type is None or output_type=='node' or output_type=='Node':
             
- 
-            return Node(function=func, left=left, right=right, symbol=op_symbol)
+            return_node = Node(function=func, left=left, right=right, symbol=op_symbol) 
+            return return_node 
         else:
             return Tree(depth, functions, x, 
                     node =Node(function=func, left=left, right=right, symbol=op_symbol))

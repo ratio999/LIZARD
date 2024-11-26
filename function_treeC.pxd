@@ -37,7 +37,8 @@ cdef class Tree:
     cdef int depth
     cdef list leaves
     cdef list params
-
+    cdef dict param_values
+    cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val)
     cpdef get_domain(self)
 
     #cpdef build_tree(self, depth, functions, x )
@@ -61,7 +62,7 @@ cdef class Tree:
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
     int Npars=?, object leaves_count=?, object arr_indices=?,
-    list params_used=?)
+    dict params_used=?)
 
 cdef parameter_parser(int Npars)
 
