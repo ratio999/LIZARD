@@ -16,7 +16,8 @@ cdef class Node:
         self.op_symbol = symbol
         self.node_depth = self.depth()
         self.domain = self.function.domain
-
+        self.bis_param = self.is_param()
+        self.value = np.nan 
     def get_domain(self):
         '''Obtain domain from Python.'''
         return self.domain
@@ -28,26 +29,33 @@ cdef class Node:
         #elif self.is_leaf() and len(self.function.variables)>0:
         
         return False
+
+    cdef set_value(self, cnp.float64_t value = 1):
+        if self.bis_param:
+
+            self.value = value 
         
+       
    
     # DANGEROUS!!! Use cases need be minimized!
     cdef reinit_to_par(self, list existing_pars, str user_prefix=None):
         '''Re-initializes a node to a constant.'''
         cdef object new_param = new_par(existing_pars, user_prefix) 
         self.function = real_functionC.RealFunctionC.from_string(str(new_param), self.domain)
-        self.left, self.right, self.op_symbol, self.node_depth = None, None, None, 0
+        print('REINITIALIZATION OF NODE ', self, ' TO PARAMETER!')
+        self.left, self.right, self.op_symbol, self.node_depth, self.value = None, None, None, 0, self.set_value()
     
     cpdef assign_operation(self, operation):
-        if not self.is_param():
+        if not self.bis_param:
             self.op_symbol = operation
             self.update_func()
    
     cpdef assign_left(self, node):
-        if not self.is_param():
+        if not self.bis_param:
             self.left = node
   
     cpdef assign_right(self, node):
-        if not self.is_param():
+        if not self.bis_param:
             self.right = node
     #cdef?
     cpdef find_parent(self, child):
@@ -183,17 +191,30 @@ cdef class Node:
 cdef class Tree:
      
 
-    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0):
+    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, cnp.float64_t value=1):
         self.domain = x
         self.depth = depth
         if node==None:
-            self.root = build_tree(depth, functions, self.domain, Npars=Npars)
+            self.root = build_tree(depth, functions, self.domain, Npars=Npars, value=value)
         else:
             self.root = node
         self.current_description = self.root.function.get_description()
         self.leaves = self.get_leaves()
         self.params = self.get_params()
-        self.param_values = None
+        self.param_values, self.name_values = self.get_param_values()
+
+    cdef get_param_values(self):
+        cdef dict params_values = {}
+        cdef Node par
+        cdef dict names_values = {}
+        for par in self.params:
+            params_values[par] = par.value
+            names_values[par.function.get_description()] = par.value
+        return params_values, names_values
+
+    def get_param_dicts(self):
+        return self.param_values, self.name_values
+
         #self.param_values = self.init_params(init_val = 1)
     cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val):
         '''
@@ -280,6 +301,8 @@ cdef class Tree:
         self.update_tree_description()
         self.leaves = self.get_leaves()
         self.params = self.get_params()
+        self.param_values, self.name_values = self.get_param_values()
+
         #self.update_tree_description()
         #for j in range (0, len(self.get_params())):
         #    print(self.get_params()[j].get_fun().get_description())
@@ -288,7 +311,7 @@ cdef class Tree:
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
         str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None, 
-             dict params_used=None):
+             dict params_used=None, cnp.float64_t value = 1):
         '''Builds a Tree from scratch'''
         if leaves_count is None:
             leaves_count = [-1]
@@ -304,7 +327,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             arr_indices = np.floor(raw_indices + noise).astype(int)
             arr_indices = np.sort(np.where(arr_indices<0, arr_indices + max_leaves, arr_indices))
             arr_indices = np.unique(arr_indices)
-            print(arr_indices) 
+  
             first_call = True
 
             if Npars > max_leaves:
@@ -324,6 +347,9 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
                     return_node = Node(real_functionC.RealFunctionC.from_string(param_name, x))
  
                     params_used[param_name] = return_node
+                  
+                    return_node.set_value(value=value)
+                   
                     return return_node 
                 else:
                     print('ParamsError')
@@ -350,9 +376,9 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
         '''
         #Recursion needed
         cdef Node left = build_tree(depth - 1, functions, x,
-                'node', Npars, leaves_count,  arr_indices, params_used)
+                'node', Npars, leaves_count,  arr_indices, params_used, value=value)
         cdef Node right = build_tree(depth - 1, functions, x, 
-                'node', Npars, leaves_count, arr_indices, params_used)
+                'node', Npars, leaves_count, arr_indices, params_used, value=value)
        
        
         cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
@@ -377,8 +403,6 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
         elif operation == 'compose':
             func = left.function.compose(right.function)
             op_symbol = '∘' 
-        if first_call:
-            print(len(params_used), Npars) 
         if output_type is None or output_type=='node' or output_type=='Node':
             
             return_node = Node(function=func, left=left, right=right, symbol=op_symbol) 

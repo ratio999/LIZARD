@@ -9,9 +9,10 @@ cdef class Node:
     cdef str op_symbol
     cdef object domain
     cdef int node_depth
-    
+    cdef cnp.float64_t value    
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?) 
-    
+    cdef set_value(self, cnp.float64_t value=?)
+    cdef bint bis_param
     cpdef is_param(self)
     cpdef assign_operation(self, operation)
     cpdef get_leaves(self, leaves_list=?)
@@ -37,10 +38,10 @@ cdef class Tree:
     cdef int depth
     cdef list leaves
     cdef list params
-    cdef dict param_values
+    cdef dict param_values, name_values
     cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val)
     cpdef get_domain(self)
-
+    cdef get_param_values(self)
     #cpdef build_tree(self, depth, functions, x )
 
     cpdef evaluate(self, x=?)
@@ -62,7 +63,7 @@ cdef class Tree:
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
     int Npars=?, object leaves_count=?, object arr_indices=?,
-    dict params_used=?)
+    dict params_used=?, cnp.float64_t value=?)
 
 cdef parameter_parser(int Npars)
 
