@@ -191,7 +191,7 @@ cdef class Node:
 cdef class Tree:
      
 
-    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, cnp.float64_t value=1):
+    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, object value=1):
         self.domain = x
         self.depth = depth
         if node==None:
@@ -311,8 +311,17 @@ cdef class Tree:
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
         str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None, 
-             dict params_used=None, cnp.float64_t value = 1):
+             dict params_used=None, object value = 1.0):
         '''Builds a Tree from scratch'''
+        if isinstance(value, (float, int)):
+            assign_value = np.full((Npars,), value, dtype=np.float64)
+        elif isinstance(value, np.ndarray):
+            if value.shape[0] > Npars:
+                assign_value = value[:Npars].astype(np.float64)
+            elif value.shape[0] < Npars:
+                assign_value = np.pad(value, (0,Npars - value.shape[0]), mode='constant', constant_values=(1.0)).astype(np.float64)
+            elif value.shape[0]==Npars:
+                assign_value = value.astype(np.float64)
         if leaves_count is None:
             leaves_count = [-1]
         cdef str func_str
@@ -346,10 +355,10 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
                     param_name = par_list[len(params_used)]
                     return_node = Node(real_functionC.RealFunctionC.from_string(param_name, x))
  
-                    params_used[param_name] = return_node
+
                   
-                    return_node.set_value(value=value)
-                   
+                    return_node.set_value(value=assign_value[len(params_used)])
+                    params_used[param_name] = return_node                   
                     return return_node 
                 else:
                     print('ParamsError')
