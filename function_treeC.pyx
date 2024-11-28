@@ -253,12 +253,13 @@ cdef class Tree:
     #cdef?
     cpdef evaluate(self,  x=None):
         """Evaluate root on its domain or on a specified one"""
+         
         if x is None:
 
-            return self.root.function.evaluate(self.domain)
+            return self.root.function.evaluate(self.domain, self.name_values)
         else:
             
-            return self.root.function.evaluate(x)
+            return self.root.function.evaluate(x, self.name_values)
 
     def __str__(self):
         """print the Tree fancy scheme. REVERSE POLISH"""

@@ -59,9 +59,12 @@ cdef class RealFunctionC:
     cpdef get_domain(self):
         return self.domain
 
-    def evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x):
-        #cdef object f = sp.lambdify(self.variables, self.expr, "numpy")
-        return self.func(x)
+    def evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+        if params is None:
+            params = {}
+        
+        
+        return self.func(x, params=params)
 
     #cdef?
     cpdef is_param(self):
@@ -106,8 +109,14 @@ cdef class RealFunctionC:
         cdef object expr
         
         expr = sp.sympify(expr_str)
-        def func(cnp.ndarray[cnp.float64_t, ndim=1] input_x):
-            result = sp.lambdify(x_sym, expr, "numpy")(input_x)
+        def func(cnp.ndarray[cnp.float64_t, ndim=1] input_x, dict params = None):
+            if params is None:
+                params = {}
+            expr_with_params = expr
+            for param_name, param_value in params.items():
+                expr_with_params = expr_with_params.subs(sp.symbols(param_name), param_value)
+            result = sp.lambdify(x_sym, expr_with_params, "numpy")(input_x)
+            
             try: 
                 vector_safe_convert = np.vectorize(safe_convert)
                 result_safe = vector_safe_convert(result)
@@ -124,9 +133,9 @@ cdef class RealFunctionC:
     def __add__(self, RealFunctionC other):
         """Addition of two RealFunctions."""
         cdef object new_expr = self.expr + other.expr
-
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
-            return self.evaluate(x) + other.evaluate(x)
+        
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+            return self.evaluate(x, params) + other.evaluate(x, params)
 
         return RealFunctionC(new_func, new_expr, self.domain)
 
@@ -134,8 +143,8 @@ cdef class RealFunctionC:
         """Subtraction of two RealFunctions."""
         cdef object new_expr = self.expr - other.expr
 
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
-            return self.evaluate(x) - other.evaluate(x)
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+            return self.evaluate(x, params) - other.evaluate(x, params)
 
         return RealFunctionC(new_func, new_expr, self.domain)
 
@@ -143,8 +152,8 @@ cdef class RealFunctionC:
         """Multiplication of two RealFunctions."""
         cdef object new_expr = self.expr * other.expr
 
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
-            return self.evaluate(x) * other.evaluate(x)
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+            return self.evaluate(x, params) * other.evaluate(x, params)
 
         return RealFunctionC(new_func, new_expr, self.domain)
 
@@ -152,9 +161,9 @@ cdef class RealFunctionC:
         """Division of two RealFunctions with protection against division by zero."""
         cdef object new_expr = self.expr / other.expr
 
-        def safe_div(cnp.ndarray[cnp.float64_t, ndim=1] x):
-            cdef object numerator = self.evaluate(x)
-            cdef object denominator = other.evaluate(x)
+        def safe_div(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+            cdef object numerator = self.evaluate(x, params)
+            cdef object denominator = other.evaluate(x, params)
             return np.where(denominator == 0, np.inf, numerator / denominator)
 
         return RealFunctionC(safe_div, new_expr, self.domain)
@@ -164,13 +173,13 @@ cdef class RealFunctionC:
         cdef object x_sym = sp.symbols('x')
         cdef object new_expr = self.expr.subs(x_sym, other.expr)
 
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
             cdef object is_defined_mask = other.is_defined(x)
-            cdef object evaluated_inner = other.evaluate(x)
+            cdef object evaluated_inner = other.evaluate(x, params)
             cdef object result = np.zeros_like(x)
             result[:] = np.nan
             try:
-                result[is_defined_mask] = self.evaluate(evaluated_inner[is_defined_mask])
+                result[is_defined_mask] = self.evaluate(evaluated_inner[is_defined_mask], params)
             except:
                 pass
             return result
@@ -181,8 +190,8 @@ cdef class RealFunctionC:
         """Exponentiation of a RealFunction."""
         cdef object new_expr = self.expr ** other.expr
 
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x):
-            return self.evaluate(x) ** other.evaluate(x)
+        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+            return self.evaluate(x, params) ** other.evaluate(x, params)
 
         return RealFunctionC(new_func, new_expr, self.domain)
 
