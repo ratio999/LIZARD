@@ -5,6 +5,7 @@ import numpy as np
 from function_treeC import Tree
 from gp_movesC import (subtree_mutation, subtree_crossover, point_mutation,
                        hoist_mutation, add_node, replace_with_subtree, add_node)
+import matplotlib.pyplot as plt
 
 def main():
     # Definire le funzioni disponibili
@@ -13,30 +14,39 @@ def main():
     # Crea due alberi di funzioni
     x = np.linspace(0, 10, 100).astype(np.float64)
 
-    tree1 = Tree(depth=3, functions=functions, x=x)
+    tree1 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=3)
     print(tree1.tree_get_description())
-    tree2 = Tree(depth=3, functions=functions, x=x)
+    tree2 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=np.array([545, 546, 547, 548]))
     
     print("Albero 1:")
     print(tree1)
     print("Albero 2:")
     print(tree2)
-
- 
+    print(tree1.get_root().get_fun().get_params())
+    print(tree1.get_params(),'\n\n\n' , tree2.get_params())
+    print(tree1.get_param_dicts()[1], tree2.get_param_dicts()[1])
     print(tree1.get_root().get_fun().get_description())
-    
-    print(tree1.get_root().get_fun().is_defined(x), tree1.get_root().get_fun().evaluate(x))
+    try:
+        plt.plot(x, tree1.evaluate(x))
+        plt.show()
+    except:
+        pass
+    print(tree1.get_root().get_fun().is_defined(x), tree1.evaluate(x))
     # Eseguire le mosse di genetic programming
     subtree_mutation(tree1, functions, random_depth=True)
     print("Dopo la mutazione del sottoalbero:")
     print(tree1)
     print(tree1.get_root().get_fun().get_description())
-    
+    print(tree1.get_param_dicts()[1], tree2.get_param_dicts()[1])
+   
     subtree_crossover(tree1, tree2)
     print("Dopo il crossover:")
     print(tree1)
     print(tree1.tree_get_description())
-    
+    print(tree1.get_params())
+
+    print(tree1.get_param_dicts()[1])
+ 
     point_mutation(tree1, functions, operations, x)
     print("Dopo la mutazione puntuale:")
     print(tree1)

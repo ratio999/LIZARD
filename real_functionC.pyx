@@ -63,7 +63,6 @@ cdef class RealFunctionC:
         if params is None:
             params = {}
         
-        
         return self.func(x, params=params)
 
     #cdef?

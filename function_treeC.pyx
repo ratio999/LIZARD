@@ -253,7 +253,7 @@ cdef class Tree:
     #cdef?
     cpdef evaluate(self,  x=None):
         """Evaluate root on its domain or on a specified one"""
-         
+
         if x is None:
 
             return self.root.function.evaluate(self.domain, self.name_values)
