@@ -43,6 +43,8 @@ cdef class Tree:
     cpdef get_domain(self)
     cdef get_param_values(self)
     #cpdef build_tree(self, depth, functions, x )
+    
+    cpdef is_defined(self, x=?)
 
     cpdef evaluate(self, x=?)
 

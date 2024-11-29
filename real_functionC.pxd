@@ -21,7 +21,7 @@ cdef class RealFunctionC:
     
     #cpdef mutate_parameters(self)
 
-    cpdef  derivative(self, x, h=?)
+    cpdef  derivative(self, x, h=?, dict params=?)
 
     #cpdef fitness(self, x, y_true)
 

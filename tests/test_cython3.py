@@ -14,7 +14,7 @@ def main():
     # Crea due alberi di funzioni
     x = np.linspace(0, 10, 100).astype(np.float64)
 
-    tree1 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=3)
+    tree1 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=np.array([3, 4, 5, 6, 7, 8]))
     print(tree1.tree_get_description())
     tree2 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=np.array([545, 546, 547, 548]))
     
@@ -31,7 +31,7 @@ def main():
         plt.show()
     except:
         pass
-    print(tree1.get_root().get_fun().is_defined(x), tree1.evaluate(x))
+    print(tree1.is_defined(x), tree1.evaluate(x))
     # Eseguire le mosse di genetic programming
     subtree_mutation(tree1, functions, random_depth=True)
     print("Dopo la mutazione del sottoalbero:")

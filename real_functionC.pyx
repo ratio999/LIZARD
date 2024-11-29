@@ -80,9 +80,11 @@ cdef class RealFunctionC:
     
     # Use as less as possible: loop on check_single_value is bottleneck --> NEEDS FIX! 
     #ONLY DEF SUPPORTS INNER DEFs!
-    def is_defined(self, cnp.ndarray[cnp.float64_t, ndim=1] x):
+    def is_defined(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = None):
+        if params is None:
+            params = {}
         try:
-            y = self.evaluate(x)
+            y = self.evaluate(x, params)
             vector_safe_convert = np.vectorize(safe_convert)
             y_safe = vector_safe_convert(y)
             return np.isfinite(y_safe) & np.isreal(y_safe)
@@ -90,9 +92,12 @@ cdef class RealFunctionC:
             return np.full_like(x, False, dtype=np.bool_)
     
     #needs improvement. useless so far. cdef?.
-    cpdef derivative(self,  x,  h=1e-5):
+    cpdef derivative(self,  x,  h=1e-5, dict params = None):
         """Compute derivative"""
-        return (self.evaluate(x + h) - self.evaluate(x - h)) / (2 * h)
+        if params is None:
+            params = {}
+
+        return (self.evaluate(x + h, params) - self.evaluate(x - h, params)) / (2 * h)
 
     def __call__(self, cnp.ndarray[cnp.float64_t, ndim=1] x):
         """Allows standard calling"""
@@ -173,7 +178,7 @@ cdef class RealFunctionC:
         cdef object new_expr = self.expr.subs(x_sym, other.expr)
 
         def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
-            cdef object is_defined_mask = other.is_defined(x)
+            cdef object is_defined_mask = other.is_defined(x, params)
             cdef object evaluated_inner = other.evaluate(x, params)
             cdef object result = np.zeros_like(x)
             result[:] = np.nan

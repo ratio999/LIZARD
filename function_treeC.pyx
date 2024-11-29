@@ -251,6 +251,15 @@ cdef class Tree:
         """Access root's function domain from Python"""
         return self.domain
     #cdef?
+    cpdef is_defined(self, x=None):
+        if x is None:
+
+            return self.root.function.is_defined(self.domain, self.name_values)
+        else:
+            
+            return self.root.function.is_defined(x, self.name_values)
+
+
     cpdef evaluate(self,  x=None):
         """Evaluate root on its domain or on a specified one"""
 
