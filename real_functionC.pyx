@@ -30,6 +30,7 @@ cdef class RealFunctionC:
             if self.is_defined(domain):
                 self.description = str(expr)
                 self.regular = True
+              
             else:
                 self.description = None
                
@@ -176,8 +177,16 @@ cdef class RealFunctionC:
         """Composition of two RealFunctions (f1(f2(x)))."""
         cdef object x_sym = sp.symbols('x')
         cdef object new_expr = self.expr.subs(x_sym, other.expr)
-
+        if self.is_param():
+            new_expr = self.expr * other.expr
+        else:
+            new_expr = self.expr.subs(x_sym, other.expr)
+ 
+            
         def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+            if self.is_param(): 
+                return self.evaluate(x, params) * other.evaluate(x, params)
+
             cdef object is_defined_mask = other.is_defined(x, params)
             cdef object evaluated_inner = other.evaluate(x, params)
             cdef object result = np.zeros_like(x)
