@@ -47,7 +47,7 @@ def main():
 
     print(tree1.get_param_dicts()[1])
  
-    point_mutation(tree1, functions, operations, x)
+    point_mutation(tree1, functions, operations)
     print("Dopo la mutazione puntuale:")
     print(tree1)
     print(tree1.tree_get_description())
