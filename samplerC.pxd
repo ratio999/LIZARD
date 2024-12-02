@@ -3,10 +3,10 @@ cimport numpy as cnp
 
 cdef class MCMCSampler:
     cdef object current_posterior
-    cdef function_treeC.Tree current_tree
+    cdef dict current_trees
     cdef cnp.float64_t temperature
 
-    cdef ste(self)
+    cdef step(self)
 
     cpdef run(self, n_steps)
 

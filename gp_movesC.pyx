@@ -108,14 +108,14 @@ cdef refresh_params(function_treeC.Tree tree):
 
 
 @cython.boundscheck(True)
-cpdef point_mutation(function_treeC.Tree tree, functions, operations, x):
+cpdef point_mutation(function_treeC.Tree tree, functions, operations):
     """Modifica un singolo nodo cambiando la funzione o l'operazione."""
     cdef function_treeC.Node node_to_mutate = tree.root.select_random_node()
     cdef str new_func_str
     cdef function_treeC.Node parent = tree.root.find_parent(node_to_mutate)
     if node_to_mutate.is_leaf():
         new_func_str= random.choice(functions)
-        node_to_mutate.function = real_functionC.RealFunctionC.from_string(new_func_str, x)
+        node_to_mutate.function = real_functionC.RealFunctionC.from_string(new_func_str, tree.domain)
     else:
         node_to_mutate.op_symbol = random.choice(operations)
         node_to_mutate.update_func()
