@@ -17,7 +17,8 @@ cdef class Node:
         self.node_depth = self.depth()
         self.domain = self.function.domain
         self.bis_param = self.is_param()
-        self.value = np.nan 
+        self.value = np.nan
+
     def get_domain(self):
         '''Obtain domain from Python.'''
         return self.domain
@@ -31,6 +32,7 @@ cdef class Node:
         return False
 
     cdef set_value(self, cnp.float64_t value = 1):
+        '''Forcedly sets parameter to value'''
         if self.bis_param:
 
             self.value = value 
@@ -46,15 +48,18 @@ cdef class Node:
         self.left, self.right, self.op_symbol, self.node_depth, self.value = None, None, None, 0, self.set_value()
     
     cpdef assign_operation(self, operation):
+        '''Assigns an operation between self.left and self.right'''
         if not self.bis_param:
             self.op_symbol = operation
             self.update_func()
    
     cpdef assign_left(self, node):
+        '''Assigns left node'''
         if not self.bis_param:
             self.left = node
   
     cpdef assign_right(self, node):
+        '''Assigns right node'''
         if not self.bis_param:
             self.right = node
     #cdef?
@@ -110,16 +115,11 @@ cdef class Node:
         return 1 + left_size + right_size
 
     cpdef is_leaf(self):
-        """Am I a leaf?"""
+        """Is self a leaf?"""
         return self.left is None and self.right is None
     #cdef?
     cpdef update_func(self, list params_list=[], str user_prefix=None):
         """Update function after attribute changes"""
-        '''
-        if self.is_param():
-            self.reinit_to_par(params_list, user_prefix)
-        '''
-           
         if self.is_leaf():
             
             return 
@@ -192,6 +192,7 @@ cdef class Tree:
      
 
     def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, object value=1):
+        '''Tree class initialization'''
         self.domain = x
         self.depth = depth
         if node==None:
@@ -204,6 +205,9 @@ cdef class Tree:
         self.param_values, self.name_values = self.get_param_values()
 
     cdef get_param_values(self):
+        '''Builds parameters' dictionaries: one with memory locations and values 
+        and one with strings and values'''
+
         cdef dict params_values = {}
         cdef Node par
         cdef dict names_values = {}
@@ -218,6 +222,7 @@ cdef class Tree:
         #self.param_values = self.init_params(init_val = 1)
     cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val):
         '''
+        CANDIDATE FOR DELETION
         cdef Node par
         for par in self.params:
             par.set_value(init_val)
@@ -252,6 +257,7 @@ cdef class Tree:
         return self.domain
     #cdef?
     cpdef is_defined(self, x=None):
+        '''Applies real_functionC's is_defined on self.root'''
         if x is None:
 
             return self.root.function.is_defined(self.domain, self.name_values)
@@ -292,7 +298,7 @@ cdef class Tree:
     
     #def?
     cpdef tree_get_description(self):
-        """access root function description from Python""" 
+        """Access root function description from Python""" 
         return self.current_description
     #cdef?
     cpdef update_tree_description(self):

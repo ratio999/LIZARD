@@ -9,7 +9,7 @@ cimport numpy as cnp
 
 @cython.boundscheck(True)  # Per migliorare le prestazioni
 cpdef subtree_mutation( function_treeC.Tree tree, functions, random_depth=False):
-    """Sostituisce un sottoalbero con un nuovo sottoalbero generato casualmente."""
+    """Substitutes a subtree with a random-generated new subtree"""
     
     parent_node = None
     while parent_node is None:
@@ -38,7 +38,7 @@ cpdef subtree_mutation( function_treeC.Tree tree, functions, random_depth=False)
 
 @cython.boundscheck(True)
 cpdef subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent2):
-    """Esegue il crossover tra due alberi sostituendo un sottoalbero di parent1 con un sottoalbero di parent2."""
+    """Crossover between two subtrees from different trees"""
     #cdef function_treeC.Node node1 = parent1.root.select_random_node()
     #cdef function_treeC.Node node2 = parent2.root.select_random_node()
     #cdef function_treeC.Node parent_node = parent1.root.find_parent(node1)
@@ -63,6 +63,7 @@ cpdef subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent
     
 
 cdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
+    '''Renames parameters of a tree using a new prefix'''
     cdef function_treeC.Node node
     
     
@@ -72,6 +73,7 @@ cdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
         node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain)
 
 cdef refresh_params(function_treeC.Tree tree):
+    '''Conforms all parameters to one prefix'''
     
     cdef list params = [tree.params[j].get_fun().get_description() for j in range (0, len(tree.params))]
     cdef dict rename_map = {}
@@ -94,7 +96,7 @@ cdef refresh_params(function_treeC.Tree tree):
             node.function = real_functionC.RealFunctionC.from_string(rename_map[param_name], tree.domain)
             node.update_func()
             if parent_node is None:
-        # Se non c'è genitore, significa che stai sostituendo la radice
+    
                 tree.root = node
             elif parent_node.get_left() == old_node:
                 parent_node.assign_left(node)
@@ -132,9 +134,10 @@ cpdef point_mutation(function_treeC.Tree tree, functions, operations, x):
 @cython.boundscheck(True)
 @cython.wraparound(True)
 cpdef hoist_mutation(function_treeC.Tree tree):
-    #print(tree)
+    """Replaces subtree with one of its subtrees"""
+ 
     cdef function_treeC.Node subtree, parent_node, granpa
-    """Sostituisce un sottoalbero con uno dei suoi sottoalberi."""
+   
     if not tree.root.is_leaf():
         check=False
         while not check:
@@ -222,7 +225,7 @@ def size_fair_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def replace_with_subtree(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
-    """Sostituisce un nodo con un sottoalbero casuale."""
+    """Replaces a subtree with a random generated subtree GONNA BE DELETED PROBABLY"""
     cdef function_treeC.Node node_to_replace = tree.root.select_random_node()
     cdef function_treeC.Node new_subtree = function_treeC.build_tree(random.randint(1, 3), functions, x)
     node_to_replace.left = new_subtree.left
@@ -267,7 +270,7 @@ cpdef add_node(function_treeC.Tree tree, functions, operations):
 
 @cython.boundscheck(True)  # Per migliorare le prestazioni
 cpdef add_node( function_treeC.Tree tree, functions, operations, random_depth=False):
-    """Sostituisce un sottoalbero con un nuovo sottoalbero generato casualmente."""
+    """Adds a node from a random location in an existing tree"""
     cdef str op = random.choice(operations)
     if not tree.root.is_leaf():
         parent_node = None
@@ -324,7 +327,7 @@ cpdef add_node( function_treeC.Tree tree, functions, operations, random_depth=Fa
         tree.tree_update(parent_node)
         
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
-    """Genera un nuovo sottoalbero di una dimensione specifica."""
+    """Generates a random subtree with chosen size"""
     depth = size // 2  # Calcola una profondità approssimativa
     cdef function_treeC.Tree tree = function_treeC.Tree(depth, functions, x)
     return tree.root
