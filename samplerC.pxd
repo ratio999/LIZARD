@@ -4,7 +4,11 @@ cimport numpy as cnp
 cdef class MCMCSampler:
     cdef object current_posterior
     cdef dict current_trees
-    cdef cnp.float64_t temperature
+    cdef list functions
+    cdef list operations
+    cdef object temperatures
+
+    cdef propose_new_trees(self)
 
     cdef step(self)
 

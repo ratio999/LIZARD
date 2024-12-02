@@ -19,6 +19,10 @@ cdef class Node:
         self.bis_param = self.is_param()
         self.value = np.nan
 
+    def __copy__(self):
+        return Node(self.function, self.left, self.right,
+            self.op_symbol)
+
     def get_domain(self):
         '''Obtain domain from Python.'''
         return self.domain
@@ -195,6 +199,9 @@ cdef class Tree:
         '''Tree class initialization'''
         self.domain = x
         self.depth = depth
+        self.functions = functions
+        self.Npars=Npars
+        
         if node==None:
             self.root = build_tree(depth, functions, self.domain, Npars=Npars, value=value)
         else:
@@ -203,6 +210,10 @@ cdef class Tree:
         self.leaves = self.get_leaves()
         self.params = self.get_params()
         self.param_values, self.name_values = self.get_param_values()
+
+    def __copy__(self):
+        return Tree(self.depth, self.functions, self.domain, self.root,
+            self.Npars)
 
     cdef get_param_values(self):
         '''Builds parameters' dictionaries: one with memory locations and values 

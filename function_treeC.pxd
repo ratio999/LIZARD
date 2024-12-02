@@ -36,6 +36,8 @@ cdef class Tree:
     cdef str current_description
     cdef domain
     cdef int depth
+    cdef list functions
+    cdef int Npars
     cdef list leaves
     cdef list params
     cdef dict param_values, name_values
