@@ -19,6 +19,8 @@ def main():
 
     tree1 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=np.array([3, 4, 5, 6, 7, 8]))
     print(tree1.tree_get_description())
+    tree1.compute_fitness_tree(y)
+    tree1.print_fitness_tree()
     tree2 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=np.array([545, 546, 547, 548]))
     print(tree1.node_count(), calculate_likelihood(tree1, y), calculate_posterior(tree1, y))
     print("Albero 1:")

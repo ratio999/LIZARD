@@ -45,13 +45,13 @@ cdef class Node:
 
             self.value = value 
 
-    cdef fitness_tree(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+    cpdef fitness_tree(self,  y):
         self.set_fitness(y)
         if self.left:
             self.left.fitness_tree(y)
         if self.right:
             self.right.fitness_tree(y)
-            
+
         
        
    
@@ -235,7 +235,7 @@ cdef class Tree:
         self.leaves = self.get_leaves()
         self.params = self.get_params()
         self.param_values, self.name_values = self.get_param_values()
-
+        self.fitness_tree = None
     def __copy__(self):
         return Tree(self.depth, self.functions, self.domain, self.root,
             self.Npars)
@@ -363,8 +363,25 @@ cdef class Tree:
         #for j in range (0, len(self.get_params())):
         #    print(self.get_params()[j].get_fun().get_description())
 
-    cpdef fitness_tree(self, y):
-        self.root.fitness_tree(y)        
+    cpdef compute_fitness_tree(self, y):
+        self.root.fitness_tree(y)     
+
+    cdef build_fitness_tree(self, Node node, str prefix='', bint is_left=True):
+        if node.is_leaf():
+            return f"{prefix}{'└── ' if is_left else '├── '}{str(node.fitness)}\n"
+        
+        result = f"{prefix}{'└── ' if is_left else '├── '}{node.fitness}\n"
+        prefix += '    ' if is_left else '│   '
+
+        result += self.build_fitness_tree(node.left, prefix, True)
+        result += self.build_fitness_tree(node.right, prefix, False)
+
+        return result  
+
+    def print_fitness_tree(self):
+        print(self.build_fitness_tree(self.root))
+
+
 
 
 #cdef --> is cpdef for testing purposes only
