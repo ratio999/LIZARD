@@ -3,7 +3,7 @@ import numpy as np
 cimport function_treeC
 cimport real_functionC
 from fitnessC cimport calculate_likelihood
-cdef calculate_posterior(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, ndim=1] data):
+cpdef calculate_posterior(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, ndim=1] data):
     # Valuta il modello rappresentato dall'albero sui dati
     #cdef cnp.ndarray[cnp.float64_t, ndim=1] predictions = np.array([tree.evaluate(x) for x in X])
         

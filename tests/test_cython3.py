@@ -1,4 +1,6 @@
 from real_functionC import RealFunctionC
+from fitnessC import calculate_likelihood
+from posteriorC import calculate_posterior
 import cython
 import time
 import numpy as np
@@ -13,11 +15,12 @@ def main():
     operations = ["+", "-", "*", "/"]
     # Crea due alberi di funzioni
     x = np.linspace(0, 10, 100).astype(np.float64)
+    y = np.sin(x)
 
     tree1 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=np.array([3, 4, 5, 6, 7, 8]))
     print(tree1.tree_get_description())
     tree2 = Tree(depth=3, functions=functions, x=x, Npars = 6, value=np.array([545, 546, 547, 548]))
-    
+    print(tree1.node_count(), calculate_likelihood(tree1, y), calculate_posterior(tree1, y))
     print("Albero 1:")
     print(tree1)
     print("Albero 2:")
@@ -26,6 +29,7 @@ def main():
     print(tree1.get_params(),'\n\n\n' , tree2.get_params())
     print(tree1.get_param_dicts()[1], tree2.get_param_dicts()[1])
     print(tree1.get_root().get_fun().get_description())
+    print
     try:
         plt.plot(x, tree1.evaluate(x))
         plt.show()
