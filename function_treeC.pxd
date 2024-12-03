@@ -13,6 +13,7 @@ cdef class Node:
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?) 
     cdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
+    cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef node_count(self)
 
     cpdef is_param(self)

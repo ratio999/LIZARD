@@ -12,6 +12,7 @@ cdef class RealFunctionC:
     cdef list params
     cdef list variables    
     cdef classify_symbols(self)
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
 
     cpdef get_domain(self) 
     

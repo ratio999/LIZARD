@@ -66,6 +66,12 @@ cdef class RealFunctionC:
         
         return self.func(x, params=params)
 
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+        try:
+            return np.nanmean((y - self.evaluate(self.domain))**2)
+        except:
+            return np.inf
+
     #cdef?
     cpdef is_param(self):
         """Is function a constant?"""

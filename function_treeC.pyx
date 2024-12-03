@@ -18,6 +18,7 @@ cdef class Node:
         self.domain = self.function.domain
         self.bis_param = self.is_param()
         self.value = np.nan
+        self.fitness = None
 
     def __copy__(self):
         return Node(self.function, self.left, self.right,
@@ -51,6 +52,9 @@ cdef class Node:
         print('REINITIALIZATION OF NODE ', self, ' TO PARAMETER!')
         self.left, self.right, self.op_symbol, self.node_depth, self.value = None, None, None, 0, self.set_value()
     
+    cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+        return self.function.fitness(y)
+
     cpdef assign_operation(self, operation):
         '''Assigns an operation between self.left and self.right'''
         if not self.bis_param:
