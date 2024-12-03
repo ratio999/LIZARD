@@ -13,7 +13,9 @@ cdef class Node:
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?) 
     cdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
+    cdef cnp.float64_t fitness
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef node_count(self)
 
     cpdef is_param(self)
@@ -50,6 +52,8 @@ cdef class Tree:
     #cpdef build_tree(self, depth, functions, x )
     
     cpdef is_defined(self, x=?)
+
+    cpdef fitness_tree(self, y)
 
     cpdef evaluate(self, x=?)
 

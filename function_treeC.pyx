@@ -36,11 +36,22 @@ cdef class Node:
         
         return False
 
+    cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+        self.fitness = self.evaluate_node_fitness(y)
+
     cdef set_value(self, cnp.float64_t value = 1):
         '''Forcedly sets parameter to value'''
         if self.bis_param:
 
             self.value = value 
+
+    cdef fitness_tree(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+        self.set_fitness(y)
+        if self.left:
+            self.left.fitness_tree(y)
+        if self.right:
+            self.right.fitness_tree(y)
+            
         
        
    
@@ -351,6 +362,9 @@ cdef class Tree:
         #self.update_tree_description()
         #for j in range (0, len(self.get_params())):
         #    print(self.get_params()[j].get_fun().get_description())
+
+    cpdef fitness_tree(self, y):
+        self.root.fitness_tree(y)        
 
 
 #cdef --> is cpdef for testing purposes only
