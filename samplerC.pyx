@@ -11,15 +11,16 @@ import copy
 cdef class MCMCSampler:
 
     def __init__(self, dict initial_trees, list functions, list operations, 
-            cnp.ndarray[cnp.float64_t, ndim=1] temperatures=None):
+            cnp.ndarray[cnp.float64_t, ndim=1] data, cnp.ndarray[cnp.float64_t, ndim=1] temperatures=None):
         self.functions = functions
         self.operations = operations
         self.current_trees = initial_trees
+        self.data = data
         if temperatures is None or len(temperatures)<=0:
             temperatures = np.ndarray([1])
         self.temperatures = temperatures
         for T in self.temperatures:
-            self.current_posterior = calculate_posterior(initial_trees[T])
+            self.current_posterior = calculate_posterior(initial_trees[T], data)
 
     cdef propose_new_trees(self):
         """
@@ -45,7 +46,7 @@ cdef class MCMCSampler:
                 cgp.add_node(current_tree, self.functions, self.operations)
 
             #return_dict[self.temperature[i]] = current_tree
-            proposed_posterior = calculate_posterior(current_tree)
+            proposed_posterior = calculate_posterior(current_tree, self.data)
             acceptance_ratio = np.exp((proposed_posterior - self.current_posterior) / self.temperature)
             if acceptance_ratio > rand():
                 return_dict[self.temperatures[i]] = current_tree

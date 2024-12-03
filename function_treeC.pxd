@@ -13,6 +13,8 @@ cdef class Node:
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?) 
     cdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
+    cdef int node_count(self)
+    
     cpdef is_param(self)
     cpdef assign_operation(self, operation)
     cpdef get_leaves(self, leaves_list=?)
@@ -63,6 +65,8 @@ cdef class Tree:
     cpdef update_tree_description(self)
 
     cpdef tree_update(self, node)
+
+    cpdef node_count(self)
 
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 

@@ -161,7 +161,17 @@ cdef class Node:
     
         return leaves_list
 
-         
+    cdef int node_count(self):
+        
+        cdef int count = 1  
+        if self.left:
+            count += self.left.node_count()
+        if self.right:
+            count += self.right.node_count()
+        return count
+        
+    
+    
     #def?
     cpdef get_left(self):
         """Access self.left from Python"""
@@ -263,6 +273,11 @@ cdef class Tree:
                 
         return params_list
     #def?
+
+    cpdef node_count(self):
+        return self.root.node_count()
+
+
     cpdef get_domain(self):
         """Access root's function domain from Python"""
         return self.domain
@@ -304,8 +319,7 @@ cdef class Tree:
         result += self.tree_to_string(node.left, prefix, True)
         result += self.tree_to_string(node.right, prefix, False)
 
-        return result
-        
+        return result    
     
     #def?
     cpdef tree_get_description(self):

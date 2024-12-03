@@ -7,7 +7,7 @@ cdef class MCMCSampler:
     cdef list functions
     cdef list operations
     cdef object temperatures
-
+    cdef object data
     cdef propose_new_trees(self)
 
     cdef step(self)
