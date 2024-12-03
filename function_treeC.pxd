@@ -14,9 +14,9 @@ cdef class Node:
     cdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
     cdef object fitness
-    cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
-    cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
-    cpdef fitness_tree(self,  y)
+    cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+    cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+    cpdef fitness_tree(self,  y, parameters)
 
     cpdef node_count(self)
     cpdef is_param(self)

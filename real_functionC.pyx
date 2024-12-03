@@ -66,9 +66,11 @@ cdef class RealFunctionC:
         
         return self.func(x, params=params)
 
-    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None):
         try:
-            return np.nanmean((y - self.evaluate(self.domain))**2)
+            #if self.is_param():
+                #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
+            return np.nanmean((y - self.evaluate(self.domain, params))**2)
         except:
             return np.inf
 

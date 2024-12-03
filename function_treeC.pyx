@@ -36,8 +36,8 @@ cdef class Node:
         
         return False
 
-    cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
-        self.fitness = self.evaluate_node_fitness(y)
+    cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
+        self.fitness = self.evaluate_node_fitness(y, parameters)
 
     cdef set_value(self, cnp.float64_t value = 1):
         '''Forcedly sets parameter to value'''
@@ -45,12 +45,12 @@ cdef class Node:
 
             self.value = value 
 
-    cpdef fitness_tree(self,  y):
-        self.set_fitness(y)
+    cpdef fitness_tree(self,  y, parameters):
+        self.set_fitness(y, parameters)
         if self.left:
-            self.left.fitness_tree(y)
+            self.left.fitness_tree(y, parameters)
         if self.right:
-            self.right.fitness_tree(y)
+            self.right.fitness_tree(y, parameters)
 
         
        
@@ -63,8 +63,8 @@ cdef class Node:
         print('REINITIALIZATION OF NODE ', self, ' TO PARAMETER!')
         self.left, self.right, self.op_symbol, self.node_depth, self.value = None, None, None, 0, self.set_value()
     
-    cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
-        return self.function.fitness(y)
+    cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
+        return self.function.fitness(y, parameters)
 
     cpdef assign_operation(self, operation):
         '''Assigns an operation between self.left and self.right'''
@@ -364,7 +364,7 @@ cdef class Tree:
         #    print(self.get_params()[j].get_fun().get_description())
 
     cpdef compute_fitness_tree(self, y):
-        self.root.fitness_tree(y)     
+        self.root.fitness_tree(y, self.name_values)     
 
     cdef build_fitness_tree(self, Node node, str prefix='', bint is_left=True):
         if node.is_leaf():
