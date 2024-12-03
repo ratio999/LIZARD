@@ -161,7 +161,7 @@ cdef class Node:
     
         return leaves_list
 
-    cdef int node_count(self):
+    cpdef node_count(self):
         
         cdef int count = 1  
         if self.left:

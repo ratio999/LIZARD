@@ -13,8 +13,8 @@ cdef class Node:
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?) 
     cdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
-    cdef int node_count(self)
-    
+    cpdef node_count(self)
+
     cpdef is_param(self)
     cpdef assign_operation(self, operation)
     cpdef get_leaves(self, leaves_list=?)
