@@ -1,3 +1,0 @@
-[submodule "external/ceres-solver"]
-	path = external/ceres-solver
-	url = https://ceres-solver.googlesource.com/ceres-solver
