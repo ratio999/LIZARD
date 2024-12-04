@@ -1,14 +1,17 @@
 cimport gsl_wrapper
 from libc.stdlib cimport malloc, free
+cimport numpy as cnp
+import numpy as np
+cimport real_functionC
 
-cdef double objective(double *params, void *data):
+cdef double objective(double *params, void *data) noexcept:
     # Simple quadratic function: (x-2)^2 + (y-3)^2
     return (params[0] - 2.0)**2 + (params[1] - 3.0)**2
 
-cpdef optimize():
-    cdef int n = 2  # Number of variables
-    cdef double x = [0.0, 0.0]  # Initial guess
-    cdef double step = [0.1, 0.1]  # Initial step size
+cpdef optimize(f, params, data):
+    cdef int n = len(params)  # Number of variables
+    cdef object x = [0.0, 0.0]  # Initial guess
+    cdef object step = [0.1, 0.1]  # Initial step size
     cdef gsl_wrapper.gsl_multimin_function func
     cdef gsl_wrapper.gsl_multimin_fminimizer *s
 
