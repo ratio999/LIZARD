@@ -4,29 +4,29 @@ cimport numpy as cnp
 import numpy as np
 cimport real_functionC
 
-cdef double objective(gsl_wrapper.gsl_vector_double *params, void *params_struct) noexcept:
+cdef double objective(const gsl_wrapper.gsl_vector *params, void *params_struct) noexcept:
     cdef double result
     cdef int n = 3  # Number of parameters for optimization
     result = 0.0
     for i in range(n):
-        result += gsl_wrapper.gsl_vector_double_get(params, i) ** 2  # Example: sum of squares
+        result += gsl_wrapper.gsl_vector_get(params, i) ** 2  # Example: sum of squares
     return result
 
 cpdef optimize(f, params, data):
     cdef int n = len(params)  # Number of variables
     #cdef gsl_wrapper.gsl_vector_double* x = [0.0, 0.0]  # Initial guess
     #cdef gsl_wrapper.gsl_vector_double* step = [0.1, 0.1]  # Initial step size
-    cdef gsl_wrapper.gsl_vector_double *x
-    cdef gsl_wrapper.gsl_vector_double *step
+    cdef gsl_wrapper.gsl_vector *x
+    cdef gsl_wrapper.gsl_vector *step
     cdef gsl_wrapper.gsl_multimin_function func
     cdef gsl_wrapper.gsl_multimin_fminimizer *s
 
-    x = gsl_wrapper.gsl_vector_double_alloc(n)  # Allocate gsl_vector_double for x
-    step = gsl_wrapper.gsl_vector_double_alloc(n)  # Allocate gsl_vector_double for step
+    x = gsl_wrapper.gsl_vector_alloc(n)  # Allocate gsl_vector_double for x
+    step = gsl_wrapper.gsl_vector_alloc(n)  # Allocate gsl_vector_double for step
 
     for i in range(n):
-        gsl_wrapper.gsl_vector_double_set(x, i, 0.0)  # Set initial guess to 0.0
-        gsl_wrapper.gsl_vector_double_set(step, i, 0.1)  # Set initial step size to 0.1
+        gsl_wrapper.gsl_vector_set(x, i, 0.0)  # Set initial guess to 0.0
+        gsl_wrapper.gsl_vector_set(step, i, 0.1)  # Set initial step size to 0.1
 
     # Set up the GSL function
     func.n = n
