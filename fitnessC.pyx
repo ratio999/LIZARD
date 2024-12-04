@@ -14,3 +14,7 @@ cpdef calculate_likelihood(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, 
     #cdef cnp.float64_t out = 0.0
 
     return mse
+
+cdef parameter_estimation(real_functionC.RealFunctionC model, cnp.ndarray[cnp.float64_t, ndim=1] x, cnp.ndarray[cnp.float64_t, ndim=1] y):
+    model.func
+
