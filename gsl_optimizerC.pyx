@@ -1,75 +1,36 @@
-# gsl_optimizer.pyx
-cimport cython
-from libc.math cimport sqrt
+cimport gsl_wrapper
+from libc.stdlib cimport malloc, free
 
+cdef double objective(double *params, void *data):
+    # Simple quadratic function: (x-2)^2 + (y-3)^2
+    return (params[0] - 2.0)**2 + (params[1] - 3.0)**2
 
-# Funzione obiettivo per la minimizzazione (quadratica)
-def objective_function(double *params):
-    return (params[0] - 2)**2 + (params[1] - 3)**2  # Minimizziamo (x - 2)^2 + (y - 3)^2
+cpdef optimize():
+    cdef int n = 2  # Number of variables
+    cdef double x = [0.0, 0.0]  # Initial guess
+    cdef double step = [0.1, 0.1]  # Initial step size
+    cdef gsl_wrapper.gsl_multimin_function func
+    cdef gsl_wrapper.gsl_multimin_fminimizer *s
 
-# Funzione per eseguire la minimizzazione con Nelder-Mead
-def nelder_mead_minimize():
-    cdef int dim = 2  # Dimensione del problema (2D)
-    cdef gsl_multimin_function obj_func
-    cdef gsl_multimin_fminimizer *minimizer
-    cdef double *params = <double *> malloc(dim * sizeof(double))
-    cdef double *step = <double *> malloc(dim * sizeof(double))
-    cdef int status
-    
-    params[0] = 0.0  # Impostiamo il valore iniziale
-    params[1] = 0.0
-    step[0] = 0.1  # Passo iniziale
-    step[1] = 0.1
+    # Set up the GSL function
+    func.n = n
+    func.params = NULL
+    func.f = objective
 
-    # Impostiamo la funzione obiettivo
-    obj_func.f = objective_function
-    obj_func.n = dim
-    obj_func.params = NULL
+    # Allocate the minimizer
+    s = gsl_wrapper.gsl_multimin_fminimizer_alloc(
+        gsl_wrapper.gsl_multimin_fminimizer_nmsimplex2, n)
 
-    # Creiamo l'oggetto minimizzatore
-    minimizer = gsl_multimin_fminimizer_alloc(gsl_multimin_fminimizer_nmsimplex, dim)
+    try:
+        gsl_wrapper.gsl_multimin_fminimizer_set(s, &func, &x[0], &step[0])
 
-    # Minimizziamo
-    status = gsl_multimin_fminimizer_minimum(minimizer)
+        # Perform iterations
+        for i in range(100):  # Maximum iterations
+            gsl_wrapper.gsl_multimin_fminimizer_iterate(s)
+            size = gsl_wrapper.gsl_multimin_fminimizer_size(s)
+            print(f"Iteration {i}: x = ({x[0]}, {x[1]}), size = {size}")
 
-    if status == 0:
-        print("Minimizzazione Nelder-Mead riuscita!")
-        print("Valore ottimale:", params[0], params[1])
-    else:
-        print("Errore nella minimizzazione")
-    
-    gsl_multimin_fminimizer_free(minimizer)
-
-# Funzione per eseguire la minimizzazione con Levenberg-Marquardt
-def levenberg_marquardt_minimize():
-    cdef int dim = 2  # Dimensione del problema (2D)
-    cdef gsl_multimin_function obj_func
-    cdef gsl_multimin_fminimizer *minimizer
-    cdef double *params = <double *> malloc(dim * sizeof(double))
-    cdef double *step = <double *> malloc(dim * sizeof(double))
-    cdef int status
-    
-    params[0] = 0.0  # Impostiamo il valore iniziale
-    params[1] = 0.0
-    step[0] = 0.1  # Passo iniziale
-    step[1] = 0.1
-
-    # Impostiamo la funzione obiettivo
-    obj_func.f = objective_function
-    obj_func.n = dim
-    obj_func.params = NULL
-
-    # Creiamo l'oggetto minimizzatore
-    minimizer = gsl_multimin_fminimizer_alloc(gsl_multimin_fminimizer_nmsimplex, dim)
-
-    # Minimizziamo
-    status = gsl_multimin_fminimizer_minimum(minimizer)
-
-    if status == 0:
-        print("Minimizzazione Levenberg-Marquardt riuscita!")
-        print("Valore ottimale:", params[0], params[1])
-    else:
-        print("Errore nella minimizzazione")
-    
-    gsl_multimin_fminimizer_free(minimizer)
-
+            if size < 1e-6:  # Convergence criterion
+                break
+    finally:
+        gsl_wrapper.gsl_multimin_fminimizer_free(s)
