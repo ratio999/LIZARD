@@ -16,6 +16,7 @@ cdef class Node:
     cdef object fitness
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
     cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+    cdef sort_params(self, list pars)
     cpdef fitness_tree(self,  y, parameters)
 
     cpdef node_count(self)

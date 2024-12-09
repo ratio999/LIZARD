@@ -25,7 +25,7 @@ cdef class RealFunctionC:
         self.domain = domain 
         self.symbols = self.expr.free_symbols
         self.params, self.variables = self.classify_symbols()      
-        
+        self.params_strs = self.get_par_string()         
         if not isinstance(domain, (np.ndarray)):  # is domain one single element? 
             if self.is_defined(domain):
                 self.description = str(expr)
@@ -38,6 +38,8 @@ cdef class RealFunctionC:
             self.description = str(expr)
         self.regular = True
     
+    cdef get_par_string(self):
+        return [str(i) for i in self.params]
 
     def get_expr(self):
         return(self.expr)
@@ -74,6 +76,22 @@ cdef class RealFunctionC:
         except:
             return np.inf
 
+    cdef sort_params_list(self, list pars):
+
+        try:
+            self.params = sorted(self.params, key=lambda n: pars.index(n))
+            self.params_strs = self.get_par_string()         
+        except:
+            print('Issues: ', self.params, pars)
+    
+    cdef objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object params=None, double lambda_reg=0.1):
+        cdef dict params_dict = dict(zip(self.params_strs, params))
+        try:
+            #if self.is_param():
+                #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
+            return np.nansum((y - self.evaluate(self.domain, params_dict))**2)
+        except:
+            return np.inf
     #cdef?
     cpdef is_param(self):
         """Is function a constant?"""

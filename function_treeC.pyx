@@ -44,6 +44,10 @@ cdef class Node:
         if self.bis_param:
 
             self.value = value 
+    cdef sort_params(self, list pars):
+        cdef Node i
+        cdef list pars_str = [sp.symbols(i.function.get_description()) for i in pars]
+        self.function.sort_params_list(pars_str)
 
     cpdef fitness_tree(self,  y, parameters):
         self.set_fitness(y, parameters)
@@ -273,7 +277,7 @@ cdef class Tree:
     cpdef get_leaves(self):
         """Access Tree's leaves from Python"""
         return self.root.get_leaves()
-    
+     
     cpdef get_params(self, params_list = None):
         """How many constants in the Tree?"""
         if params_list is None:
@@ -285,7 +289,7 @@ cdef class Tree:
                 
                
                 params_list.append(leaf)
-                
+        self.root.sort_params(params_list)        
         return params_list
     #def?
 
