@@ -56,12 +56,17 @@ cpdef optimize(f, params, data):
     func.params = NULL
     func.f = objective
 
+    cdef ObjectiveParams obj_params = ObjectiveParams(f, data)
+    #    obj_params.model = f
+    #    obj_params.data = data
+
+    
     # Allocate the minimizer
     s = gsl_wrapper.gsl_multimin_fminimizer_alloc(
         gsl_wrapper.gsl_multimin_fminimizer_nmsimplex2, n)
 
     try:
-        gsl_wrapper.gsl_multimin_fminimizer_set(s, &func, &x[0], &step[0])
+        gsl_wrapper.gsl_multimin_fminimizer_set(s, &func, x, step)
 
         # Perform iterations
         for i in range(100):  # Maximum iterations
