@@ -1,7 +1,10 @@
 cdef extern from "gsl/gsl_vector.h":
     # Declare the type of gsl_vector_double as a struct
     ctypedef struct gsl_vector:
-        pass
+        int size
+        int stride
+        double *data
+        #pass
 
     # Declare the GSL functions that manipulate gsl_vector_double
     cdef gsl_vector *gsl_vector_alloc(int n)  # Allocate a gsl_vector_double

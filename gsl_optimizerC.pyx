@@ -4,13 +4,36 @@ cimport numpy as cnp
 import numpy as np
 cimport real_functionC
 
+cdef class ObjectiveParams:
+    cdef real_functionC.RealFunctionC model
+    cdef double[:,:] data  # Assuming data is a 2D array of (x, y) pairs
+
+
+    def __init__(self, real_functionC.RealFunctionC model, cnp.ndarray[cnp.float64_t, ndim=1] data):
+        self.model = model
+        self.data = data
+
 cdef double objective(const gsl_wrapper.gsl_vector *params, void *params_struct) noexcept:
+    cdef ObjectiveParams obj_params = <ObjectiveParams>params_struct
+    cdef real_functionC.RealFunctionC model = obj_params.model
+    cdef double[:,:] data = obj_params.data
+    cdef list param_keys = model.params
     cdef double result
-    cdef int n = 3  # Number of parameters for optimization
-    result = 0.0
+    cdef int n = params.size 
+    cdef int i
+    cdef double error = 0.0
+    cdef double prediction, x, y
+
     for i in range(n):
-        result += gsl_wrapper.gsl_vector_get(params, i) ** 2  # Example: sum of squares
-    return result
+        model.params[param_keys[i]] = gsl_wrapper.gsl_vector_get(params, i) 
+
+    for i in range(data.shape[0]):
+        x = data[i, 0]
+        y = data[i, 1]
+        prediction = model.evaluate(x)
+        error += (y-prediction)**2
+
+    return error
 
 cpdef optimize(f, params, data):
     cdef int n = len(params)  # Number of variables
@@ -44,7 +67,7 @@ cpdef optimize(f, params, data):
         for i in range(100):  # Maximum iterations
             gsl_wrapper.gsl_multimin_fminimizer_iterate(s)
             size = gsl_wrapper.gsl_multimin_fminimizer_size(s)
-            print(f"Iteration {i}: x = ({x[0]}, {x[1]}), size = {size}")
+            print(f"Iteration {i}: x = ({gsl_wrapper.gsl_vector_get(x,0)}, {gsl_wrapper.gsl_vector_get(x,1)}), size = {size}")
 
             if size < 1e-6:  # Convergence criterion
                 break
