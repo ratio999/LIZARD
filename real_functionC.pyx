@@ -86,12 +86,22 @@ cdef class RealFunctionC:
     
     cdef objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object params=None, double lambda_reg=0.1):
         cdef dict params_dict = dict(zip(self.params_strs, params))
+        cdef double obj_value, l2_penalty
         try:
             #if self.is_param():
                 #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
-            return np.nansum((y - self.evaluate(self.domain, params_dict))**2)
+            obj_value = np.nansum((y - self.evaluate(self.domain, params_dict))**2)
+            l2_penalty = lambda_reg * np.nansum(np.array(list(params_dict.values()))**2)
+            return obj_value + l2_penalty
         except:
             return np.inf
+
+    cdef gradient_with_l2(self, params, lambda_reg = 0.1):
+        param_dict = dict(zip(self.params_strs, params))
+        grad = 2 * np.array(list(param_dict.values())) + 2 * lambda_reg * np.array(list(param_dict.values()))
+        return grad
+
+
     #cdef?
     cpdef is_param(self):
         """Is function a constant?"""
