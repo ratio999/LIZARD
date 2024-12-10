@@ -84,21 +84,20 @@ cdef class RealFunctionC:
         except:
             print('Issues: ', self.params, pars)
     
-    cdef objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object params=None, double lambda_reg=0.1):
-        cdef dict params_dict = dict(zip(self.params_strs, params))
+    cdef objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, double lambda_reg=0.1):
         cdef double obj_value, l2_penalty
         try:
             #if self.is_param():
                 #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
-            obj_value = np.nansum((y - self.evaluate(self.domain, params_dict))**2)
-            l2_penalty = lambda_reg * np.nansum(np.array(list(params_dict.values()))**2)
+            obj_value = np.nansum((y - self.evaluate(self.domain, params))**2)
+            l2_penalty = lambda_reg * np.nansum(np.array(list(params.values()))**2)
             return obj_value + l2_penalty
         except:
             return np.inf
 
     cdef gradient_with_l2(self, params, lambda_reg = 0.1):
-        param_dict = dict(zip(self.params_strs, params))
-        grad = 2 * np.array(list(param_dict.values())) + 2 * lambda_reg * np.array(list(param_dict.values()))
+        #param_dict = dict(zip(self.params_strs, params))
+        grad = 2 * np.array(list(params)) + 2 * lambda_reg * np.array(list(params))
         return grad
 
 

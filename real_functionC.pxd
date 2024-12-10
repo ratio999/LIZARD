@@ -16,7 +16,7 @@ cdef class RealFunctionC:
     cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?)
     cdef sort_params_list(self, list pars)
     cdef get_par_string(self)
-    cdef objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object params=?, double lambda_reg=?) 
+    cdef objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, double lambda_reg=?) 
     cdef gradient_with_l2(self, params, lambda_reg = ?)
     cpdef get_domain(self) 
     

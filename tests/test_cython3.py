@@ -28,7 +28,9 @@ def main():
     print("Albero 2:")
     print(tree2)
     print(tree1.get_root().get_fun().get_params())
-    print(tree1.get_params(),'\n\n\n' , tree2.get_params())
+    
+    for i in tree1.get_params():
+        print(i.get_fun().get_description())
     print(tree1.get_param_dicts()[1], tree2.get_param_dicts()[1])
     print(tree1.get_root().get_fun().get_description())
     print
@@ -49,19 +51,30 @@ def main():
     print("Dopo il crossover:")
     print(tree1)
     print(tree1.tree_get_description())
-    print(tree1.get_params())
-
+    print(tree1.get_root().get_fun().get_params())
+    
+    for i in tree1.get_params():
+        print(i.get_fun().get_description())
     print(tree1.get_param_dicts()[1])
  
     point_mutation(tree1, functions, operations)
     print("Dopo la mutazione puntuale:")
     print(tree1)
     print(tree1.tree_get_description())
-    
+    print(tree1.get_root().get_fun().get_params())
+    for i in tree1.get_params():
+        print(i.get_fun().get_description())
+    #print(tree1.get_params(),'\n\n\n' , tree2.get_params())
+    print(tree1.get_param_dicts()[1])
     hoist_mutation(tree1)
     print("Dopo la mutazione di sollevamento:")
     print(tree1)
     print(tree1.tree_get_description())
+    print(tree1.get_root().get_fun().get_params())
+    
+    for i in tree1.get_params():
+        print(i.get_fun().get_description())
+    print(tree1.get_param_dicts()[1])
     '''
     size_fair_mutation(tree1, functions, x)
     print("Dopo la mutazione di dimensione equa:")
@@ -73,6 +86,11 @@ def main():
     print("Dopo l'aggiunta di un nodo:")
     print(tree1)
     print(tree1.tree_get_description())
+    print(tree1.get_root().get_fun().get_params())
+    
+    for i in tree1.get_params():
+        print(i.get_fun().get_description())
+    print(tree1.get_param_dicts()[1])
     '''
     replace_with_subtree(tree1, functions, x)
     print("Dopo la sostituzione con un sottoalbero:")
