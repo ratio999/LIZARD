@@ -2,7 +2,7 @@ import numpy as np
 cimport numpy as cnp
 import sympy as sp
 cimport sympy as csp
-
+from scipy.optimize import minimize
 import re
 from libc.stdlib cimport malloc, free  # Not needed so far 
 from cython.cimports.libc.string import memcpy
@@ -68,13 +68,50 @@ cdef class RealFunctionC:
         
         return self.func(x, params=params)
 
-    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None):
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y,  object x = None, dict params=None, double lambda_reg=0.0): 
+        if x is None:
+            x = self.domain
         try:
             #if self.is_param():
                 #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
-            return np.nanmean((y - self.evaluate(self.domain, params))**2)
+            return np.nanmean((y - self.evaluate(x,  params))**2) + lambda_reg * np.sum(np.array(list(params.values()))**2)
         except:
             return np.inf
+
+    cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x = None, dict params=None, double lambda_reg = 0.0):
+        if x is None:
+            x=self.domain
+        cdef double[:] y_pred = self.evaluate(x, params)
+        cdef double[:] residuals = y_pred - y
+        cdef double grad_a0, grad_a1, grad_a2
+        grad_a0 = 2 * np.mean(residuals * x**2)
+        grad_a1 = 2 * np.mean(residuals *x)
+        grad_a2 = 2 * np.mean(residuals)
+
+        cdef object par_values = np.array(list(params.values()))
+        return np.array([grad_a0, grad_a1, grad_a2]) + lambda_reg * par_values
+
+
+    def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):
+        cdef dict params_dict = dict(zip(self.param_strs, flat_params))
+        return self.fitness( y_data, x_data, params_dict, lambda_reg)
+
+    def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
+        cdef dict params_dict = dict(zip(self.params_strs, flat_params))
+        return self.gradient( y_data, x_data, params_dict, lambda_reg)
+
+    def optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, str method_str='L-BFGS-B'):
+        cdef double[:] initial_params = np.array(list(self.params.values()))
+        cdef object result = minimize(
+                fun=self.objective,
+                x0=initial_params,
+                jac=self.grad,
+                args=(x_data, y_data, lambda_reg),
+                method=method_str,
+                options={'disp': True}
+                )
+        #self.params = dict(zip(self.param_str, result.x))
+        return result
 
     cdef sort_params_list(self, list pars):
 
@@ -83,28 +120,7 @@ cdef class RealFunctionC:
             self.params_strs = self.get_par_string()         
         except:
             print('Issues: ', self.params, pars)
-    
-    cdef objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, double lambda_reg=0.1):
-        cdef double obj_value, l2_penalty
-        try:
-            #if self.is_param():
-                #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
-            obj_value = np.nansum((y - self.evaluate(self.domain, params))**2)
-            l2_penalty = lambda_reg * np.nansum(np.array(list(params.values()))**2)
-            return obj_value + l2_penalty
-        except:
-            return np.inf
-
-    cdef gradient_with_l2(self, params, lambda_reg = 0.1):
-        #param_dict = dict(zip(self.params_strs, params))
-        grad = 2 * np.array(list(params.values())) + 2 * lambda_reg * np.array(list(params.values()))
-        return grad
-    
-    def get_objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, double lambda_reg=0.1):
-        return self.objective_L2(y,  params,  lambda_reg)
-    
-    def get_gradient_L2(self, params, lambda_reg = 0.1):
-        return self.gradient_with_l2(params, lambda_reg)
+        
 
     #cdef?
     cpdef is_param(self):

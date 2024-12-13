@@ -13,11 +13,12 @@ cdef class RealFunctionC:
     cdef list params_strs
     cdef list variables    
     cdef classify_symbols(self)
-    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?)
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?, 
+    double lambda_reg=?)
     cdef sort_params_list(self, list pars)
     cdef get_par_string(self)
-    cdef objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, double lambda_reg=?) 
-    cdef gradient_with_l2(self, params, lambda_reg = ?)
+    cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?, 
+    double lambda_reg=?)
     cpdef get_domain(self) 
     
     cpdef is_param(self) 

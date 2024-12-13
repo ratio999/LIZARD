@@ -28,17 +28,22 @@ def main():
     print("Albero 2:")
     print(tree2)
     print(tree1.get_root().get_fun().get_params())
-    
+    parameters = tree1.get_param_dicts()[1]
+    #print(tree1.get_root().get_fun().get_objective_L2(y, parameters), tree1.get_root().get_fun().get_gradient_L2(parameters) )
+
+
+
+
+
     for i in tree1.get_params():
         print(i.get_fun().get_description())
     print(tree1.get_param_dicts()[1], tree2.get_param_dicts()[1])
     print(tree1.get_root().get_fun().get_description())
-    print
-    try:
-        plt.plot(x, tree1.evaluate(x))
-        plt.show()
-    except:
-        pass
+    #try:
+    #    plt.plot(x, tree1.evaluate(x))
+    #    plt.show()
+    #except:
+    #    pass
     print(tree1.is_defined(x), tree1.evaluate(x))
     # Eseguire le mosse di genetic programming
     subtree_mutation(tree1, functions, random_depth=True)
