@@ -97,9 +97,14 @@ cdef class RealFunctionC:
 
     cdef gradient_with_l2(self, params, lambda_reg = 0.1):
         #param_dict = dict(zip(self.params_strs, params))
-        grad = 2 * np.array(list(params)) + 2 * lambda_reg * np.array(list(params))
+        grad = 2 * np.array(list(params.values())) + 2 * lambda_reg * np.array(list(params.values()))
         return grad
-
+    
+    def get_objective_L2(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, double lambda_reg=0.1):
+        return self.objective_L2(y,  params,  lambda_reg)
+    
+    def get_gradient_L2(self, params, lambda_reg = 0.1):
+        return self.gradient_with_l2(params, lambda_reg)
 
     #cdef?
     cpdef is_param(self):
