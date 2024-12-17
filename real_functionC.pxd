@@ -11,10 +11,11 @@ cdef class RealFunctionC:
     cdef str description  # Descrizione della funzione
     cdef list params
     cdef list params_strs
-    cdef list variables    
+    cdef list variables 
+    cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = ?)   
     cdef classify_symbols(self)
-    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?, 
-    double lambda_reg=?)
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, 
+    object x=?, double lambda_reg=?)
     cdef sort_params_list(self, list pars)
     cdef get_par_string(self)
     cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?, 

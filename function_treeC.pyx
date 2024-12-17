@@ -369,7 +369,7 @@ cdef class Tree:
 
     cpdef compute_fitness_tree(self, y):
         self.root.fitness_tree(y, self.name_values)     
-
+        
     cdef build_fitness_tree(self, Node node, str prefix='', bint is_left=True):
         if node.is_leaf():
             return f"{prefix}{'└── ' if is_left else '├── '}{str(node.fitness)}\n"

@@ -62,13 +62,17 @@ cdef class RealFunctionC:
     cpdef get_domain(self):
         return self.domain
 
-    def evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+    cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
         if params is None:
             params = {}
         
         return self.func(x, params=params)
+    
+    def get_eval(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+        return self.evaluate(x, params)
 
-    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y,  object x = None, dict params=None, double lambda_reg=0.0): 
+
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double lambda_reg=0.0): 
         if x is None:
             x = self.domain
         try:
@@ -94,7 +98,7 @@ cdef class RealFunctionC:
 
     def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):
         cdef dict params_dict = dict(zip(self.param_strs, flat_params))
-        return self.fitness( y_data, x_data, params_dict, lambda_reg)
+        return self.fitness( y_data,  params_dict, x_data, lambda_reg)
 
     def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
