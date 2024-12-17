@@ -1,10 +1,10 @@
 import numpy as np
 cimport numpy as cnp
 import sympy as sp
-cimport sympy as csp
+#cimport sympy as csp
 from scipy.optimize import minimize
 import re
-from libc.stdlib cimport malloc, free  # Not needed so far 
+#from libc.stdlib cimport malloc, free  # Not needed so far 
 from cython.cimports.libc.string import memcpy
 def safe_convert(value):
         try:
