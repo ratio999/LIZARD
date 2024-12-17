@@ -91,21 +91,21 @@ cdef class RealFunctionC:
         grad_a0 = 2 * np.mean(residuals * x**2)
         grad_a1 = 2 * np.mean(residuals *x)
         grad_a2 = 2 * np.mean(residuals)
+        
 
         cdef object par_values = np.array(list(params.values()))
-        return np.array([grad_a0, grad_a1, grad_a2]) + lambda_reg * par_values
-
+        return 2*par_values + 2*lambda_reg*par_values
 
     def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):
-        cdef dict params_dict = dict(zip(self.param_strs, flat_params))
+        cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.fitness( y_data,  params_dict, x_data, lambda_reg)
 
     def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.gradient( y_data, x_data, params_dict, lambda_reg)
 
-    def optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, str method_str='L-BFGS-B'):
-        cdef double[:] initial_params = np.array(list(self.params.values()))
+    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
+        cdef double[:] initial_params = np.array(list(input_pars.values()))
         cdef object result = minimize(
                 fun=self.objective,
                 x0=initial_params,

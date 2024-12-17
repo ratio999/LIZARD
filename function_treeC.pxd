@@ -14,6 +14,8 @@ cdef class Node:
     cdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
     cdef object fitness
+    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+        dict input_pars, double lambda_reg, str method_str=?)
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
     cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
     cdef sort_params(self, list pars)
@@ -41,7 +43,7 @@ cdef class Node:
 cdef class Tree:
     cdef Node root
     cdef str current_description
-    cdef domain
+    cdef object domain
     cdef int depth
     cdef list functions
     cdef int Npars
@@ -52,6 +54,9 @@ cdef class Tree:
     cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val)
     cpdef get_domain(self)
     cdef get_param_values(self)
+    cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        str method_str=?)
     cdef build_fitness_tree(self, Node node, str prefix=?, bint is_left=?)
     #cpdef build_tree(self, depth, functions, x )
     

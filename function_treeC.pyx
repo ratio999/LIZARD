@@ -55,6 +55,10 @@ cdef class Node:
             self.left.fitness_tree(y, parameters)
         if self.right:
             self.right.fitness_tree(y, parameters)
+        
+    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+        dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
+        return self.function.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
 
         
        
@@ -384,6 +388,12 @@ cdef class Tree:
 
     def print_fitness_tree(self):
         print(self.build_fitness_tree(self.root))
+
+    cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        str method_str='L-BFGS-B'):
+        cdef dict input_pars = self.name_values
+        return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
 
 
 
