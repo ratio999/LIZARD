@@ -41,6 +41,7 @@ cdef class Node:
     cpdef update_func(self, list params_list=?, str user_prefix=?)
 
 cdef class Tree:
+    cdef double T
     cdef Node root
     cdef str current_description
     cdef object domain
@@ -85,7 +86,7 @@ cdef class Tree:
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
     int Npars=?, object leaves_count=?, object arr_indices=?,
-    dict params_used=?, object value=?)
+    dict params_used=?, object value=?, double T=?)
 
 cdef parameter_parser(int Npars)
 

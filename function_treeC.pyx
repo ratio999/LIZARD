@@ -228,8 +228,9 @@ cdef class Node:
 cdef class Tree:
      
 
-    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, object value=1):
+    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, object value=1, double T=0):
         '''Tree class initialization'''
+        self.T = T
         self.domain = x
         self.depth = depth
         self.functions = functions
@@ -401,7 +402,7 @@ cdef class Tree:
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
         str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None, 
-             dict params_used=None, object value = 1.0):
+             dict params_used=None, object value = 1.0, double T=0):
         '''Builds a Tree from scratch'''
         if isinstance(value, (float, int)):
             assign_value = np.full((Npars,), value, dtype=np.float64)
@@ -508,7 +509,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             return return_node 
         else:
             return Tree(depth, functions, x, 
-                    node =Node(function=func, left=left, right=right, symbol=op_symbol))
+                    node =Node(function=func, left=left, right=right, symbol=op_symbol), T=T)
 
 cdef parameter_parser(int Npars):
     """Create parameter names list(str())"""
