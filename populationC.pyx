@@ -7,10 +7,17 @@ import sympy as sp
 from mpi4py import MPI
 
 cdef class Population:
-    def __init__(self, int[:] T):
+    def __init__(self, object T, int size):
         cdef int Ti
-        self.trees = [function_treeC.Tree(Ti) for Ti in T]
-    
+        cdef int i
+        if np.isinstance(T, np.ndarray) and T.shape>=size:
+            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs, self.InputX, self.InputNode[i], self.InputNpars, self.InputValue, T[i]) for i in range (0, size)]
+        elif np.isinstance(T, np.ndarray) and T.shape<size:
+            T=np.pad(T, (size-T.shape,), 'edge')
+            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs, self.InputX, self.InputNode[i], self.InputNpars, self.InputValue, T[i]) for i in range (0, size)]
+        else: 
+            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs, self.InputX, self.InputNode[i], self.InputNpars, self.InputValue, T) for i in range (0, size)]
+ 
     cdef genstep(self, dict T_moves=None):
         if T_moves is None:
             T_moves = random_move(self.T)
