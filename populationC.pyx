@@ -7,11 +7,15 @@ import sympy as sp
 from mpi4py import MPI
 
 cdef class Population:
-    def __init__(self, object T, int size):
+    def __init__(self, float* T, int size, int* depth, list funcs, 
+                 cnp.ndarray[cnp.float64_t, ndim=1] x, object nodes_list=None, 
+                 int Npars=0, int value=1):
         cdef int Ti
         cdef int i
         if np.isinstance(T, np.ndarray) and T.shape>=size:
-            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs, self.InputX, self.InputNode[i], self.InputNpars, self.InputValue, T[i]) for i in range (0, size)]
+            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs,
+                        self.InputX, self.InputNode[i], self.InputNpars, 
+                        self.InputValue, T[i]) for i in range (0, size)]
         elif np.isinstance(T, np.ndarray) and T.shape<size:
             T=np.pad(T, (size-T.shape,), 'edge')
             self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs, self.InputX, self.InputNode[i], self.InputNpars, self.InputValue, T[i]) for i in range (0, size)]
