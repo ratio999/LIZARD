@@ -8,7 +8,7 @@ from distutils.extension import Extension
 
 
 setup(
-        ext_modules=cythonize(["real_functionC.pyx", "function_treeC.pyx", "gp_movesC.pyx", "ptr_to_np.pyx"
+        ext_modules=cythonize(["real_functionC.pyx", "function_treeC.pyx", "gp_movesC.pyx"
                            ], 
                           compiler_directives={'cdivision': True, 'boundscheck': True}, gdb_debug=True
 ),
