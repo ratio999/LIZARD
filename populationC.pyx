@@ -8,19 +8,31 @@ from mpi4py import MPI
 
 cdef class Population:
     def __init__(self, float* T, int size, int* depth, list funcs, 
-                 cnp.ndarray[cnp.float64_t, ndim=1] x, object nodes_list=None, 
+                 cnp.ndarray[cnp.float64_t, ndim=1] x, object nodes_list=None,
                  int Npars=0, int value=1):
+        self.InputDepth = depth
+        self.InputFuncs = funcs
+        self.InputX = x
+        self.InputNodes = nodes_list
+        self.InputNpars = Npars
+        self.InputValue = value
+        self.T = T
+        
         cdef int Ti
         cdef int i
         if np.isinstance(T, np.ndarray) and T.shape>=size:
             self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs,
-                        self.InputX, self.InputNode[i], self.InputNpars, 
+                        self.InputX, self.InputNodes[i], self.InputNpars, 
                         self.InputValue, T[i]) for i in range (0, size)]
         elif np.isinstance(T, np.ndarray) and T.shape<size:
             T=np.pad(T, (size-T.shape,), 'edge')
-            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs, self.InputX, self.InputNode[i], self.InputNpars, self.InputValue, T[i]) for i in range (0, size)]
+            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs,
+                        self.InputX, self.InputNodes[i], self.InputNpars, 
+                        self.InputValue, T[i]) for i in range (0, size)]
         else: 
-            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs, self.InputX, self.InputNode[i], self.InputNpars, self.InputValue, T) for i in range (0, size)]
+            self.trees = [function_treeC.Tree(self.InputDepth, self.InputFuncs,
+                        self.InputX, self.InputNode[i], self.InputNpars, 
+                        self.InputValue, T[i]) for i in range (0, size)]
  
     cdef genstep(self, dict T_moves=None):
         if T_moves is None:
