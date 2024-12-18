@@ -6,13 +6,21 @@ cimport gp_movesC
 import sympy as sp
 
 cdef class Population:
-    def __init__(self, object T, list functions, dict params=None, int pop_size=100):
-        cdef bint parallel_tempering
+    def __init__(self, object T, list functions, dict params=None, int pop_size=100, object members=None):
+        cdef int i
         if np.isinstance(T, np.ndarray):
-            parallel_tempering = True
+            self.parallel_tempering = True
         else:
-            parallel_tempering = False
-        for i in range(pop_size):
-            self.members[i] = tree(T, functions, params...)
+            self.parallel_tempering = False
+            
+        if members is None:
+            for i in range(pop_size):
+                if self.parallel_tempering:
+                    self.members[i] = tree(T[i], functions, params...)
+                else:
+                    self.members[i] = tree(T, functions, params...)
+        self.generation=0
+
+     
 
 
