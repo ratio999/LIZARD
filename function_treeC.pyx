@@ -167,7 +167,7 @@ cdef class Node:
             elif self.op_symbol == '**':
                 self.function = self.left.get_fun() ** self.right.get_fun()  # Operazione di potenza
                 
-            elif self.op_symbol == '∘':   # Composition symbol
+            elif self.op_symbol == 'o':   # Composition symbol
                 self.function = self.left.get_fun().compose(self.right.get_fun())
                 
     cpdef get_leaves(self, leaves_list = None):
@@ -502,7 +502,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             op_symbol = '**'
         elif operation == 'compose':
             func = left.function.compose(right.function)
-            op_symbol = '∘' 
+            op_symbol = 'o' 
         if output_type is None or output_type=='node' or output_type=='Node':
             
             return_node = Node(function=func, left=left, right=right, symbol=op_symbol) 

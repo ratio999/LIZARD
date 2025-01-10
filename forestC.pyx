@@ -9,14 +9,17 @@ from mpi4py import MPI
 cdef class Forest:
     def __init__(self, float[:] T, int size, int[:] depth, list funcs, 
                  cnp.ndarray[cnp.float64_t, ndim=1] x, object nodes_list=None,
-                 int Npars=0, int value=1):
+                 int Npars=0, int value=1, object operations=None):
+        if operations is None:
+            operations = ["+", "-", "*", "/", "**", "o"]
+        self.operations = operations
         self.depth = depth
         self.funcs = funcs
         self.domain = x
         self.nodes = nodes_list
         self.n_pars = Npars
         self.input_value = value
-        self.T = T
+        self.T = np.sort(T)
         self.size = size
         self.rank = MPI.COMM_WORLD.Get_rank()
         self.trees = self.grow_forest()

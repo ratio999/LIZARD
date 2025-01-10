@@ -1,17 +1,14 @@
-cimport function_treeC
 cimport numpy as cnp
-
+cimport forestC
 cdef class MCMCSampler:
-    cdef object current_posterior
-    cdef dict current_trees
-    cdef list functions
-    cdef list operations
-    cdef object temperatures
+    cdef forestC.Forest forest
+    cdef float[:] current_posterior
     cdef object data
+    
     cdef propose_new_trees(self)
 
     cdef step(self)
 
-    cpdef run(self, n_steps)
+    cdef _run(self, n_steps)
 
     cpdef get_best_tree(self)

@@ -108,8 +108,10 @@ cdef refresh_params(function_treeC.Tree tree):
 
 
 @cython.boundscheck(True)
-cpdef point_mutation(function_treeC.Tree tree, functions, operations):
+cpdef point_mutation(function_treeC.Tree tree, functions, operations=None):
     """Modifica un singolo nodo cambiando la funzione o l'operazione."""
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
     cdef function_treeC.Node node_to_mutate = tree.root.select_random_node()
     cdef str new_func_str
     cdef function_treeC.Node parent = tree.root.find_parent(node_to_mutate)
@@ -269,8 +271,10 @@ cpdef add_node(function_treeC.Tree tree, functions, operations):
 '''
 
 @cython.boundscheck(True)  # Per migliorare le prestazioni
-cpdef add_node( function_treeC.Tree tree, functions, operations, random_depth=False):
+cpdef add_node( function_treeC.Tree tree, functions, operations=None, random_depth=False):
     """Adds a node from a random location in an existing tree"""
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
     cdef str op = random.choice(operations)
     if not tree.root.is_leaf():
         parent_node = None
