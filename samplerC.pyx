@@ -10,17 +10,16 @@ import copy
 
 cdef class MCMCSampler:
 
-    def __init__(self, dict initial_trees, list functions, list operations, 
-            cnp.ndarray[cnp.float64_t, ndim=1] data, cnp.ndarray[cnp.float64_t, ndim=1] temperatures=None):
-        self.functions = functions
-        self.operations = operations
-        self.current_trees = initial_trees
+    def __init__(self, Forest forest, cnp.ndarray[cnp.float64_t, ndim=1] data,
+        cnp.ndarray[cnp.float64_t, ndim=1] temperatures=None):
+        
+        self.functions = forest.funcs 
+        self.current_trees = forest.trees 
         self.data = data
-        if temperatures is None or len(temperatures)<=0:
-            temperatures = np.ndarray([1])
-        self.temperatures = temperatures
-        for T in self.temperatures:
-            self.current_posterior = calculate_posterior(initial_trees[T], data)
+        self.T = forest.T
+        for T in self.T:
+            self.current_posterior = calculate_posterior(self.current_trees[T],
+                                                            data)
 
     cdef propose_new_trees(self):
         """
