@@ -41,12 +41,6 @@ cdef class Forest:
                         self.domain, self.nodes[i], self.n_pars, 
                         self.input_value, self.T[i]) for i in range (0, self.size)]
  
-    cdef genstep(self, dict T_moves=None):
-        if T_moves is None:
-            T_moves = self.random_move(self.T)
-        cdef function_treeC.Tree tree
-        for tree in self.trees:
-            tree.T_moves[tree.T]
         
     cdef distribute(self, comm):
         cdef list all_trees = self.get_trees() if rank==0 else None
