@@ -1,5 +1,5 @@
 # sampler.pyx
-from libc.stdlib cimport rand, srand
+from libc.stdlib cimport rand, srand, rand_r
 cimport numpy as cnp
 cimport function_treeC
 from fitnessC cimport calculate_likelihood
@@ -12,14 +12,14 @@ cdef class MCMCSampler:
 
     def __init__(self, Forest forest, cnp.ndarray[cnp.float64_t, ndim=1] data,
         cnp.ndarray[cnp.float64_t, ndim=1] temperatures=None):
-        
-        self.functions = forest.funcs 
-        self.current_trees = forest.trees 
+        self.forest = forest 
+        #self.current_trees = forest.trees 
         self.data = data
-        self.T = forest.T
-        for T in self.T:
-            self.current_posterior = calculate_posterior(self.current_trees[T],
+        self.current_posterior = np.zeros
+        for i in range (0, forest.size):
+            self.current_posterior[i] = calculate_posterior(forest.trees[i],
                                                             data)
+            
 
     cdef propose_new_trees(self):
         """
@@ -27,31 +27,30 @@ cdef class MCMCSampler:
         """
         cdef int move_type
         cdef function_treeC.Tree current_tree
-        cdef dict return_dict = copy.copy(self.current_trees)
-        for i in range (0, len(self.temperatures)):
-            current_tree = copy.copy(self.current_trees[self.temperatures[i]])
-            move_type = rand() % 5  
+        cdef list return_list = copy.copy(self.forest.trees)
+        for i in range (0, self.forest.size):
+            current_tree = copy.copy(self.forest.trees[i])
+            move_type = rand_r() % 5  
             
             if move_type == 0:
-                cgp.subtree_mutation(current_tree, self.functions)
+                cgp.subtree_mutation(current_tree, self.forest.funcs)
             elif move_type == 1:
-                other_tree = copy.copy(self.current_trees[self.temperatures[i+1]])
+                other_tree = copy.copy(self.forest.trees[i+1])
                 cgp.subtree_crossover(current_tree, other_tree)
             elif move_type == 2:
-                cgp.point_mutation(current_tree, self.functions, self.operations)
+                cgp.point_mutation(current_tree, self.forest.funcs, self.operations)
             elif move_type == 3:
                 cgp.hoist_mutation(current_tree)
             else:
-                cgp.add_node(current_tree, self.functions, self.operations)
+                cgp.add_node(current_tree, self.forest.funcs, self.operations)
 
-            #return_dict[self.temperature[i]] = current_tree
             proposed_posterior = calculate_posterior(current_tree, self.data)
             acceptance_ratio = np.exp((proposed_posterior - self.current_posterior) / self.temperature)
             if acceptance_ratio > rand():
-                return_dict[self.temperatures[i]] = current_tree
+                return_list[i] = current_tree
             
                 
-        return return_dict
+        return return_list
 
     cdef step(self):
         """
