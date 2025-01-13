@@ -23,6 +23,10 @@ cdef class Forest:
         self.size = size
         self.rank = MPI.COMM_WORLD.Get_rank()
         self.trees = self.grow_forest()
+        self.posteriors = np.empty((self.size))  
+
+    cpdef set_trees(self, list new_trees):
+        self.trees = new_trees 
 
     cdef grow_forest(self):
         cdef int Ti
@@ -53,6 +57,10 @@ cdef class Forest:
         cdef list sublist
         if comm.Get_rank()==0:
             return [tree for sublist in all_trees for tree in sublist]
+    
+    cdef calculate_posteriors(self, float[:] data):
+        for i in range (0, self.size):
+            self.posteriors[i] = calculate_posterior(self.trees[i], data)
 
     cdef parallel_evolve(self, int generations):
         self.perform_mutations()
