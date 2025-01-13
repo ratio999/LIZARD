@@ -9,7 +9,7 @@ import re
 
 cdef class Node:
     '''Node of a Tree: either a leaf, or an operation on two other nodes'''    
-    def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=None):
+    def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=None, double alpha = 0.01, object sigma = 1.00):
         self.function = function
         self.left = left
         self.right = right
@@ -21,9 +21,11 @@ cdef class Node:
         self.fitness = None
         self.posterior = None
         self.prior = None
+        self.alpha = alpha #keep alpha as it could weight an externally computed prior
+        self.sigma = sigma
     def __copy__(self):
         return Node(self.function, self.left, self.right,
-            self.op_symbol)
+            self.op_symbol, alpha=self.alpha, sigma=self.sigma)
 
     def get_domain(self):
         '''Obtain domain from Python.'''
@@ -36,7 +38,13 @@ cdef class Node:
         #elif self.is_leaf() and len(self.function.variables)>0:
         
         return False
+    
+    cdef set_alpha(self, double newalpha):
+        self.alpha = newalpha
 
+    cdef set_sigma(self, object newsigma):
+        self.sigma = newsigma
+    
     cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         self.fitness = self.evaluate_node_fitness(y, parameters)
     
@@ -85,9 +93,10 @@ cdef class Node:
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         return self.function.fitness(y, parameters)
 
-    cdef evaluate_node_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y. dict parameters):
+    cdef evaluate_node_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         
-        return self.function.posterior(y, parameters, self.fitness, self.prior)
+        return self.function.posterior(y, parameters, self.fitness, self.prior, 
+                                       self.sigma)
 
     cpdef assign_operation(self, operation):
         '''Assigns an operation between self.left and self.right'''
@@ -243,16 +252,18 @@ cdef class Node:
 cdef class Tree:
      
 
-    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, object value=1, double T=0):
+    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, object value=1, double T=0, double alpha=0.01, object sigma = 1.0):
         '''Tree class initialization'''
         self.T = T
         self.domain = x
         self.depth = depth
         self.functions = functions
         self.Npars=Npars
+        self.alpha = alpha
+        self.sigma = sigma
         
         if node==None:
-            self.root = build_tree(depth, functions, self.domain, Npars=Npars, value=value)
+            self.root = build_tree(depth, functions, self.domain, Npars=Npars, value=value, alpha=self.alpha, sigma=self.sigma)
         else:
             self.root = node
         self.current_description = self.root.function.get_description()
@@ -262,7 +273,7 @@ cdef class Tree:
         self.fitness_tree = None
     def __copy__(self):
         return Tree(self.depth, self.functions, self.domain, self.root,
-            self.Npars)
+            self.Npars, self.value, self.T, self.alpha, self.sigma)
 
     cdef get_param_values(self):
         '''Builds parameters' dictionaries: one with memory locations and values 
@@ -436,7 +447,7 @@ cdef class Tree:
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
         str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None, 
-             dict params_used=None, object value = 1.0, double T=0):
+             dict params_used=None, object value = 1.0, double T=0, double alpha=0.01, object sigma=1.00):
         '''Builds a Tree from scratch'''
         if isinstance(value, (float, int)):
             assign_value = np.full((Npars,), value, dtype=np.float64)
@@ -478,7 +489,8 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             if leaves_count in arr_indices:
                 if len(params_used) < Npars:
                     param_name = par_list[len(params_used)]
-                    return_node = Node(real_functionC.RealFunctionC.from_string(param_name, x))
+                    return_node = Node(real_functionC.RealFunctionC.from_string(param_name, x),
+                            alpha=alpha, sigma=sigma)
  
 
                   
@@ -488,7 +500,8 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
                 else:
                     print('ParamsError')
             func_str = random.choice(functions)
-            return_node =Node(real_functionC.RealFunctionC.from_string(func_str, x)) 
+            return_node =Node(real_functionC.RealFunctionC.from_string(func_str, x),
+                              alpha=alpha, sigma=sigma) 
             return return_node 
         '''
                 for p in par_list:
@@ -510,9 +523,11 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
         '''
         #Recursion needed
         cdef Node left = build_tree(depth - 1, functions, x,
-                'node', Npars, leaves_count,  arr_indices, params_used, value=value)
+                'node', Npars, leaves_count,  arr_indices, params_used, value=value,
+                alpha = alpha, sigma = sigma)
         cdef Node right = build_tree(depth - 1, functions, x, 
-                'node', Npars, leaves_count, arr_indices, params_used, value=value)
+                'node', Npars, leaves_count, arr_indices, params_used, value=value,
+                alpha = alpha, sigma = sigma)
        
        
         cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
@@ -539,11 +554,11 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             op_symbol = 'o' 
         if output_type is None or output_type=='node' or output_type=='Node':
             
-            return_node = Node(function=func, left=left, right=right, symbol=op_symbol) 
+            return_node = Node(function=func, left=left, right=right, symbol=op_symbol, alpha=alpha, sigma=sigma) 
             return return_node 
         else:
             return Tree(depth, functions, x, 
-                    node =Node(function=func, left=left, right=right, symbol=op_symbol), T=T)
+                    node =Node(function=func, left=left, right=right, symbol=op_symbol), T=T, alpha = alpha, sigma = sigma)
 
 cdef parameter_parser(int Npars):
     """Create parameter names list(str())"""

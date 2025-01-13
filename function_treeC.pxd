@@ -14,13 +14,30 @@ cdef class Node:
     cdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
     cdef object fitness
+    cdef object posterior
+    cdef object prior
+    cdef double alpha
+    cdef object sigma
+
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         dict input_pars, double lambda_reg, str method_str=?)
+    
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+    
     cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+    
     cdef sort_params(self, list pars)
-    cpdef fitness_tree(self,  y, parameters)
 
+    cdef set_alpha(self, double newalpha)
+
+    cdef set_sigma(self, object newsigma)
+
+    cdef set_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+
+    cdef evaluate_node_posterior(self,cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+ 
+    cpdef posterior_tree(self, y, parameters) 
+    cpdef fitness_tree(self,  y, parameters)
     cpdef node_count(self)
     cpdef is_param(self)
     cpdef assign_operation(self, operation)
@@ -52,6 +69,8 @@ cdef class Tree:
     cdef list params
     cdef dict param_values, name_values
     cdef object fitness_tree
+    cdef double alpha
+    cdef object sigma
     cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val)
     cpdef get_domain(self)
     cdef get_param_values(self)
@@ -60,7 +79,9 @@ cdef class Tree:
         str method_str=?)
     cdef build_fitness_tree(self, Node node, str prefix=?, bint is_left=?)
     #cpdef build_tree(self, depth, functions, x )
-    
+    cdef compute_posterior_tree(self, y)
+    cdef build_posterior_tree(self, Node node, str prefix=?, bint is_left=?)
+
     cpdef is_defined(self, x=?)
 
     cpdef compute_fitness_tree(self, y)
@@ -86,7 +107,7 @@ cdef class Tree:
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
     int Npars=?, object leaves_count=?, object arr_indices=?,
-    dict params_used=?, object value=?, double T=?)
+    dict params_used=?, object value=?, double T=?, double alpha=?, object sigma=?)
 
 cdef parameter_parser(int Npars)
 

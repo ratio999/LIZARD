@@ -16,6 +16,10 @@ cdef class RealFunctionC:
     cdef classify_symbols(self)
     cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, 
     object x=?, double lambda_reg=?)
+    cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+            dict params=?, object fitness=?, object prior=?,
+            object sigma=?, object x=?, double lambda_reg=?)
+ 
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, double lambda_reg, str method_str=?)
     cdef sort_params_list(self, list pars)

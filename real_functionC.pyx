@@ -71,6 +71,18 @@ cdef class RealFunctionC:
     def get_eval(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
         return self.evaluate(x, params)
 
+    cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+                   dict params=None, object fitness=None, object prior=None, 
+                   object sigma=1.00, object x = None, double lambda_reg = 0.0):
+        if fitness is None:
+            fitness = self.fitness(y, params, x, lambda_reg)
+        if x is None:
+            x = self.domain
+
+        try:
+            return -fitness/(2 * sigma**2) - prior  
+        except:
+            return -np.inf
 
     cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double lambda_reg=0.0): 
         if x is None:
