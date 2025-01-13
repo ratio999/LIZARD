@@ -19,7 +19,8 @@ cdef class Node:
         self.bis_param = self.is_param()
         self.value = np.nan
         self.fitness = None
-
+        self.posterior = None
+        self.prior = None
     def __copy__(self):
         return Node(self.function, self.left, self.right,
             self.op_symbol)
@@ -38,7 +39,11 @@ cdef class Node:
 
     cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         self.fitness = self.evaluate_node_fitness(y, parameters)
-
+    
+    cdef set_posterior(self,cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
+        self.posterior = self.evaluate_node_posterior(y, parameters)
+    
+ 
     cdef set_value(self, cnp.float64_t value = 1):
         '''Forcedly sets parameter to value'''
         if self.bis_param:
@@ -55,7 +60,13 @@ cdef class Node:
             self.left.fitness_tree(y, parameters)
         if self.right:
             self.right.fitness_tree(y, parameters)
-        
+    cpdef posterior_tree(self,  y, parameters):
+        self.set_posterior(y, parameters)
+        if self.left:
+            self.left.posterior_tree(y, parameters)
+        if self.right:
+            self.right.posterior_tree(y, parameters)
+         
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
         return self.function.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
@@ -73,6 +84,10 @@ cdef class Node:
     
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         return self.function.fitness(y, parameters)
+
+    cdef evaluate_node_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y. dict parameters):
+        
+        return self.function.posterior(y, parameters, self.fitness, self.prior)
 
     cpdef assign_operation(self, operation):
         '''Assigns an operation between self.left and self.right'''
@@ -390,6 +405,25 @@ cdef class Tree:
     def print_fitness_tree(self):
         print(self.build_fitness_tree(self.root))
 
+    cdef compute_posterior_tree(self, y):
+        self.root.posterior_tree(y, self.name_values)     
+        
+    cdef build_posterior_tree(self, Node node, str prefix='', bint is_left=True):
+        if node.is_leaf():
+            return f"{prefix}{'└── ' if is_left else '├── '}{str(node.posterior)}\n"
+        
+        result = f"{prefix}{'└── ' if is_left else '├── '}{node.posterior}\n"
+        prefix += '    ' if is_left else '│   '
+
+        result += self.build_posterior_tree(node.left, prefix, True)
+        result += self.build_posterior_tree(node.right, prefix, False)
+
+        return result  
+
+    def print_posterior_tree(self):
+        print(self.build_posterior_tree(self.root))
+
+ 
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
         str method_str='L-BFGS-B'):

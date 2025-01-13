@@ -9,7 +9,7 @@ cpdef calculate_posterior(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     cdef cnp.float64_t alpha = 0.01
     cdef cnp.float64_t sigma = 1.00
 
-    cdef cnp.float64_t sse = calculate_likelihood(tree, data) 
+    cdef cnp.float64_t sse =  tree.fitness(data) 
     
     
     log_likelihood = -sse / (2 * sigma**2)
