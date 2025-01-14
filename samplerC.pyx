@@ -3,9 +3,8 @@ from libc.stdlib cimport rand, srand, rand_r
 cimport forestC
 cimport numpy as cnp
 cimport function_treeC
-from fitnessC cimport calculate_likelihood
-from posteriorC cimport calculate_posterior
 cimport gp_movesC as cgp
+cimport forestC as cf
 import numpy as np
 import copy
 
@@ -16,13 +15,10 @@ cdef class MCMCSampler:
         self.forest = forest 
         #self.current_trees = forest.trees 
         self.data = data
-        self.current_posterior = np.zeros
+        forest.compute_posterior_forest(self.data) 
         self.parallel_bint = parallel
         #MPI INSTANCE SHOULD BE CALLED HERE(?)
-        for i in range (0, forest.size):
-            self.current_posterior[i] = calculate_posterior(forest.trees[i],
-                                                            data)
-           
+    
     cdef evolve(self, int i):
         cdef function_treeC.Tree current_tree = copy.copy(self.forest.trees[i])
 
@@ -40,27 +36,31 @@ cdef class MCMCSampler:
             cgp.hoist_mutation(current_tree)
         else:
             cgp.add_node(current_tree, self.forest.funcs, self.forest.operations)
-
-        cdef float proposed_posterior = calculate_posterior(current_tree, self.data)
-        cdef float acceptance_ratio = np.exp((proposed_posterior - self.current_posterior) / self.temperature)
+        current_tree.compute_posterior_tree(self.data)
+        cdef float old_posterior = self.forest.trees[i].root.posterior 
+        cdef float proposed_posterior = current_tree.root.posterior 
+        cdef float acceptance_ratio = np.exp((proposed_posterior - old_posterior) / self.forest.T[i])
         if acceptance_ratio > rand():
             return current_tree
     
     cpdef parallel_evolve(self):
-        comm = MPI.COMM_world
-        rank = comm.Get_rank()
-        comm_size = comm.Get_size()
-        chunk_size = self.forest.size // comm_size
+        if self.parallel:
+            comm = MPI.COMM_world
+            rank = comm.Get_rank()
+            comm_size = comm.Get_size()
+            chunk_size = self.forest.size // comm_size
+        
+            start = rank * chunk_size
+            end = self.forest.size if rank == comm_size - 1 else start + chunk_size
+            cdef list old_grove = self.forest.trees[start:end]
+            method = getattr(self, evolve)
+            cdef list evolved_grove = [method(j) for j in range(0, len(old_grove))]
+            evolved_forest = comm.gather(evolved_grove, root = 0)
+            if rank==0:
+                self.forest.set_trees(evolved_forest)
+                self.forest.calculate_posteriors(self.data)
+        else:
 
-        start = rank * chunk_size
-        end = self.forest.size if rank == comm_size - 1 else start + chunk_size
-        grove = self.forest.trees[start:end]
-        method = getattr(self, evolve)
-        evolved_grove = [method(j) for j in range(0, len(self.forest.trees))]
-        evolved_forest = comm.gather(evolved grove, root = 0)
-        if rank==0:
-            self.forest.set_trees(evolved_forest)
-            self.forest.calculate_posteriors(self.data)
     '''
     cdef propose_new_trees(self):
         """
