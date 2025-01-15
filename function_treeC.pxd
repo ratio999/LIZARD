@@ -30,6 +30,8 @@ cdef class Node:
 
     cdef set_alpha(self, double newalpha)
 
+    cdef set_prior(self)
+
     cdef set_sigma(self, object newsigma)
 
     cdef set_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)

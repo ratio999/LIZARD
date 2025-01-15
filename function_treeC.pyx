@@ -84,7 +84,8 @@ cdef class Node:
         return self.function.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
 
         
-       
+    cdef set_prior(self):
+        self.prior = self.function.prior
    
     # DANGEROUS!!! Use cases need be minimized!
     cdef reinit_to_par(self, list existing_pars, str user_prefix=None):

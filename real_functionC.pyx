@@ -26,6 +26,7 @@ cdef class RealFunctionC:
         self.symbols = self.expr.free_symbols
         self.params, self.variables = self.classify_symbols()      
         self.params_strs = self.get_par_string()         
+        self.prior = None
         #self.fit = self.fitness()
 
         if not isinstance(domain, (np.ndarray)):  # is domain one single element? 
@@ -61,6 +62,12 @@ cdef class RealFunctionC:
         return params, variables
 
     #def?
+
+    cdef set_prior(self):
+        self.prior = 0.0
+
+    #START FROM HERE TO INCORPORATE PRIOR DEFINITIONS FROM ANOTHER MODULE
+
     cpdef get_domain(self):
         return self.domain
 
@@ -82,7 +89,7 @@ cdef class RealFunctionC:
             x = self.domain
         
         if prior is None:
-            prior = 0.0
+            prior = self.set_prior() 
         try:
             return -fitness/(2 * sigma**2) - prior  
         except:
