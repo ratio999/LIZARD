@@ -82,6 +82,11 @@ cdef class Tree:
     cdef compute_posterior_tree(self, y)
     cdef build_posterior_tree(self, Node node, str prefix=?, bint is_left=?)
 
+    cdef compute_superficial_posterior(self, y)
+
+    cpdef get_superficial_posterior(self, y)
+
+
     cpdef is_defined(self, x=?)
 
     cpdef compute_fitness_tree(self, y)

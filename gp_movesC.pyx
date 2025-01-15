@@ -60,7 +60,6 @@ cpdef subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent
     
     # Aggiorna la struttura dell'albero
     refresh_params(parent1)
-    
 
 cdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
     '''Renames parameters of a tree using a new prefix'''

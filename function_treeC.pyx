@@ -3,6 +3,10 @@ cimport numpy as cnp
 import sympy as sp
 cimport sympy as csp
 cimport real_functionC 
+from libc.stdlib cimport malloc, free
+from libc.stdio cimport snprintf, printf
+#rom libc.string cimport snpritf
+from cython.parallel cimport prange
 
 import random
 import re
@@ -434,7 +438,14 @@ cdef class Tree:
     def print_posterior_tree(self):
         print(self.build_posterior_tree(self.root))
 
- 
+    cdef compute_superficial_posterior(self, y):
+        self.root.set_posterior(y, self.name_values)
+
+    cpdef get_superficial_posterior(self, y):
+        if self.root.posterior is None:
+            self.compute_superficial_posterior(y)
+        return self.root.posterior
+            
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
         str method_str='L-BFGS-B'):
@@ -562,11 +573,29 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
 
 cdef parameter_parser(int Npars):
     """Create parameter names list(str())"""
-    cdef list parameters = []
+    cdef list parameters = [None]*Npars
     cdef str prefix = 'a'
+    cdef int i
+    cdef char **buffer = <char **>malloc(Npars * sizeof(char *))
+    try:
+        for i in prange(Npars, nogil=True):
+            buffer[i] = <char *>malloc(16)
+            if buffer[i]==NULL:
+                printf("ohno")
+            snprintf(buffer[i], 16, b"a%d", i)
+
+        for i in range(Npars):
+            parameters[i] = buffer[i].decode('utf-8')
+    
+    finally:
+        for i in prange(Npars, nogil=True):
+            if buffer[i] != NULL:
+                free(buffer[i])
+        free(buffer)
+    '''
     for i in range(Npars):
         parameters.append(f"{prefix}{i}")
-
+    '''
     return parameters
 
 #Naming parameters requires fix!    
