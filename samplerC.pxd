@@ -1,14 +1,15 @@
 cimport numpy as cnp
-cimport forestC
-cdef class MCMCSampler:
-    cdef forestC.Forest forest
-    cdef float[:] current_posterior
+cimport groveC
+#cimport function_treeC
+cdef class MCMCWalker:
+    cdef groveC.Grove grove
+    cdef bint parallel_bint
     cdef object data
     
-    cdef propose_new_trees(self)
+    cdef evolve(self, int i)
 
-    cdef step(self)
-
+    cpdef parallel_evolve(self)
+    
     cdef _run(self, n_steps)
 
     cpdef get_best_tree(self)
