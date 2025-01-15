@@ -5,7 +5,7 @@ cdef class MCMCWalker:
     cdef groveC.Grove grove
     cdef bint parallel_bint
     cdef object data
-    
+    cdef print_best_tree(self)    
     cdef evolve(self, int i)
 
     cpdef parallel_evolve(self)

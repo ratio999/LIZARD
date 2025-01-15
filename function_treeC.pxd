@@ -64,6 +64,7 @@ cdef class Tree:
     cdef Node root
     cdef str current_description
     cdef object domain
+    cdef object value
     cdef int depth
     cdef list functions
     cdef int Npars

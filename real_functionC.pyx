@@ -6,6 +6,7 @@ from scipy.optimize import minimize
 import re
 #from libc.stdlib cimport malloc, free  # Not needed so far 
 from cython.cimports.libc.string import memcpy
+from copy import copy, deepcopy
 def safe_convert(value):
         try:
             return np.float64(value)
@@ -41,6 +42,19 @@ cdef class RealFunctionC:
             self.description = str(expr)
         self.regular = True
     
+    def __copy__(self):
+        cdef object copy_func = lambda input_x, params: self.func(input_x, params)
+        return RealFunctionC(copy_func, self.expr, copy(self.domain), copy(self.params))
+
+    def __deepcopy__(self, memo2):
+        cdef object copy_func = lambda input_x, params: self.func(input_x, params)
+        cdef RealFunctionC copy_rf = RealFunctionC(
+                copy_func, deepcopy(self.expr, memo2), deepcopy(self.domain, memo2),
+                deepcopy(self.params, memo2)
+                )
+        memo2[id(self)] = copy_rf
+        return copy_rf
+
     cdef get_par_string(self):
         return [str(i) for i in self.params]
 

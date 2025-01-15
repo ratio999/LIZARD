@@ -7,7 +7,7 @@ from libc.stdlib cimport malloc, free
 from libc.stdio cimport snprintf, printf
 #rom libc.string cimport snpritf
 from cython.parallel cimport prange
-
+from copy import copy, deepcopy
 import random
 import re
 
@@ -28,9 +28,19 @@ cdef class Node:
         self.alpha = alpha #keep alpha as it could weight an externally computed prior
         self.sigma = sigma
     def __copy__(self):
-        return Node(self.function, self.left, self.right,
+        return Node(copy(self.function), copy(self.left), copy(self.right),
             self.op_symbol, alpha=self.alpha, sigma=self.sigma)
 
+    def __deepcopy__(self, memo1):
+        cdef Node node_copy = Node(deepcopy(self.function, memo1),
+                deepcopy(self.left, memo1), deepcopy(self.right, memo1),
+                self.op_symbol, alpha=self.alpha, sigma=self.sigma
+                )
+        memo1[id(self)] = node_copy
+        return node_copy
+
+    def get_root(self):
+        print(self.root)
     def get_domain(self):
         '''Obtain domain from Python.'''
         return self.domain
@@ -266,7 +276,7 @@ cdef class Tree:
         self.Npars=Npars
         self.alpha = alpha
         self.sigma = sigma
-        
+        self.value = value   
         if node==None:
             self.root = build_tree(depth, functions, self.domain, Npars=Npars, value=value, alpha=self.alpha, sigma=self.sigma)
         else:
@@ -280,6 +290,17 @@ cdef class Tree:
         return Tree(self.depth, self.functions, self.domain, self.root,
             self.Npars, self.value, self.T, self.alpha, self.sigma)
 
+    def __deepcopy__(self, memo):
+        cdef Tree copy_tree = Tree(
+                self.depth,
+                deepcopy(self.functions, memo),
+                deepcopy(self.domain, memo),
+                deepcopy(self.root, memo),
+                self.Npars, self.value, self.T, self.alpha, self.sigma
+                )
+        memo[id(self)] = copy_tree
+        return copy_tree
+         
     cdef get_param_values(self):
         '''Builds parameters' dictionaries: one with memory locations and values 
         and one with strings and values'''
