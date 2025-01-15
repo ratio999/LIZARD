@@ -26,8 +26,8 @@ cdef class MCMCWalker:
         self.verbose = verbose
     
     cdef evolve(self, int i):
-        cdef function_treeC.Tree current_tree = copy.copy(self.grove.trees[i])
-        cdef function_treeC.Tree old_tree = copy.copy(self.grove.trees[i])
+        cdef function_treeC.Tree current_tree = copy.deepcopy(self.grove.trees[i])
+        cdef function_treeC.Tree old_tree = copy.deepcopy(self.grove.trees[i])
  
         cdef  function_treeC.Tree other_tree
         
@@ -39,9 +39,9 @@ cdef class MCMCWalker:
         elif move_type == 1:
             random.seed(i**2 + 1000)
             if random.choice([False, True]):
-                other_tree = copy.copy(self.grove.trees[i+1]) if i+1 < self.grove.size else copy.copy(self.grove.trees[i-1])
+                other_tree = copy.deepcopy(self.grove.trees[i+1]) if i+1 < self.grove.size else copy.deepcopy(self.grove.trees[i-1])
             else:
-                other_tree = copy.copy(self.grove.trees[i-1]) if i != 0 else copy.copy(self.grove.trees[i+1])
+                other_tree = copy.deepcopy(self.grove.trees[i-1]) if i != 0 else copy.deepcopy(self.grove.trees[i+1])
             cgp.subtree_crossover(current_tree, other_tree)
         elif move_type == 2:
             cgp.point_mutation(current_tree, self.grove.funcs, self.grove.operations)
