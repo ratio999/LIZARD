@@ -1,8 +1,8 @@
 #ifndef VEGAS_H
 #define VEGAS_H
 
-void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init, 
-		unsigned long ncall, int imx, int nprn, float *tgral, float *sd,
-		float *chi2a);
+void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init, 
+		unsigned long ncall, int imx, int nprn, double *tgral, double *sd,
+		double *chi2a);
 
 #endif

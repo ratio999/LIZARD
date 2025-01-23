@@ -23,15 +23,15 @@
 
 static long idum = -12345;
 
-void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init,
-		unsigned long ncall, int itmx, int nprn, float *tgral, float *sd,
-		float *chi2a){
+void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
+		unsigned long ncall, int itmx, int nprn, double *tgral, double *sd,
+		double *chi2a){
 
-	float ran2(long *idum);
-	void rebin(float rc, int nd, float r[], float xin[], float xi[]);
+	double ran2(long *idum);
+	void rebin(double rc, int nd, double r[], double xin[], double xi[]);
 	static int i,it,j,k,mds,nd,ndo,ng,npg,ia[MXDIM+1],kg[MXDIM+1];
-	static float calls,dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,xjac,xn,xnd,xo;
-	static float d[NDMX+1][MXDIM+1],di[NDMX+1][MXDIM+1],dt[MXDIM+1],
+	static double calls,dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,xjac,xn,xnd,xo;
+	static double d[NDMX+1][MXDIM+1],di[NDMX+1][MXDIM+1],dt[MXDIM+1],
 	dx[MXDIM+1], r[NDMX+1],x[MXDIM+1],xi[MXDIM+1][NDMX+1],xin[NDMX+1];
 	static double schi,si,swgt;
 
@@ -40,6 +40,7 @@ void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init,
 		for (j=1;j<=ndim;j++) xi[j][1]=1.0; 
 	}
 	if (init <= 1) si=swgt=schi=0.0;
+	printf("%f, ", si);
 	if (init <= 2) { 
 		nd=NDMX; 
 			ng=1;
@@ -55,15 +56,17 @@ void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init,
 		}
 		for (k=1,i=1;i<=ndim;i++) k *= ng;
 		npg=IMAX(ncall/k,2);
-		calls=(float)npg * (float)k;
+		calls=(double)npg * (double)k;
 		dxg=1.0/ng;
 		for (dv2g=1,i=1;i<=ndim;i++) dv2g *= dxg;
 		dv2g=SQR(calls*dv2g)/npg/npg/(npg-1.0);
 		xnd=nd;
 		dxg *= xnd;
 		xjac=1.0/calls;
-		for (j=1;j<=ndim;j++) {
+		for (j=0;j<ndim;j++) {
+			//printf("%f, %f, ", regn[j+ndim], regn[j]);
 			dx[j]=regn[j+ndim]-regn[j];
+			//printf("%f, ", dx[j]);
 			xjac *= dx[j];
 		}
 		
@@ -92,6 +95,7 @@ void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init,
 		}
 		for (;;) {
 			fb=f2b=0.0;
+			//printf("1: %f, %f, ", ti, tsi);
 			for (k=1;k<=npg;k++) {
 				wgt=xjac;
 				for (j=1;j<=ndim;j++) {
@@ -106,8 +110,11 @@ void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init,
 					}
 					x[j]=regn[j]+rc*dx[j];
 					wgt *= xo*xnd;
+					//printf("%f, ", xnd);
 				}
+				//printf("%d, ", wgt);
 				f=wgt*(*fxn)(x,wgt);
+				//printf("%f, ", f);
 				f2=f*f;
 				fb += f;
 				f2b += f2;
@@ -116,8 +123,10 @@ void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init,
 					if (mds >= 0) d[ia[j]][j] += f2;
 				}
 			}
+
 			f2b=sqrt(f2b*npg);
 			f2b=(f2b-fb)*(f2b+fb);
+			//printf("2: %f,   ", fb);
 			if (f2b <= 0.0) f2b=TINY;
 			ti += fb;
 			tsi += f2b;
@@ -131,16 +140,20 @@ void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init,
 			if (k < 1) break;
 		}
 		tsi *= dv2g;
-
+		//printf("%d, ", wgt);
 		wgt=1.0/tsi;
+		//printf("%f, ", tsi);
 		si += wgt*ti;
+		//printf("%f, ", swgt);
 		schi += wgt*ti*ti;
 		swgt += wgt;
+		//printf("%f,",  si );
 		*tgral=si/swgt;
 		*chi2a=(schi-si*(*tgral))/(it-0.9999);
 		if (*chi2a < 0.0) *chi2a = 0.0;
 		*sd=sqrt(1.0/swgt);
 		tsi=sqrt(tsi);
+		//printf("%f", *tgral);
 		if (nprn >= 0) {
 			printf("%s %3d : integral = %14.7g +/- %9.2g\n",
 					" iteration no.",it,ti,tsi);
@@ -188,10 +201,10 @@ void vegas(float regn[], int ndim, float (*fxn)(float [], float), int init,
 	}
 }
 
-void rebin(float rc, int nd, float r[], float xin[], float xi[])
+void rebin(double rc, int nd, double r[], double xin[], double xi[])
 {
 	int i,k=0;
-	float dr=0.0,xn=0.0,xo=0.0;
+	double dr=0.0,xn=0.0,xo=0.0;
 	for (i=1;i<nd;i++) {
 		while (rc > dr)
 			dr += r[++k];
@@ -204,13 +217,13 @@ void rebin(float rc, int nd, float r[], float xin[], float xi[])
 	xi[nd]=1.0;
 }
 
-float ran2(long *idum){
+double ran2(long *idum){
 	int j;
 	long k;
 	static long idum2=123456789;
 	static long iy=0;
 	static long iv[NTAB];
-	float temp;
+	double temp;
 
 	if (*idum <= 0) { 
 		
