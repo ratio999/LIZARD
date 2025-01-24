@@ -141,7 +141,7 @@ cdef class RealFunctionC:
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.gradient( y_data, x_data, params_dict, lambda_reg)
 
-    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
+    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, dict input_pars, double lambda_reg, str method_str='Powell'):
         cdef double[:] initial_params = np.array(list(input_pars.values()))
         cdef object result = minimize(
                 fun=self.objective,

@@ -37,14 +37,13 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 
 	if (init <= 0) { 
 		mds=ndo=1; 
-		for (j=1;j<=ndim;j++) xi[j][1]=1.0; 
+		for (j=0;j<ndim;j++) xi[j][0]=1.0; 
 	}
 	if (init <= 1) si=swgt=schi=0.0;
-	printf("%f, ", si);
 	if (init <= 2) { 
 		nd=NDMX; 
-			ng=1;
-		if (mds) { 
+		ng=1;
+		if (mds != 0) { 
 			ng=(int)pow(ncall/2.0+0.25,1.0/ndim);
 			mds=1;
 			if ((2*ng-NDMX) >= 0) {
@@ -54,11 +53,12 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 				ng=npg*nd;
 			}
 		}
-		for (k=1,i=1;i<=ndim;i++) k *= ng;
+		for (k=1,i=0;i<ndim;i++) k *= ng;
 		npg=IMAX(ncall/k,2);
 		calls=(double)npg * (double)k;
+		//calls = npg*k;
 		dxg=1.0/ng;
-		for (dv2g=1,i=1;i<=ndim;i++) dv2g *= dxg;
+		for (dv2g=1,i=0;i<ndim;i++) dv2g *= dxg;
 		dv2g=SQR(calls*dv2g)/npg/npg/(npg-1.0);
 		xnd=nd;
 		dxg *= xnd;
@@ -71,8 +71,8 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 		}
 		
 		if (nd != ndo) { 
-			for (i=1;i<=IMAX(nd,ndo);i++) r[i]=1.0;
-			for (j=1;j<=ndim;j++) rebin(ndo/xnd,nd,r,xin,xi[j]);
+			for (i=0;i<IMAX(nd,ndo);i++) r[i]=1.0;
+			for (j=0;j<ndim;j++) rebin(ndo/xnd,nd,r,xin,xi[j]);
 			ndo=nd;
 		}
 		if (nprn >= 0) {
@@ -81,17 +81,17 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 			printf("%28s it=%5d itmx=%5d\n"," ",it,itmx);
 			printf("%28s nprn=%3d ALPH=%5.2f\n"," ",nprn,ALPH);
 			printf("%28s mds=%3d nd=%4d\n"," ",mds,nd);
-			for (j=1;j<=ndim;j++) {
+			for (j=0;j<ndim;j++) {
 				printf("%30s xl[%2d]= %11.4g xu[%2d]= %11.4g\n",
 						" ",j,regn[j],j,regn[j+ndim]);
 			}
 		}
 	}
-	for (it=1;it<=itmx;it++) {
+	for (it=0;it<itmx;it++) {
 		ti=tsi=0.0;
-		for (j=1;j<=ndim;j++) {
+		for (j=0;j<ndim;j++) {
 			kg[j]=1;
-			for (i=1;i<=nd;i++) d[i][j]=di[i][j]=0.0;
+			for (i=0;i<nd;i++) d[i][j]=di[i][j]=0.0;
 		}
 		for (;;) {
 			fb=f2b=0.0;

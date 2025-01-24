@@ -8,14 +8,15 @@
 // Funzione di esempio da integrare
 double my_function(double x[], double weight) {
     double result = 1.0;  // Cambia questa funzione per test diversi
-    //for (int i = 0; i < 20; i++) {
-    //  result *= exp(x[i]);
-    //}
+    for (int i = 0; i < 2; i++) {
+      result += x[i] + 1e-6;
+    }
     return result;
 }
 
 int main() {
     double regn[4] = {0.0, 0.0, M_PI, M_PI};  // Range di integrazione per x e y
+    printf("%f, %f, %f ", regn[0], regn[1], regn[2]);
     double tgral, sd, chi2a;
 
     // Chiamata alla funzione vegas
