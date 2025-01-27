@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "nrutil.h"
+#include <omp.h>
 #define ALPH 1.5
 #define NDMX 50
 #define MXDIM 10
@@ -56,7 +57,6 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 		for (k=1,i=0;i<ndim;i++) k *= ng;
 		npg=IMAX(ncall/k,2);
 		calls=(double)npg * (double)k;
-		//calls = npg*k;
 		dxg=1.0/ng;
 		for (dv2g=1,i=0;i<ndim;i++) dv2g *= dxg;
 		dv2g=SQR(calls*dv2g)/npg/npg/(npg-1.0);
@@ -64,9 +64,7 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 		dxg *= xnd;
 		xjac=1.0/calls;
 		for (j=0;j<ndim;j++) {
-			//printf("%f, %f, ", regn[j+ndim], regn[j]);
 			dx[j]=regn[j+ndim]-regn[j];
-			//printf("%f, ", dx[j]);
 			xjac *= dx[j];
 		}
 		
@@ -95,7 +93,6 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 		}
 		for (;;) {
 			fb=f2b=0.0;
-			//printf("0: %f, %f, ", ti, tsi);
 			for (k=0;k<npg;k++) {
 				wgt=xjac;
 				for (j=0;j<ndim;j++) {
@@ -110,23 +107,22 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 					}
 					x[j]=regn[j]+rc*dx[j];
 					wgt *= xo*xnd;
-					//printf("%f, ", xnd);
 				}
-				//printf("%d, ", wgt);
-				f=wgt*(*fxn)(x,wgt);
-				//printf("%f, ", f);
+				f=wgt*(*fxn)(x, wgt);
 				f2=f*f;
 				fb += f;
 				f2b += f2;
+				#pragma omp critical
 				for (j=0;j<ndim;j++) {
 					di[ia[j]-1][j] += f;
-					if (mds >= 0) d[ia[j]-1][j] += f2;
+					if (mds >= 0){
+						d[ia[j]-1][j] += f2;
+					}
 				}
 			}
 
 			f2b=sqrt(f2b*npg);
 			f2b=(f2b-fb)*(f2b+fb);
-			//printf("2: %f,   ", fb);
 			if (f2b <= 0.0) f2b=TINY;
 			ti += fb;
 			tsi += f2b;
@@ -140,38 +136,15 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 			if (k < 0) break;
 		}
 		tsi *= dv2g;
-		//printf("%d, ", wgt);
 		wgt=1.0/tsi;
-		//printf("%f, ", tsi);
 		si += wgt*ti;
-		//printf("%f, ", swgt);
 		schi += wgt*ti*ti;
 		swgt += wgt;
-		//printf("%f,",  si );
 		*tgral=si/swgt;
 		*chi2a=(schi-si*(*tgral))/(it-0.0001);
 		if (*chi2a < 0.0) *chi2a = 0.0;
 		*sd=sqrt(1.0/swgt);
 		tsi=sqrt(tsi);
-		//printf("%f", *tgral);
-		if (nprn >= 0) {
-			printf("%s %3d : integral = %14.7g +/- %9.2g\n",
-					" iteration no.",it,ti,tsi);
-			printf("%s integral =%14.7g+/-%9.2g chi**2/IT n = %9.2g\n",
-					" all iterations: ",*tgral,*sd,*chi2a);
-			if (nprn) {
-				for (j=0;j<ndim;j++) {
-					printf(" DATA FOR axis %2d\n",j);
-					printf("%6s%13s%11s%13s%11s%13s\n",
-							"X","delta i","X","delta i","X","delta i");
-					for (i=nprn/2;i<nd-2;i += nprn+2) {
-						printf("%8.5f%12.4g%12.5f%12.4g%12.5f%12.4g\n",
-								xi[j][i],di[i][j],xi[j][i+1],
-								di[i+1][j],xi[j][i+2],di[i+2][j]);
-					}
-				}
-			}
-		}
 		for (j=0;j<ndim;j++) { 
 			xo=d[0][j];
 			xn=d[1][j];
@@ -244,7 +217,7 @@ double ran2(long *idum){
 
 	k=(*idum)/IQ1; 
 	
-	*idum=IA1*(*idum-k*IQ1)-k*IR1; //Compute idum=(IA1*idum) % IM1
+	*idum=IA1*(*idum-k*IQ1)-k*IR1;
 	
 	if (*idum < 0) *idum += IM1;
 	
