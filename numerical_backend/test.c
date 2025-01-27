@@ -9,7 +9,7 @@
 double my_function(double x[], double weight) {
     double result = 1.0;  // Cambia questa funzione per test diversi
     for (int i = 0; i < 2; i++) {
-      result *= sin(x[i]+1) + 1e-6;
+      result *= exp(x[i]+2) + 1e-6;
     }
     return result;
 }

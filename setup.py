@@ -10,7 +10,7 @@ from distutils.extension import Extension
 setup(
         ext_modules=cythonize(["real_functionC.pyx", 
                     "function_treeC.pyx", "gp_movesC.pyx", 
-                    "groveC.pyx", "samplerC.pyx", "marginalizeC.pyx"
+                    "groveC.pyx", "samplerC.pyx", "wrapper.pyx"
                            ], 
                           compiler_directives={'cdivision': True, 'boundscheck': True}, gdb_debug=True
 ),
