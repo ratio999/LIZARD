@@ -95,17 +95,17 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 		}
 		for (;;) {
 			fb=f2b=0.0;
-			//printf("1: %f, %f, ", ti, tsi);
-			for (k=1;k<=npg;k++) {
+			//printf("0: %f, %f, ", ti, tsi);
+			for (k=0;k<npg;k++) {
 				wgt=xjac;
-				for (j=1;j<=ndim;j++) {
-					xn=(kg[j]-ran2(&idum))*dxg+1.0;
+				for (j=0;j<ndim;j++) {
+					xn=(kg[j]-ran2(&idum))*dxg+1.0; //on c++code it is different
 					ia[j]=IMAX(IMIN((int)(xn),NDMX),1);
 					if (ia[j] > 1) {
-						xo=xi[j][ia[j]]-xi[j][ia[j]-1];
-						rc=xi[j][ia[j]-1]+(xn-ia[j])*xo;
+						xo=xi[j][ia[j]-1]-xi[j][ia[j]-2];
+						rc=xi[j][ia[j]-2]+(xn-ia[j])*xo;
 					} else {
-						xo=xi[j][ia[j]];
+						xo=xi[j][ia[j]-1];
 						rc=(xn-ia[j])*xo;
 					}
 					x[j]=regn[j]+rc*dx[j];
@@ -118,9 +118,9 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 				f2=f*f;
 				fb += f;
 				f2b += f2;
-				for (j=1;j<=ndim;j++) {
-					di[ia[j]][j] += f;
-					if (mds >= 0) d[ia[j]][j] += f2;
+				for (j=0;j<ndim;j++) {
+					di[ia[j]-1][j] += f;
+					if (mds >= 0) d[ia[j]-1][j] += f2;
 				}
 			}
 
@@ -131,13 +131,13 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 			ti += fb;
 			tsi += f2b;
 			if (mds < 0) { 
-				for (j=1;j<=ndim;j++) d[ia[j]][j] += f2b;
+				for (j=0;j<ndim;j++) d[ia[j]-1][j] += f2b;
 			}
-			for (k=ndim;k>=1;k--) {
+			for (k=ndim-1;k>=0;k--) {
 				kg[k] %= ng;
 				if (++kg[k] != 1) break;
 			}
-			if (k < 1) break;
+			if (k < 0) break;
 		}
 		tsi *= dv2g;
 		//printf("%d, ", wgt);
@@ -149,7 +149,7 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 		swgt += wgt;
 		//printf("%f,",  si );
 		*tgral=si/swgt;
-		*chi2a=(schi-si*(*tgral))/(it-0.9999);
+		*chi2a=(schi-si*(*tgral))/(it-0.0001);
 		if (*chi2a < 0.0) *chi2a = 0.0;
 		*sd=sqrt(1.0/swgt);
 		tsi=sqrt(tsi);
@@ -160,11 +160,11 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 			printf("%s integral =%14.7g+/-%9.2g chi**2/IT n = %9.2g\n",
 					" all iterations: ",*tgral,*sd,*chi2a);
 			if (nprn) {
-				for (j=1;j<=ndim;j++) {
+				for (j=0;j<ndim;j++) {
 					printf(" DATA FOR axis %2d\n",j);
 					printf("%6s%13s%11s%13s%11s%13s\n",
 							"X","delta i","X","delta i","X","delta i");
-					for (i=1+nprn/2;i<=nd;i += nprn+2) {
+					for (i=nprn/2;i<nd-2;i += nprn+2) {
 						printf("%8.5f%12.4g%12.5f%12.4g%12.5f%12.4g\n",
 								xi[j][i],di[i][j],xi[j][i+1],
 								di[i+1][j],xi[j][i+2],di[i+2][j]);
@@ -172,25 +172,25 @@ void vegas(double regn[], int ndim, double (*fxn)(double [], double), int init,
 				}
 			}
 		}
-		for (j=1;j<=ndim;j++) { 
-			xo=d[1][j];
-			xn=d[2][j];
+		for (j=0;j<ndim;j++) { 
+			xo=d[0][j];
+			xn=d[1][j];
 			d[1][j]=(xo+xn)/2.0;
-			dt[j]=d[1][j];
+			dt[j]=d[0][j];
 
 			for (i=2;i<nd;i++) {
 				rc=xo+xn;
 				xo=xn;
-				xn=d[i+1][j];
-				d[i][j] = (rc+xn)/3.0;
-				dt[j] += d[i][j];
+				xn=d[i][j];
+				d[i-1][j] = (rc+xn)/3.0;
+				dt[j] += d[i-1][j];
 			}
-			d[nd][j]=(xo+xn)/2.0;
-			dt[j] += d[nd][j];
+			d[nd-1][j]=(xo+xn)/2.0;
+			dt[j] += d[nd-1][j];
 		}
-		for (j=1;j<=ndim;j++) {
+		for (j=0;j<ndim;j++) {
 			rc=0.0;
-			for (i=1;i<=nd;i++) {
+			for (i=0;i<nd;i++) {
 				if (d[i][j] < TINY) d[i][j]=TINY;
 				r[i]=pow((1.0-d[i][j]/dt[j])/
 						(log(dt[j])-log(d[i][j])),ALPH);
@@ -205,16 +205,16 @@ void rebin(double rc, int nd, double r[], double xin[], double xi[])
 {
 	int i,k=0;
 	double dr=0.0,xn=0.0,xo=0.0;
-	for (i=1;i<nd;i++) {
+	for (i=0;i<nd-1;i++) {
 		while (rc > dr)
-			dr += r[++k];
-		if (k > 1) xo=xi[k-1];
-		xn=xi[k];
+			dr += r[(++k)-1];
+		if (k > 1) xo=xi[k-2];
+		xn=xi[k-1];
 		dr -= rc;
-		xin[i]=xn-(xn-xo)*dr/r[k];
+		xin[i]=xn-(xn-xo)*dr/r[k-1];
 	}
-	for (i=1;i<nd;i++) xi[i]=xin[i];
-	xi[nd]=1.0;
+	for (i=0;i<nd-1;i++) xi[i]=xin[i];
+	xi[nd-1]=1.0;
 }
 
 double ran2(long *idum){
