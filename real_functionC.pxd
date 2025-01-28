@@ -13,6 +13,8 @@ cdef class RealFunctionC:
     cdef list params_strs
     cdef object prior
     cdef list variables 
+    cdef object cfit
+    cdef object cfit_expr
     cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = ?)   
     cdef set_prior(self)
     cdef classify_symbols(self)
@@ -39,5 +41,10 @@ cdef class RealFunctionC:
     cpdef  derivative(self, x, h=?, dict params=?)
 
     #cpdef fitness(self, x, y_true)
-
+    cdef _arr_param_expr(self, double[:] x, object x_sym)
     
+    cdef _cfit(self, double[:] x, double[:] y, object x_sym)
+
+    cdef set_cfit(self, double[:] x, double[:] y, object x_sym)
+
+    cdef double _cfunc(void * self, double *x, double w)

@@ -43,6 +43,8 @@ cdef class RealFunctionC:
         else:
             self.description = str(expr)
         self.regular = True
+        self.cfit = None
+        self.cfit_expr = None
     
     def __copy__(self):
         cdef object copy_func = lambda input_x, params: self.func(input_x, params)
@@ -64,7 +66,7 @@ cdef class RealFunctionC:
         return [expr_with_params.subs(x_sym, x[i]) 
                 for i in range(0, x.shape[0])]
 
-    cdef _param_lambda_array(self, double x[:], double[:] y, object x_sym):
+    cdef _cfit(self, double[:] x, double[:] y, object x_sym):
         
         cdef list expr_list = self._arr_param_expr(x, x_sym)  
         
@@ -75,8 +77,14 @@ cdef class RealFunctionC:
         cdef object _cfit = sp.lambdify(self.params,
                     _cfit_expr, "numpy")
 
-        return _cfit
-                        
+        return _cfit, _cfit_expr
+
+    cdef set_cfit(self, double[:] x, double[:] y, object x_sym):
+        self.cfit, self.cfit_expr = self._cfit(x, y, x_sym)
+        
+    cdef double _cfunc(void * self, double *x, double w):
+        return self.cfit(*x)
+
     cdef get_par_string(self):
         return [str(i) for i in self.params]
 
@@ -159,9 +167,6 @@ cdef class RealFunctionC:
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.fitness( y_data,  params_dict, x_data, lambda_reg)
     
-    cdef _objective(self, double *pars, double[:] x=self.domain, double[:] y, double lambda_reg = 0.0):
-        
-
 
     def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
@@ -254,10 +259,6 @@ cdef class RealFunctionC:
                 return np.full_like(input_x, np.nan, dtype=np.float64)
            
         return cls(func, expr, x) 
-
-    cdef _cfunc(self, double[:] x, double* params):
-        return
-        
 
     def get_description(self):
         """Access str(self.expr) directly --> redundancy with str(get_expr(self))"""
