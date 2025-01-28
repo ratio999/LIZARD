@@ -5,10 +5,6 @@ cimport ctypes as cct
 
 cdef extern from "numerical_backend/marginalize_source.c":
     double marginalize_posterior(double *posterior_values, int n, int num_samples)
-cdef extern from "numerical_backend/static.c":
-    int vegas(double *regn, int ndim, double (*fxn)(double*, double), 
-               int init, unsigned long ncall, int itmx, int nprn,
-               double *tgral, double *sd, double *chi2a)
 
 
 
@@ -16,10 +12,16 @@ def marginalize(cnp.ndarray[cnp.double_t, ndim=1] posterior_values, int n):
     cdef int num_samples = posterior_values.shape[0]
     cdef double result = marginalize_posterior(&posterior_values[0], n, num_samples)
     return result
-'''
-cdef extern from "numerical_backend/static_vegas.c":
-    void static_vegas(double regn[], int ndim, double (*fxn)(double[], double), int init, unsigned long ncall, int itmx, int nprn, double *tgral, double *sd, double *chi2a)
-'''
+
+
+
+
+
+
+cdef extern from "numerical_backend/static.c":
+    void vegas(double *regn, int ndim, double (*fxn)(double*, double), 
+               int init, unsigned long ncall, int itmx, int nprn,
+               double *tgral, double *sd, double *chi2a)
 
 
 def vegas(double[:] regn, int ndimm, 

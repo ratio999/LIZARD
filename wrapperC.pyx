@@ -1,0 +1,1 @@
+from wrapperC cimport vegas
