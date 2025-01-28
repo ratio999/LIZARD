@@ -1,6 +1,8 @@
 import numpy as np
 cimport numpy as cnp
 import sympy as sp
+from wrapperC cimport vegas
+
 #cimport sympy as csp
 from scipy.optimize import minimize
 import re
@@ -19,6 +21,7 @@ cdef class RealFunctionC:
     def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None):
         """Initialization"""
         self.func = func
+        
         self.expr = expr 
         self.description = str(expr)  # Needed for printing 
         self.regular = False  # 100% useless 
@@ -29,7 +32,6 @@ cdef class RealFunctionC:
         self.params_strs = self.get_par_string()         
         self.prior = None
         #self.fit = self.fitness()
-
         if not isinstance(domain, (np.ndarray)):  # is domain one single element? 
             if self.is_defined(domain):
                 self.description = str(expr)
@@ -54,7 +56,27 @@ cdef class RealFunctionC:
                 )
         memo2[id(self)] = copy_rf
         return copy_rf
+    
+    cdef _arr_param_expr(self, double[:] x, object x_sym):
+        
+        cdef object expr_with_params = copy.copy(self.expr)
+        
+        return [expr_with_params.subs(x_sym, x[i]) 
+                for i in range(0, x.shape[0])]
 
+    cdef _param_lambda_array(self, double x[:], double[:] y, object x_sym):
+        
+        cdef list expr_list = self._arr_param_expr(x, x_sym)  
+        
+        cdef object _cfit_expr = 0.5 * (y[0] - expr_list[0])**2
+        for i in range(1, x.shape[0]):
+            _cfit_expr += 0.5 * (y[i] - expr_list[i])**2
+
+        cdef object _cfit = sp.lambdify(self.params,
+                    _cfit_expr, "numpy")
+
+        return _cfit
+                        
     cdef get_par_string(self):
         return [str(i) for i in self.params]
 
@@ -136,6 +158,10 @@ cdef class RealFunctionC:
     def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.fitness( y_data,  params_dict, x_data, lambda_reg)
+    
+    cdef _objective(self, double *pars, double[:] x=self.domain, double[:] y, double lambda_reg = 0.0):
+        
+
 
     def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
@@ -228,6 +254,10 @@ cdef class RealFunctionC:
                 return np.full_like(input_x, np.nan, dtype=np.float64)
            
         return cls(func, expr, x) 
+
+    cdef _cfunc(self, double[:] x, double* params):
+        return
+        
 
     def get_description(self):
         """Access str(self.expr) directly --> redundancy with str(get_expr(self))"""
