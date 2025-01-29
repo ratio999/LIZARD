@@ -4,6 +4,7 @@ import sympy as sp
 from wrapperC cimport vegas, a_vegas
 from cpython.ref cimport Py_INCREF, Py_DECREF
 #cimport sympy as csp
+from utils.pointer_utils cimport python_object_to_void_ptr, void_ptr_to_python_object, void_ptr_to_rf
 from scipy.optimize import minimize
 import re
 #from libc.stdlib cimport malloc, free  # Not needed so far 
@@ -85,45 +86,23 @@ cdef class RealFunctionC:
     cdef double _cfunc(self, double *x, double w, int ndim) noexcept:
         cdef double[:] args = np.array([x[i] for i in range (0, ndim) ])
         return self.cfit(*args)
-    '''
-    cdef double _wrapper1(self, double *x, double w) noexcept:
-        cdef RealFunctionC realf = copy.copy(self)   
-         
-        return realf._cfunc(x, w)
- 
-
-    cdef vegas_call1(self, double[:] params_domain, int init, int n_samples,
-                     int n_steps, int nprn):
-        cdef RealFunctionC rf = copy.copy(self)
-        
-        cdef double[:] tgral = np.array([0.0])
-        cdef double[:] sd =  np.array([0.0])
-        cdef double[:] chi2a = np.array([0.0])
-        cdef int ndim = int(np.shape(params_domain)[0] / 2)
-
-        a_vegas(rf, &params_domain[0], ndim, _wrapper, init, n_samples, n_steps, 
-              nprn, &tgral[0], &sd[0], &chi2a[0])
-
-        return (*tgral, *sd, *chi2a)
-
- 
- 
+    
 
     cpdef vegas_call(self, double[:] params_domain, int init, int n_samples,
                      int n_steps, int nprn):
-        
+        cdef void* ptr = python_object_to_void_ptr(self)
         cdef double[:] tgral = np.array([0.0])
         cdef double[:] sd =  np.array([0.0])
         cdef double[:] chi2a = np.array([0.0])
         
         cdef int ndim = int(np.shape(params_domain)[0] / 2)
 
-        vegas(&params_domain[0], ndim, self._cfunc, init, n_samples, n_steps, 
+        a_vegas(ptr, &params_domain[0], ndim, _wrapper, init, n_samples, n_steps, 
               nprn, &tgral[0], &sd[0], &chi2a[0])
 
         return (*tgral, *sd, *chi2a)
 
-    '''
+    
 
     cdef get_par_string(self):
         return [str(i) for i in self.params]

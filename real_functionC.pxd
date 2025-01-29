@@ -48,14 +48,9 @@ cdef class RealFunctionC:
     cdef set_cfit(self, double[:] x, double[:] y, object x_sym)
 
     cdef double _cfunc(self, double *x, double w, int ndim) noexcept
-
-    #cdef double _wrapper1(self, double *x, double w) noexcept
-
-    #cdef vegas_call1(self, double[:] params_domain, int init, int n_samples,
-                    # int n_steps, int nprn)
                     
-    #cpdef vegas_call(self, double[:] params_domain, int init, int n_samples,
-                    # int n_steps, int nprn)
+    cpdef vegas_call(self, double[:] params_domain, int init, int n_samples,
+                     int n_steps, int nprn)
 
 
 cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept
