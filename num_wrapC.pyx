@@ -3,18 +3,20 @@ import numpy as np
 cimport numpy as cnp
 import ctypes as ct
 from real_functionC cimport RealFunctionC
+from utils.pointer_utils cimport python_object_to_void_ptr, void_ptr_to_python_object, void_ptr_to_rf
+
 # cython: language_level=3
 from cpython.ref cimport Py_INCREF
 from cpython.pycapsule cimport PyCapsule_New, PyCapsule_GetPointer
 
 from cpython.ref cimport Py_INCREF, Py_DECREF
 
-cdef void* python_object_to_void_ptr(object py_obj):
+cdef void* apython_object_to_void_ptr(object py_obj):
     """Converte un oggetto Python in un puntatore void*"""
     Py_INCREF(py_obj)  # Incrementa il reference count per evitare la garbage collection
     return <void*> py_obj  # Cast esplicito a void*
 
-cdef object void_ptr_to_python_object(void* ptr):
+cdef object avoid_ptr_to_python_object(void* ptr):
     """Riconverte un puntatore void* in un oggetto Python"""
     return <object> ptr  # Cast diretto da void* a object
 
@@ -28,7 +30,9 @@ cdef double my_function(void * cl, double *arr, double val, int ndim) noexcept :
 
 def main():
       cdef RealFunctionC rf = RealFunctionC.from_string('x', np.array([0.0]))
-      cdef void* ptr = python_object_to_void_ptr(rf)
+      cdef void* ptr = apython_object_to_void_ptr(rf)
+      cdef void* ptr1 = python_object_to_void_ptr(rf)
+      print(void_ptr_to_rf(ptr1).get_description())
       cdef double[:] regn = np.array([0.0, 0.0, np.pi, np.pi])
       cdef double[:] tgral = np.array([0.0])
       cdef double[:] sd = np.array([0.0])
