@@ -1,8 +1,8 @@
 import numpy as np
 cimport numpy as cnp
 import sympy as sp
-from wrapperC cimport vegas
-
+from wrapperC cimport vegas, a_vegas
+from cpython.ref cimport Py_INCREF, Py_DECREF
 #cimport sympy as csp
 from scipy.optimize import minimize
 import re
@@ -70,9 +70,9 @@ cdef class RealFunctionC:
         
         cdef list expr_list = self._arr_param_expr(x, x_sym)  
         
-        cdef object _cfit_expr = 0.5 * (y[0] - expr_list[0])**2
+        cdef object _cfit_expr = -0.5 * (y[0] - expr_list[0])**2
         for i in range(1, x.shape[0]):
-            _cfit_expr += 0.5 * (y[i] - expr_list[i])**2
+            _cfit_expr -= 0.5 * (y[i] - expr_list[i])**2
 
         cdef object _cfit = sp.lambdify(self.params,
                     _cfit_expr, "numpy")
@@ -82,8 +82,48 @@ cdef class RealFunctionC:
     cdef set_cfit(self, double[:] x, double[:] y, object x_sym):
         self.cfit, self.cfit_expr = self._cfit(x, y, x_sym)
         
-    cdef double _cfunc(void * self, double *x, double w):
-        return self.cfit(*x)
+    cdef double _cfunc(self, double *x, double w, int ndim) noexcept:
+        cdef double[:] args = np.array([x[i] for i in range (0, ndim) ])
+        return self.cfit(*args)
+    '''
+    cdef double _wrapper1(self, double *x, double w) noexcept:
+        cdef RealFunctionC realf = copy.copy(self)   
+         
+        return realf._cfunc(x, w)
+ 
+
+    cdef vegas_call1(self, double[:] params_domain, int init, int n_samples,
+                     int n_steps, int nprn):
+        cdef RealFunctionC rf = copy.copy(self)
+        
+        cdef double[:] tgral = np.array([0.0])
+        cdef double[:] sd =  np.array([0.0])
+        cdef double[:] chi2a = np.array([0.0])
+        cdef int ndim = int(np.shape(params_domain)[0] / 2)
+
+        a_vegas(rf, &params_domain[0], ndim, _wrapper, init, n_samples, n_steps, 
+              nprn, &tgral[0], &sd[0], &chi2a[0])
+
+        return (*tgral, *sd, *chi2a)
+
+ 
+ 
+
+    cpdef vegas_call(self, double[:] params_domain, int init, int n_samples,
+                     int n_steps, int nprn):
+        
+        cdef double[:] tgral = np.array([0.0])
+        cdef double[:] sd =  np.array([0.0])
+        cdef double[:] chi2a = np.array([0.0])
+        
+        cdef int ndim = int(np.shape(params_domain)[0] / 2)
+
+        vegas(&params_domain[0], ndim, self._cfunc, init, n_samples, n_steps, 
+              nprn, &tgral[0], &sd[0], &chi2a[0])
+
+        return (*tgral, *sd, *chi2a)
+
+    '''
 
     cdef get_par_string(self):
         return [str(i) for i in self.params]
@@ -354,4 +394,11 @@ cdef class RealFunctionC:
 cdef is_parameter(str name):
     """Is name a parameter declaration?"""
     return bool(re.fullmatch(r'[a-zA-Z]\d+', name))
+
+cdef double _wrapper(void *self_ptr, double *x, double w) noexcept:
+    cdef RealFunctionC realf
+    obj = <RealFunctionC>self_ptr
+    Py_INCREF(obj)  # Evita che venga deallocato da Python
+    return <RealFunctionC>obj
+    #return realf._cfunc(x, w)
 
