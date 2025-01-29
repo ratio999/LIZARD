@@ -395,10 +395,8 @@ cdef is_parameter(str name):
     """Is name a parameter declaration?"""
     return bool(re.fullmatch(r'[a-zA-Z]\d+', name))
 
-cdef double _wrapper(void *self_ptr, double *x, double w) noexcept:
-    cdef RealFunctionC realf
-    obj = <RealFunctionC>self_ptr
-    Py_INCREF(obj)  # Evita che venga deallocato da Python
-    return <RealFunctionC>obj
-    #return realf._cfunc(x, w)
+cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept:
+    cdef RealFunctionC realf = <RealFunctionC>self_ptr
+    return realf._cfunc(x, w, ndim)
+    
 

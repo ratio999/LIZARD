@@ -24,6 +24,7 @@ cdef object avoid_ptr_to_python_object(void* ptr):
 
 cdef double my_function(void * cl, double *arr, double val, int ndim) noexcept :
     cdef double result = 1.0
+    cdef RealFunctionC realf = void_ptr_to_rf(cl)
     for i in range(0,ndim):
       result *= np.exp(arr[i]+2) + 1e-6
     return result

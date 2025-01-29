@@ -58,4 +58,4 @@ cdef class RealFunctionC:
                     # int n_steps, int nprn)
 
 
-cdef double _wrapper(void *self_ptr, double *x, double w) noexcept
+cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept
