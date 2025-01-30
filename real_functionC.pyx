@@ -1,7 +1,7 @@
 import numpy as np
 cimport numpy as cnp
 import sympy as sp
-from wrapperC cimport vegas, a_vegas
+from wrapperC cimport a_vegas
 from cpython.ref cimport Py_INCREF, Py_DECREF
 #cimport sympy as csp
 from utils.pointer_utils cimport python_object_to_void_ptr, void_ptr_to_python_object, void_ptr_to_rf
@@ -96,9 +96,9 @@ cdef class RealFunctionC:
         cdef double[:] chi2a = np.array([0.0])
         
         cdef int ndim = int(np.shape(params_domain)[0] / 2)
-
+        cdef long idum = -12345
         a_vegas(ptr, &params_domain[0], ndim, _wrapper, init, n_samples, n_steps, 
-              nprn, &tgral[0], &sd[0], &chi2a[0])
+              nprn, &tgral[0], &sd[0], &chi2a[0], idum)
 
         return (*tgral, *sd, *chi2a)
 
