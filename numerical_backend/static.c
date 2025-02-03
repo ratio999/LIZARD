@@ -46,7 +46,9 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 		nd=NDMX; 
 		ng=1;
 		if (mds != 0) { 
-			ng=(int)pow(ncall/2.0+0.25,1.0/ndim);
+			//printf("strat ias on \n");
+			ng=(int)pow(ncall/2.0+0.25,1.0/ndim); //Nst on paper
+			//printf("%d \n", ng);
 			mds=1;
 			if ((2*ng-NDMX) >= 0) {
 				mds = -1;
@@ -56,9 +58,9 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			}
 		}
 		for (k=1,i=0;i<ndim;i++) k *= ng;
-		npg=IMAX(ncall/k,2);
+		npg=IMAX(ncall/k,2); //nev in paper
 		calls=(double)npg * (double)k;
-		dxg=1.0/ng;
+		dxg=1.0/ng; //delta yst in paper
 		for (dv2g=1,i=0;i<ndim;i++) dv2g *= dxg;
 		dv2g=SQR(calls*dv2g)/npg/npg/(npg-1.0);
 		xnd=nd;
@@ -137,7 +139,7 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			ti += fb;
 			tsi += f2b;
 			if (mds < 0) { 
-				for (j=0;j<ndim;j++) d[ia[j]-1][j] += f2b;
+				for (j=0;j<ndim;j++) d[ia[j]-1][j] += f2b; //stratifies sampling happens here
 			}
 			for (k=ndim-1;k>=0;k--) {
 				kg[k] %= ng;
@@ -171,19 +173,23 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 		for (j=0;j<ndim;j++) { 
 			xo=d[0][j];
 			xn=d[1][j];
-			d[1][j]=(xo+xn)/2.0;
+			//d[1][j]=(xo+xn)/2.0;
+			//dt[j]=d[0][j];
+			d[0][j] = (7*xo + xn)/8.0;
+			//d[1][j] = (xo + 6*xn + d[2][j])/7.0;
 			dt[j]=d[0][j];
-
 			for (i=2;i<nd;i++) {
-				rc=xo+xn;
+				rc= xo + 6*xn;
+				//rc = xo + xn;
 				xo=xn;
 				xn=d[i][j];
-				d[i-1][j] = (rc+xn)/3.0;
+				d[i-1][j] = (rc+xn)/8.0;
 				dt[j] += d[i-1][j];
 			}
-			d[nd-1][j]=(xo+xn)/2.0;
+			d[nd-1][j]=(xo+7*xn)/8.0;
 			dt[j] += d[nd-1][j];
 		}
+		//printf("%d \n", nd);
 		//printf("Double for cycle end \n");
 		for (j=0;j<ndim;j++) {
 			rc=0.0;
