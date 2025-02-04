@@ -142,7 +142,9 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 				for (j=0;j<ndim;j++) d[ia[j]-1][j] += sqrt(f2b)/npg; //stratifies sampling happens here
 			}
 			for (k=ndim-1;k>=0;k--) {
+				printf("%d \n", kg[k]);
 				kg[k] %= ng;
+				printf("%d \n", kg[k]);
 				//if (k<0) printf("%d \n", k);
 				if (++kg[k] != 1) break;
 			}

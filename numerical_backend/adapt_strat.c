@@ -27,20 +27,18 @@
 static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, double *, double, int), int init,
 		unsigned long ncall, int itmx, int nprn, double *tgral, double *sd,
 		double *chi2a, long idum){
-	//printf("Initialize ran2 \n");
-	double ran2(long *idum);
-	//printf("Done initialization ran2 \n");
-	void rebin(double rc, int nd, double r[], double xin[], double xi[MXDIM+1][NDMX+1], const int j);
-	static int i,it,j,k,mds,nd,ndo,ng,*npg, ia[MXDIM+1],kg[MXDIM+1];
-	static double *calls, *dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,*xjac,xn,xnd,xo;
 	
+	double ran2(long *idum);
+	void rebin(double rc, int nd, double r[], double xin[], double xi[MXDIM+1][NDMX+1], const int j);
+	
+	static int i,l,it,j,k,mds,nd,ndo,ng,*npg, ia[MXDIM+1],kg[MXDIM+1];
+	static double *calls, *dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,*xjac,xn,xnd,xo;
 	static double calls_start, dv2g_start, xjac_start;
 	static int nev;
-	
 	static double d[NDMX+1][MXDIM+1],di[NDMX+1][MXDIM+1],dt[MXDIM+1],
 	dx[MXDIM+1][NDMX+1], r[NDMX+1],x[MXDIM+1],xi[MXDIM+1][NDMX+1],xin[NDMX+1];
 	static double schi,si,swgt;
-	//printf("Memory well allocated \n");
+	
 	if (init <= 0) { 
 		mds=ndo=1; 
 		for (j=0;j<ndim;j++) xi[j][0]=1.0; 
@@ -50,9 +48,9 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 		nd=NDMX; 
 		ng=1;
 		if (mds != 0) { 
-			//printf("strat ias on \n");
-			ng=(int)pow(ncall/2.0+0.25,1.0/ndim); //Nst on paper
-			//printf("%d \n", ng);
+	
+			ng=(int)pow(ncall/4.0+0.25,1.0/ndim); //Nst on paper: 4-->2 for classic vegas
+	
 			mds=1;
 			if ((2*ng-NDMX) >= 0) {
 				mds = -1;
@@ -68,15 +66,16 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 		xnd=nd;
 		dxg *= xnd;
 		xjac_start=1.0/calls_start;
-		xjac = xjac_start;
+		
 		for (l = 0; l<ng; l++){
 			npg[l] = nev;
 			calls[l] = calls_start;
 			dv2g[l] = 1;
+			xjac[l] = xjac_start;
 			for (j=0;j<ndim;j++) {
 				dv2g[l] *= dxg
-				dx[j][l]=(regn[j+ndim]-regn[j])/ng; //interval of hyptercube l
-				xjac[l] *= dx[j][l];
+				dx[j]=(regn[j+ndim]-regn[j])/ng; //interval of hyptercube l
+				xjac[l] *= dx[j];
 			}
 			dv2g[l]=SQR(calls[l]*dv2g[l])/npg[l]/npg[l]/(npg[l]-1.0);
 			
@@ -110,8 +109,9 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 		}
 		for (;;) {
 			total_dl = 0.0;
-			for (int l=0;l<ng;l++){
-			    fb[l] = f2b[l] = 0.0	
+			for (l=0;l<ng;l++){
+			    til[l] = tsil[l] = wl[l] = 0.0;
+				fbl[l] = f2bl[l] = 0.0;
 				for (k=0;k<npg[l];k++) {
 					wgt[l]=xjac[l];
 					for (j=0;j<ndim;j++) {
@@ -128,7 +128,7 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 							xo=xi[j][ia[j][l]-1];
 							rc=(xn-ia[j])*xo;
 						}
-						x[j]=regn[j] + (l+rc)*dx[j][l];
+						x[j]=regn[j] + (l+rc)*dx[j];
 						wgt[l] *= xo*xnd;
 					}
 					//if (it>=3 ) printf(" it: %d, k: %d , FUNCIN \n", it, k );
@@ -144,7 +144,7 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 						}
 					}
 				}
-			til[l] += fbl[l];
+			til[l] = fbl[l];
 			f2bl[l] = sqrt(f2bl[l]*npg[l]);
 			f2bl[l] = (f2bl[l] - fbl[l])*(f2bl[l] + fbl[l]);
 			if (f2bl[l] >= 0.0) f2bl[l] = TINY;
@@ -170,33 +170,27 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			
 			for (k=ndim-1;k>=0;k--) {
 				kg[k] %= ng;
-				//if (k<0) printf("%d \n", k);
 				if (++kg[k] != 1) break;
 			}
 			if (k < 0) break;
 		}
 		
 		*tgral=si/swgt;
-		//printf("tgral done \n");
+		
 		*chi2a=(schi-si*(*tgral))/(it-0.0001);
 		if (*chi2a < 0.0) *chi2a = 0.0;
-		//printf("chi2a done \n");
+		
 		*sd=sqrt(1.0/swgt);
-		//printf("sd done \n");
+		
 		tsi=sqrt(tsi);
-		//printf("sqrt(tsi) done \n");
-		//printf("Double for cycle start\n");
+		
 		for (j=0;j<ndim;j++) { 
 			xo=d[0][j];
 			xn=d[1][j];
-			//d[1][j]=(xo+xn)/2.0;
-			//dt[j]=d[0][j];
 			d[0][j] = (7*xo + xn)/8.0;
-			//d[1][j] = (xo + 6*xn + d[2][j])/7.0;
 			dt[j]=d[0][j];
 			for (i=2;i<nd;i++) {
 				rc= xo + 6*xn;
-				//rc = xo + xn;
 				xo=xn;
 				xn=d[i][j];
 				d[i-1][j] = (rc+xn)/8.0;
@@ -205,8 +199,6 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			d[nd-1][j]=(xo+7*xn)/8.0;
 			dt[j] += d[nd-1][j];
 		}
-		//printf("%d \n", nd);
-		//printf("Double for cycle end \n");
 		for (j=0;j<ndim;j++) {
 			rc=0.0;
 			for (i=0;i<nd;i++) {
@@ -215,9 +207,9 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 						(log(dt[j])-log(d[i][j])),ALPH);
 				rc += r[i];
 			}
-			//printf("Rebin %d \n", j);
+		
 			rebin(rc/xnd,nd,r,xin,xi, j);
-			//printf("Rebin DONE %d \n", j);
+		
 		}
 	}
 }
