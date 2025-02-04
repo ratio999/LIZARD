@@ -133,13 +133,13 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			}
 			
 
-			f2b=sqrt(f2b*npg);
+			f2b=sqrt(f2b*npg); //npg is divided again later (dv2g)
 			f2b=(f2b-fb)*(f2b+fb);
 			if (f2b <= 0.0) f2b=TINY;
 			ti += fb;
 			tsi += f2b;
 			if (mds < 0) { 
-				for (j=0;j<ndim;j++) d[ia[j]-1][j] += f2b; //stratifies sampling happens here
+				for (j=0;j<ndim;j++) d[ia[j]-1][j] += sqrt(f2b)/npg; //stratifies sampling happens here
 			}
 			for (k=ndim-1;k>=0;k--) {
 				kg[k] %= ng;
