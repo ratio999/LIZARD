@@ -61,11 +61,26 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 		}
 		for (k=1,i=0;i<ndim;i++) k *= ng;
 		nev=IMAX(ncall/k,2); //nev in paper
-		calls_start=(double)nev * (double)k;
+		k_ref = k;
+
+		calls_start=(double)nev * (double)k_ref;
 		dxg=1.0/ng; //delta yst in paper
 		xnd=nd;
 		dxg *= xnd;
 		xjac_start=1.0/calls_start;
+		for (j=0; j<ndim; j++) dx[j]=(regn[j+ndim]-regn[j])/ng; //interval of hyptercube l
+
+		npg = (double *)malloc(ng * sizeof(double));
+		calls = (double *)malloc(ng * sizeof(double));
+		dv2g = (double *)malloc(ng * sizeof(double));
+		xjac = (double *)malloc(ng * sizeof(double));
+
+		tsil = (double *)malloc(ng * sizeof(double));
+		til = (double *)malloc(ng * sizeof(double));
+		wl = (double *)malloc(ng * sizeof(double));
+		fbl = (double *)malloc(ng * sizeof(double));
+		f2bl = (double *)malloc(ng * sizeof(double));		
+		
 		
 		for (l = 0; l<ng; l++){
 			npg[l] = nev;
@@ -73,8 +88,7 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			dv2g[l] = 1;
 			xjac[l] = xjac_start;
 			for (j=0;j<ndim;j++) {
-				dv2g[l] *= dxg
-				dx[j]=(regn[j+ndim]-regn[j])/ng; //interval of hyptercube l
+				dv2g[l] *= dxg;
 				xjac[l] *= dx[j];
 			}
 			dv2g[l]=SQR(calls[l]*dv2g[l])/npg[l]/npg[l]/(npg[l]-1.0);
@@ -102,7 +116,7 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 	for (it=0;it<itmx;it++) {
 		//printf("Iteration number %d \n", it);
 
-		ti=tsi=0.0;
+		//ti=tsi=0.0;
 		for (j=0;j<ndim;j++) {
 			kg[j]=1;
 			for (i=0;i<nd;i++) d[i][j]=di[i][j]=0.0;
@@ -110,10 +124,20 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 		for (;;) {
 			total_dl = 0.0;
 			for (l=0;l<ng;l++){
+				if (it>0){
+					calls[l]=(double)npg[l] * (double)k_ref;
+					dv2g[l] = 1;
+					xjac[l] = 1.0/calls[l];
+					for (j=0;j<ndim;j++) {
+						dv2g[l] *= dxg;
+						xjac[l] *= dx[j];
+					}
+					dv2g[l]=SQR(calls[l]*dv2g[l])/npg[l]/npg[l]/(npg[l]-1.0);
+				}
 			    til[l] = tsil[l] = wl[l] = 0.0;
 				fbl[l] = f2bl[l] = 0.0;
 				for (k=0;k<npg[l];k++) {
-					wgt[l]=xjac[l];
+					wgt=xjac[l];
 					for (j=0;j<ndim;j++) {
 						//if (it>=3 ) printf(" it: %d, k: %d , j: %d \n", it, k, j );
 			
@@ -125,14 +149,14 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 							xo=xi[j][ia[j]-1]-xi[j][ia[j]-2];
 							rc=xi[j][ia[j]-2]+(xn-ia[j])*xo;
 						} else {
-							xo=xi[j][ia[j][l]-1];
+							xo=xi[j][ia[j]-1];
 							rc=(xn-ia[j])*xo;
 						}
 						x[j]=regn[j] + (l+rc)*dx[j];
-						wgt[l] *= xo*xnd;
+						wgt *= xo*xnd;
 					}
 					//if (it>=3 ) printf(" it: %d, k: %d , FUNCIN \n", it, k );
-					f=wgt*(*fxn)(realf, x, wgt[l], ndim);
+					f=wgt*(*fxn)(realf, x, wgt, ndim);
 					//if (it>=3 ) printf(" it: %d, k: %d ,  FUNCout \n", it, k );
 					f2=f*f;
 					fbl[l] += f;
