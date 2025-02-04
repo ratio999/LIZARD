@@ -2,7 +2,7 @@
 #include <math.h>
 #include "nrutil.h"
 #include <omp.h>
-#define ALPH 1.5
+#define ALPH 0.5 
 #define NDMX 50
 #define MXDIM 50
 #define TINY 1.0e-30
@@ -20,7 +20,7 @@
 #define NDIV (1+IMM1/NTAB)
 #define EPS 1.2e-7
 #define RNMX (1.0-EPS)
-
+#define BETA 0.75
 
 //static long idum = -12345;
 
@@ -31,10 +31,14 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 	double ran2(long *idum);
 	//printf("Done initialization ran2 \n");
 	void rebin(double rc, int nd, double r[], double xin[], double xi[MXDIM+1][NDMX+1], const int j);
-	static int i,it,j,k,mds,nd,ndo,ng,npg,ia[MXDIM+1],kg[MXDIM+1];
-	static double calls,dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,xjac,xn,xnd,xo;
+	static int i,it,j,k,mds,nd,ndo,ng,*npg, ia[MXDIM+1],kg[MXDIM+1];
+	static double *calls, *dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,*xjac,xn,xnd,xo;
+	
+	static double calls_start, dv2g_start, xjac_start;
+	static int nev;
+	
 	static double d[NDMX+1][MXDIM+1],di[NDMX+1][MXDIM+1],dt[MXDIM+1],
-	dx[MXDIM+1], r[NDMX+1],x[MXDIM+1],xi[MXDIM+1][NDMX+1],xin[NDMX+1];
+	dx[MXDIM+1][NDMX+1], r[NDMX+1],x[MXDIM+1],xi[MXDIM+1][NDMX+1],xin[NDMX+1];
 	static double schi,si,swgt;
 	//printf("Memory well allocated \n");
 	if (init <= 0) { 
@@ -52,23 +56,30 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			mds=1;
 			if ((2*ng-NDMX) >= 0) {
 				mds = -1;
-				npg=ng/NDMX+1;
-				nd=ng/npg;
-				ng=npg*nd;
+				nev=ng/NDMX+1;
+				nd=ng/nev;
+				ng=nev*nd;
 			}
 		}
 		for (k=1,i=0;i<ndim;i++) k *= ng;
-		npg=IMAX(ncall/k,2); //nev in paper
-		calls=(double)npg * (double)k;
+		nev=IMAX(ncall/k,2); //nev in paper
+		calls_start=(double)nev * (double)k;
 		dxg=1.0/ng; //delta yst in paper
-		for (dv2g=1,i=0;i<ndim;i++) dv2g *= dxg;
-		dv2g=SQR(calls*dv2g)/npg/npg/(npg-1.0);
 		xnd=nd;
 		dxg *= xnd;
-		xjac=1.0/calls;
-		for (j=0;j<ndim;j++) {
-			dx[j]=regn[j+ndim]-regn[j];
-			xjac *= dx[j];
+		xjac_start=1.0/calls_start;
+		xjac = xjac_start;
+		for (l = 0; l<ng; l++){
+			npg[l] = nev;
+			calls[l] = calls_start;
+			dv2g[l] = 1;
+			for (j=0;j<ndim;j++) {
+				dv2g[l] *= dxg
+				dx[j][l]=(regn[j+ndim]-regn[j])/ng; //interval of hyptercube l
+				xjac[l] *= dx[j][l];
+			}
+			dv2g[l]=SQR(calls[l]*dv2g[l])/npg[l]/npg[l]/(npg[l]-1.0);
+			
 		}
 		
 		if (nd != ndo) { 
@@ -98,49 +109,65 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			for (i=0;i<nd;i++) d[i][j]=di[i][j]=0.0;
 		}
 		for (;;) {
-			fb=f2b=0.0;
-			for (k=0;k<npg;k++) {
-				wgt=xjac;
-				for (j=0;j<ndim;j++) {
-					//if (it>=3 ) printf(" it: %d, k: %d , j: %d \n", it, k, j );
-		
-					xn=(kg[j]-ran2(&idum))*dxg+1.0; //on c++code it is different
-					//if (it>=3 ) printf(" it: %d, k: %d , j: %d , xn : %f \n", it, k, j, xn);
-					
-					ia[j]=IMAX(IMIN((int)(xn),NDMX),1);
-					if (ia[j] > 1) {
-						xo=xi[j][ia[j]-1]-xi[j][ia[j]-2];
-						rc=xi[j][ia[j]-2]+(xn-ia[j])*xo;
-					} else {
-						xo=xi[j][ia[j]-1];
-						rc=(xn-ia[j])*xo;
+			total_dl = 0.0;
+			for (int l=0;l<ng;l++){
+			    fb[l] = f2b[l] = 0.0	
+				for (k=0;k<npg[l];k++) {
+					wgt[l]=xjac[l];
+					for (j=0;j<ndim;j++) {
+						//if (it>=3 ) printf(" it: %d, k: %d , j: %d \n", it, k, j );
+			
+						xn=(kg[j]-ran2(&idum))*dxg+1.0; //on c++code it is different
+						//if (it>=3 ) printf(" it: %d, k: %d , j: %d , xn : %f \n", it, k, j, xn);
+						
+						ia[j]=IMAX(IMIN((int)(xn),NDMX),1);
+						if (ia[j] > 1) {
+							xo=xi[j][ia[j]-1]-xi[j][ia[j]-2];
+							rc=xi[j][ia[j]-2]+(xn-ia[j])*xo;
+						} else {
+							xo=xi[j][ia[j][l]-1];
+							rc=(xn-ia[j])*xo;
+						}
+						x[j]=regn[j] + (l+rc)*dx[j][l];
+						wgt[l] *= xo*xnd;
 					}
-					x[j]=regn[j]+rc*dx[j];
-					wgt *= xo*xnd;
-				}
-				//if (it>=3 ) printf(" it: %d, k: %d , FUNCIN \n", it, k );
-				f=wgt*(*fxn)(realf, x, wgt, ndim);
-				//if (it>=3 ) printf(" it: %d, k: %d ,  FUNCout \n", it, k );
-				f2=f*f;
-				fb += f;
-				f2b += f2;
-				for (j=0;j<ndim;j++) {
-					di[ia[j]-1][j] += f;
-					if (mds >= 0){
-						d[ia[j]-1][j] += f2;
+					//if (it>=3 ) printf(" it: %d, k: %d , FUNCIN \n", it, k );
+					f=wgt*(*fxn)(realf, x, wgt[l], ndim);
+					//if (it>=3 ) printf(" it: %d, k: %d ,  FUNCout \n", it, k );
+					f2=f*f;
+					fbl[l] += f;
+					f2bl[l] += f2;
+					for (j=0;j<ndim;j++) {
+						di[ia[j]-1][j] += f;
+						if (mds >= 0){
+							d[ia[j]-1][j] += f2;
+						}
 					}
 				}
+			til[l] += fbl[l];
+			f2bl[l] = sqrt(f2bl[l]*npg[l]);
+			f2bl[l] = (f2bl[l] - fbl[l])*(f2bl[l] + fbl[l]);
+			if (f2bl[l] >= 0.0) f2bl[l] = TINY;
+			
+		 	tsil[l] = f2bl[l] * dv2g[l];
+			
+			total_dl += pow(tsil[l], BETA);
+			wl[l] = 1/tsil[l];
+			si += wl[l]*til[l];
+			swgt += wl[l];
+			schi += til[l]*til[l]*wl[l];	
+			
+			//if (mds < 0) { 
+			//	for (j=0;j<ndim;j++) d[ia[j]-1][j] += f2b; //stratifies sampling happens here
+			//}
+			
+			}
+
+			for (l=0; l<ng; l++){
+				npg[l]=2+(int)(pow(tsil[l],BETA)/total_dl);
+			
 			}
 			
-
-			f2b=sqrt(f2b*npg);
-			f2b=(f2b-fb)*(f2b+fb);
-			if (f2b <= 0.0) f2b=TINY;
-			ti += fb;
-			tsi += f2b;
-			if (mds < 0) { 
-				for (j=0;j<ndim;j++) d[ia[j]-1][j] += f2b; //stratifies sampling happens here
-			}
 			for (k=ndim-1;k>=0;k--) {
 				kg[k] %= ng;
 				//if (k<0) printf("%d \n", k);
@@ -148,18 +175,7 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			}
 			if (k < 0) break;
 		}
-		//printf("%d \n", it);
-		//printf("main cycle done \n");
-		tsi *= dv2g;
-		//printf("tsi done \n");
-		wgt=1.0/tsi;
-		//printf("wgt done \n");
-		si += wgt*ti;
-		//printf("si done \n");
-		schi += wgt*ti*ti;
-		//printf("schi done \n");
-		swgt += wgt;
-		//printf("swgt done \n");
+		
 		*tgral=si/swgt;
 		//printf("tgral done \n");
 		*chi2a=(schi-si*(*tgral))/(it-0.0001);
