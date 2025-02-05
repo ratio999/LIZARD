@@ -2,7 +2,8 @@
 #include <math.h>
 #include "nrutil.h"
 #include <omp.h>
-#define ALPH 1.5
+#define ALPH 0.4
+#define BETA 0.75
 #define NDMX 50
 #define MXDIM 50
 #define TINY 1.0e-30
@@ -140,7 +141,7 @@ static void a_vegas(void *realf, double *regn, int ndim, double (*fxn)(void *, d
 			ti += fb;
 			tsi += f2b;
 			if (mds < 0) { 
-				for (j=0;j<ndim;j++) d[ia[j]-1][j] += sqrt(f2b)/npg; //stratifies sampling happens here
+				for (j=0;j<ndim;j++) d[ia[j]-1][j] += pow((f2b*dv2g), BETA); //stratifies sampling happens here
 			}
 			for (k=ndim-1;k>=0;k--) {
 				kg[k] %= ng;
