@@ -36,6 +36,8 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	dx[MXDIM+1], r[NDMX+1],x[MXDIM+1],xi[MXDIM+1][NDMX+1],xin[NDMX+1];
 	static double schi,si,swgt;
 
+	int N_1_level = IMAX(ndim, (int)(omp_get_num_procs()));
+	double *domain = (double*)malloc(ndim*sizeof(double));
 	if (init <= 0) { 
 		mds=ndo=1; 
 		for (j=0;j<ndim;j++) xi[j][0]=1.0; 
@@ -63,16 +65,19 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 		xnd=nd;
 		dxg *= xnd;
 		xjac=1.0/calls;
+		#pragma omp parallel for num_threads(N_1_level) schedule(static) reduction(*: xjac) 
 		for (j=0;j<ndim;j++) {
 			dx[j]=regn[j+ndim]-regn[j];
+			domain[j] = regn[j]; //new arr for trying reducing false sharing
 			xjac *= dx[j];
 		}
 		
 		if (nd != ndo) { 
 			for (i=0;i<IMAX(nd,ndo);i++) r[i]=1.0;
+			#pragma omp parallel for num_threads(N-1_level) schedule(static)
 			for (j=0;j<ndim;j++) rebin(ndo/xnd,nd,r,xin,xi[j]);
 			ndo=nd;
-		}
+		} //start from assigning xi[j] for avoiding false sharing. Then KEEP the parallel region on j<ndim. and maybe on k. I think not on for(;;)
 		if (nprn >= 0) {
 			printf("%s: ndim= %3d ncall= %8.0f\n",
 					" Input parameters for vegas",ndim,calls);
@@ -91,34 +96,46 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			kg[j]=1;
 			for (i=0;i<nd;i++) d[i][j]=di[i][j]=0.0;
 		}
+		double *x = (double*)malloc(NDMX*sizeof(double));
+		int *ia = (int*)malloc(NDMX*sizeof(int)); 
+		int *iia = (int*)malloc(ndim*sizeof(int));
+		 
 		for (;;) {
-			fb=f2b=0.0;
-			for (k=0;k<npg;k++) {
-				wgt=xjac;
-				for (j=0;j<ndim;j++) {
+			double fb=f2b=0.0;
+			#pragma omp parallel for implicit(none) shared(npg, kg, idum, xjac, dxg, regn, dx, xnd, di, d) private(wgt, k, x, iia) reduction(+: fb, f2b)
+			for (int k=0;k<npg;k++) {
+				double wgt=xjac;
+
+				#pragma omp parallel for implicit(none) shared(ndim, kg, idum, dxg, ia, xi, x) private(j, xo, xn, rc) reduction(*: wgt)
+				for (int j=0;j<ndim;j++) {
 					xn=(kg[j]-ran2(&idum))*dxg+1.0; //on c++code it is different
-					ia[j]=IMAX(IMIN((int)(xn),NDMX),1);
-					if (ia[j] > 1) {
-						xo=xi[j][ia[j]-1]-xi[j][ia[j]-2];
-						rc=xi[j][ia[j]-2]+(xn-ia[j])*xo;
+					iia[j]=IMAX(IMIN((int)(xn),NDMX),1);
+					if (iia[j] > 1) {
+						xo=xi[j][iia[j]-1]-xi[j][iia[j]-2];
+						rc=xi[j][iia[j]-2]+(xn-iia[j])*xo;
 					} else {
-						xo=xi[j][ia[j]-1];
-						rc=(xn-ia[j])*xo;
+						xo=xi[j][iia[j]-1];
+						rc=(xn-iia[j])*xo;
 					}
 					x[j]=regn[j]+rc*dx[j];
+					
 					wgt *= xo*xnd;
 				}
-				f=wgt*(*fxn)(x, wgt);
-				f2=f*f;
+				double f=wgt*(*fxn)(x, wgt);
+				double f2=f*f;
+				
 				fb += f;
 				f2b += f2;
-				#pragma omp critical
 				for (j=0;j<ndim;j++) {
-					di[ia[j]-1][j] += f;
+					di[iia[j]-1][j] += f;
 					if (mds >= 0){
-						d[ia[j]-1][j] += f2;
+						d[iia[j]-1][j] += f2;
 					}
 				}
+				if ((k+1)==npg){
+					for (int jj=0; 
+				
+				} 
 			}
 
 			f2b=sqrt(f2b*npg);
@@ -129,11 +146,14 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			if (mds < 0) { 
 				for (j=0;j<ndim;j++) d[ia[j]-1][j] += f2b;
 			}
-			for (k=ndim-1;k>=0;k--) {
-				kg[k] %= ng;
-				if (++kg[k] != 1) break;
+			#pragma omp critical 
+			{
+				for (k=ndim-1;k>=0;k--) {
+					kg[k] %= ng;
+					if (++kg[k] != 1) break;
+				}
+				if (k < 0) break;
 			}
-			if (k < 0) break;
 		}
 		tsi *= dv2g;
 		wgt=1.0/tsi;
