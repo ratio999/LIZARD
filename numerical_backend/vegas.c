@@ -168,15 +168,16 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 						d_1d[j] += f2;
 					}
 				}
-
-				for (int j=0;j<ndim;j++) {
-					di[j][iia[j]-1] += f;
-					if (mds >= 0){
-						d[j][iia[j]-1] += f2;
-					}
-				}
+			}
+			#pragma omp parallel for num_threads(N_1_level) schedule(static)
+			for (int j=0;j<ndim;j++) {
+				di[j][iia[j]-1] += di_1d[j];
+				if (mds >= 0){
+					d[j][iia[j]-1] += d_1d[j];
 				}
 			}
+			
+		
 
 			f2b=sqrt(f2b*npg);
 			f2b=(f2b-fb)*(f2b+fb);
@@ -184,9 +185,10 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			ti += fb;
 			tsi += f2b;
 			if (mds < 0) { 
+				#pragma omp parallel for num_threads(N_1_level) schedule(static)
 				for (j=0;j<ndim;j++) d[j][ia[j]-1] += f2b;
 			}
-			#pragma omp critical 
+			
 			{
 				for (k=ndim-1;k>=0;k--) {
 					kg[k] %= ng;
@@ -205,30 +207,34 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 		if (*chi2a < 0.0) *chi2a = 0.0;
 		*sd=sqrt(1.0/swgt);
 		tsi=sqrt(tsi);
-		for (j=0;j<ndim;j++) { 
-			xo=d[0][j];
-			xn=d[1][j];
-			d[1][j]=(xo+xn)/2.0;
-			dt[j]=d[0][j];
-
+		#pragma omp parallel for num_threads(N_1_level) schedule(static) private(xo, xn, rc)
+		for (int j=0;j<ndim;j++) { 
+			double xo=d[j][0];
+			double xn=d[j][1];
+			d[j][1]=(xo+xn)/2.0;
+			dt[j]=d[j][0];
+			double rc;
 			for (i=2;i<nd;i++) {
 				rc=xo+xn;
 				xo=xn;
-				xn=d[i][j];
-				d[i-1][j] = (rc+xn)/3.0;
-				dt[j] += d[i-1][j];
+				xn=d[j][i];
+				d[j][i-1] = (rc+xn)/3.0;
+				dt[j] += d[j][i-1];
 			}
-			d[nd-1][j]=(xo+xn)/2.0;
-			dt[j] += d[nd-1][j];
+			d[j][nd-1]=(xo+xn)/2.0;
+			dt[j] += d[j][nd-1];
 		}
+		#pragma omp parallel for num_threads(N_1_level) schedule(static) private(rc, r) 
 		for (j=0;j<ndim;j++) {
-			rc=0.0;
+			double *r = (double*)malloc(nd*sizeof(double));
+			double rc=0.0;
 			for (i=0;i<nd;i++) {
-				if (d[i][j] < TINY) d[i][j]=TINY;
-				r[i]=pow((1.0-d[i][j]/dt[j])/
-						(log(dt[j])-log(d[i][j])),ALPH);
+				if (d[j][i] < TINY) d[j][i]=TINY;
+				r[i]=pow((1.0-d[j][i]/dt[j])/
+						(log(dt[j])-log(d[j][i])),ALPH);
 				rc += r[i];
 			}
+			#pragma omp critical
 			rebin(rc/xnd,nd,r,xin,xi,j);
 		}
 	}
