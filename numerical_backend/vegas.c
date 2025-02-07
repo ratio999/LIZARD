@@ -28,8 +28,11 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 		unsigned long ncall, int itmx, int nprn, double *tgral, double *sd,
 		double *chi2a){
 
-
+	int pool = omp_get_num_procs()-1;
 	omp_set_nested(1);
+	
+	int N_2_level = IMAX(2, (pool-ndim));
+	int N_1_level = pool-N_2_level;
 	
 	
 	double ran2(long *idum);
@@ -48,7 +51,6 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	d = malloc((MXDIM+1)*sizeof(double*));
 	di = malloc((MXDIM+1)*sizeof(double*));
 	
-	int N_1_level = IMAX(ndim, (int)(omp_get_num_procs()));
 	
 	static double *domain = (double*)malloc(ndim*sizeof(double));
 	static double *dx = (double*)malloc((MXDIM+1)*sizeof(double));
