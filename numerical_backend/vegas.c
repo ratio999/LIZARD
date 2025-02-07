@@ -28,6 +28,10 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 		unsigned long ncall, int itmx, int nprn, double *tgral, double *sd,
 		double *chi2a){
 
+
+	omp_set_nested(1);
+	
+	
 	double ran2(long *idum);
 	void rebin(double rc, int nd, double r[], double xin[], double xi[MXDIM+1][NDMX+1], const int j);
 	static int i,it,j,k,mds,nd,ndo,ng,npg,ia[MXDIM+1],kg[MXDIM+1];
@@ -119,11 +123,20 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 		int *ia = (int*)malloc(NDMX*sizeof(int)); 
 		int *iia = (int*)malloc(ndim*sizeof(int));
 		 
+		double *di_1d = (double*)malloc(ndim*sizeof(double));
+		double *d_1d = (double*)malloc(ndim*sizeof(double));
+			
 		for (;;) {
 			double fb=f2b=0.0;
-			#pragma omp parallel for implicit(none) shared(npg, kg, idum, xjac, dxg, regn, dx, xnd, di, d) private(wgt, k, x, iia) reduction(+: fb, f2b)
+			#pragma omp parallel for num_threads(N_1_level) schedule(static)
+			for (int j=0; j<ndim;j++){
+				di_1d[j] = 0.0;
+				d_1d[j] = 0.0;
+			}
+			#pragma omp parallel for implicit(none) shared(npg, kg, idum, xjac, dxg, regn, dx, xnd, di, d) private(wgt, k, x, iia) reduction(+: fb, f2b, di_1d[:ndim], d_1d[:ndim])
 			for (int k=0;k<npg;k++) {
 				double wgt=xjac;
+				
 
 				#pragma omp parallel for implicit(none) shared(domain, ndim, kg, idum, dxg, ia, xi, x, xnd) private(j, xo, xn, rc) reduction(*: wgt)
 				for (int j=0;j<ndim;j++) {
@@ -147,11 +160,21 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				
 				fb += f;
 				f2b += f2;
-				for (j=0;j<ndim;j++) {
+				
+				#pragma omp parallel for num_threads(N_1_level) schedule(static) shared(mds, iia)
+				for (int j = 0; j<ndim; j++){
+					di_1d[j] += f;
+					if (mds>=0){
+						d_1d[j] += f2;
+					}
+				}
+
+				for (int j=0;j<ndim;j++) {
 					di[j][iia[j]-1] += f;
 					if (mds >= 0){
 						d[j][iia[j]-1] += f2;
 					}
+				}
 				}
 			}
 
@@ -161,7 +184,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			ti += fb;
 			tsi += f2b;
 			if (mds < 0) { 
-				for (j=0;j<ndim;j++) d[ia[j]-1][j] += f2b;
+				for (j=0;j<ndim;j++) d[j][ia[j]-1] += f2b;
 			}
 			#pragma omp critical 
 			{
