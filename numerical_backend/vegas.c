@@ -37,10 +37,9 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	
 	double ran2(long *idum);
 	void rebin(double rc, int nd, double r[], double xin[], double xi[MXDIM+1][NDMX+1], const int j);
-	static int i,it,j,k,mds,nd,ndo,ng,npg,ia[MXDIM+1],kg[MXDIM+1];
+	static int it,mds,nd,ndo,ng,npg,ia[MXDIM+1],kg[MXDIM+1];
 	static double calls,dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,xjac,xn,xnd,xo;
-	static double d[NDMX+1][MXDIM+1],di[NDMX+1][MXDIM+1],dt[MXDIM+1],
-	r[NDMX+1],xin[NDMX+1];
+	static double dt[MXDIM+1], r[NDMX+1],xin[NDMX+1];
 	static int *kg = (int*)malloc(ndim*sizeof(int));
 	static double schi,si,swgt;
 	static double **xi, **d, **di;
@@ -73,16 +72,20 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				ng=npg*nd;
 			}
 		}
-		for (k=1,i=0;i<ndim;i++) k *= ng;
+		for (int k=1,int i=0;i<ndim;i++) k *= ng;
 		npg=IMAX(ncall/k,2);
 		calls=(double)npg * (double)k;
 		dxg=1.0/ng;
-		for (dv2g=1,i=0;i<ndim;i++) dv2g *= dxg;
+		dv2g=1.0;
+		#pragma omp parallel for num_threads(N_2_level) schedule(dynamic) shared(ndim, dxg) private(i) reduction(*:dv2g)
+		for (int i=0;i<ndim;i++) dv2g *= dxg;
+		
 		dv2g=SQR(calls*dv2g)/npg/npg/(npg-1.0);
 		xnd=nd;
 		dxg *= xnd;
 		xjac=1.0/calls;
-		#pragma omp parallel for num_threads(N_1_level) schedule(static) reduction(*: xjac) 
+		
+		#pragma omp parallel for num_threads(N_2_level) schedule(static) reduction(*: xjac) 
 		for (j=0;j<ndim;j++) {
 			dx[j]=regn[j+ndim]-regn[j];
 			domain[j] = regn[j]; //new arr for trying reducing false sharing
@@ -91,13 +94,14 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 		
 		if (nd != ndo) { 
 			for (i=0;i<IMAX(nd,ndo);i++) r[i]=1.0;
+			
 			#pragma omp parallel for num_threads(N-1_level) schedule(static)
 			for (j=0;j<ndim;j++) {
 				d[j] = malloc((NDMX+1)*sizeof(double));
 				di[j] = malloc((NDMX+1)*sizeof(double));
 				xi[j] = malloc((NDMX+1)*sizeof(double));
 				rebin(ndo/xnd,nd,r,xin,xi,j);
-			
+			}	
 			ndo=nd;
 		} //start from assigning xi[j] for avoiding false sharing. Then KEEP the parallel region on j<ndim. and maybe on k. I think not on for(;;)
 		
@@ -135,12 +139,12 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				di_1d[j] = 0.0;
 				d_1d[j] = 0.0;
 			}
-			#pragma omp parallel for implicit(none) shared(npg, kg, idum, xjac, dxg, regn, dx, xnd, di, d) private(wgt, k, x, iia) reduction(+: fb, f2b, di_1d[:ndim], d_1d[:ndim])
+			#pragma omp parallel for shared(npg, kg, idum, xjac, dxg, regn, dx, xnd, di, d) private(wgt, k, x, iia) reduction(+: fb, f2b, di_1d[:ndim], d_1d[:ndim])
 			for (int k=0;k<npg;k++) {
 				double wgt=xjac;
 				
 
-				#pragma omp parallel for implicit(none) shared(domain, ndim, kg, idum, dxg, ia, xi, x, xnd) private(j, xo, xn, rc) reduction(*: wgt)
+				#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(ndim, idum, dxg, xnd) private(j, xo, xn, rc) reduction(*: wgt)
 				for (int j=0;j<ndim;j++) {
 					double xn=(kg[j]-ran2(&idum))*dxg+1.0; //on c++code it is different
 					double xo;
@@ -162,12 +166,17 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				
 				fb += f;
 				f2b += f2;
-				
-				#pragma omp parallel for num_threads(N_1_level) schedule(static) shared(mds, iia)
-				for (int j = 0; j<ndim; j++){
-					di_1d[j] += f;
-					if (mds>=0){
+				if (mds>=0){	
+					#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(mds, iia)
+					for (int j = 0; j<ndim; j++){
+						di_1d[j] += f;
 						d_1d[j] += f2;
+					}
+
+				} else {
+					#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(mds, iia)
+					for (int j = 0; j<ndim; j++){
+						di_1d[j] += f;
 					}
 				}
 			}
