@@ -38,7 +38,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	double ran2(long *idum);
 	void rebin(double rc, int nd, double r[], double xin[], double xi[MXDIM+1][NDMX+1], const int j);
 	
-	static int it,mds,nd,ndo,ng,npg;
+	static int mds,nd,ndo,ng,npg;
 	static double calls,dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,xjac,xn,xnd,xo;
 	static int *kg = (int*)malloc(ndim*sizeof(int));
 	static double schi,si,swgt;
@@ -120,7 +120,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			}
 		}
 	}
-	for (it=0;it<itmx;it++) {
+	for (int it=0;it<itmx;it++) {
 		ti=tsi=0.0;
 		#pragma omp parallel for num_threads(N_2_level) schedule(static)
 		for (int j=0;j<ndim;j++) {
@@ -142,7 +142,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				di_1d[j] = 0.0;
 				d_1d[j] = 0.0;
 			}
-			#pragma omp parallel for num_threads(N_1_level) shared(npg, idum, xjac, dxg, xnd) private(wgt, k, x, iia) reduction(+: fb, f2b, di_1d[:ndim], d_1d[:ndim])
+			#pragma omp parallel for num_threads(N_1_level) schedule(static) shared(npg, idum, xjac, dxg, xnd) private(wgt, k, x, iia) reduction(+: fb, f2b, di_1d[:ndim], d_1d[:ndim])
 			for (int k=0;k<npg;k++) {
 				double wgt=xjac;
 				
@@ -170,20 +170,20 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				fb += f;
 				f2b += f2;
 				if (mds>=0){	
-					#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(mds, iia)
+					#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(mds, iia) private(j)
 					for (int j = 0; j<ndim; j++){
 						di_1d[j] += f;
 						d_1d[j] += f2;
 					}
 
 				} else {
-					#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(mds, iia)
+					#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(mds, iia) private(j)
 					for (int j = 0; j<ndim; j++){
 						di_1d[j] += f;
 					}
 				}
 			}
-			#pragma omp parallel for num_threads(N_2_level) schedule(static)
+			#pragma omp parallel for num_threads(N_2_level) schedule(static)i private(j)
 			for (int j=0;j<ndim;j++) {
 				di[j][iia[j]-1] += di_1d[j];
 				if (mds >= 0){
@@ -199,7 +199,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			ti += fb;
 			tsi += f2b;
 			if (mds < 0) { 
-				#pragma omp parallel for num_threads(N_2_level) schedule(static)
+				#pragma omp parallel for num_threads(N_2_level) schedule(static) private(j)
 				for (int j=0;j<ndim;j++) d[j][ia[j]-1] += f2b;
 			}
 			
@@ -221,7 +221,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 		if (*chi2a < 0.0) *chi2a = 0.0;
 		*sd=sqrt(1.0/swgt);
 		tsi=sqrt(tsi);
-		#pragma omp parallel for num_threads(N_2_level) schedule(static) private(xo, xn, rc)
+		#pragma omp parallel for num_threads(N_2_level) schedule(static) private(xo, xn, rc, j)
 		for (int j=0;j<ndim;j++) { 
 			double xo=d[j][0];
 			double xn=d[j][1];
@@ -238,7 +238,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			d[j][nd-1]=(xo+xn)/2.0;
 			dt[j] += d[j][nd-1];
 		}
-		#pragma omp parallel for num_threads(N_2_level) schedule(static) private(rc, r) 
+		#pragma omp parallel for num_threads(N_2_level) schedule(static) private(rc, r, j) 
 		for (int j=0;j<ndim;j++) {
 			double *r = (double*)malloc(nd*sizeof(double));
 			double rc=0.0;
