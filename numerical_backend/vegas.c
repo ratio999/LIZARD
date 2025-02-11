@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <math.h>
+#include <stdlib.h>
 #include "nrutil.h"
 #include <omp.h>
 #define ALPH 1.5
@@ -40,11 +41,11 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	
 	static int mds,nd,ndo,ng,npg;
 	static double calls,dv2g,dxg,f,f2,f2b,fb,rc,ti,tsi,wgt,xjac,xn,xnd,xo;
-	static int *kg = (int*)malloc(ndim*sizeof(int));
+	int *kg = (int*)malloc(ndim*sizeof(int));
 	static double schi,si,swgt;
 	static double **xi, **d, **di;
- 	static double *dt = (double*)malloc((MXDIM+1)*sizeof(double));	
-	static double *xin =(double*)malloc((MXDIM+1)*sizeof(double));	
+ 	double *dt = (double*)malloc((MXDIM+1)*sizeof(double));	
+	double *xin =(double*)malloc((MXDIM+1)*sizeof(double));	
 	 
 	
 	xi = malloc((MXDIM+1)*sizeof(double*));
@@ -52,12 +53,12 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	di = malloc((MXDIM+1)*sizeof(double*));
 	
 	
-	static double *domain = (double*)malloc(ndim*sizeof(double));
-	static double *dx = (double*)malloc((MXDIM+1)*sizeof(double));
+	double *domain = (double*)malloc(ndim*sizeof(double));
+	double *dx = (double*)malloc((MXDIM+1)*sizeof(double));
 	
 	if (init <= 0) { 
 		mds=ndo=1; 
-		for (j=0;j<ndim;j++) xi[j][0]=1.0; 
+		for (int j=0;j<ndim;j++) xi[j][0]=1.0; 
 	}
 	if (init <= 1) si=swgt=schi=0.0;
 	if (init <= 2) { 
@@ -73,11 +74,14 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				ng=npg*nd;
 			}
 		}
-		for (int k=1,int i=0;i<ndim;i++) k *= ng;
+		int k=1;
+		for (int i=0;i<ndim;i++) k *= ng;
 		npg=IMAX(ncall/k,2);
 		calls=(double)npg * (double)k;
 		dxg=1.0/ng;
 		dv2g=1.0;
+		free(k);
+		k=NULL;
 		#pragma omp parallel for num_threads(N_2_level) schedule(dynamic) shared(ndim, dxg) private(i) reduction(*:dv2g)
 		for (int i=0;i<ndim;i++) dv2g *= dxg;
 		
@@ -92,7 +96,8 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			domain[j] = regn[j]; //new arr for trying reducing false sharing
 			xjac *= dx[j];
 		}
-		
+	 	
+	 	double *r = (double*)malloc(NDMX+1)*sizeof(double);		
 		if (nd != ndo) {
 			int threshold = IMAX(nd,ndo);
 		        #pragma omp parallel for shared(threshold) private(i)	
@@ -238,6 +243,8 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			d[j][nd-1]=(xo+xn)/2.0;
 			dt[j] += d[j][nd-1];
 		}
+		free(r);
+		r = NULL;
 		#pragma omp parallel for num_threads(N_2_level) schedule(static) private(rc, r, j) 
 		for (int j=0;j<ndim;j++) {
 			double *r = (double*)malloc(nd*sizeof(double));
