@@ -5,7 +5,7 @@
 #include <omp.h>
 #define ALPH 1.5
 #define NDMX 50
-#define MXDIM 10
+#define MXDIM 50
 #define TINY 1.0e-30
 #define IM1 2147483563
 #define IM2 2147483399
@@ -33,7 +33,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	omp_set_nested(1);
 	
 	int N_2_level = IMAX(2, (pool-ndim));
-	int N_1_level = pool-N_2_level;
+	int N_1_level =1; 
 	
 	
 	double ran2(long *idum);
@@ -46,9 +46,8 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	static double **xi, **d, **di;
  	double *dt = (double*)malloc((MXDIM+1)*sizeof(double));	
 	double *xin =(double*)malloc((MXDIM+1)*sizeof(double));	
-	 
-	
 	xi = malloc((MXDIM+1)*sizeof(double*));
+ 
 	d = malloc((MXDIM+1)*sizeof(double*));
 	di = malloc((MXDIM+1)*sizeof(double*));
 	
@@ -58,7 +57,11 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	
 	if (init <= 0) { 
 		mds=ndo=1; 
-		for (int j=0;j<ndim;j++) xi[j][0]=1.0; 
+		#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(ndim, xi)
+		for (int j=0;j<ndim;j++){ 
+			xi[j] = malloc((NDMX+1)*sizeof(double));
+			xi[j][0]=1.0; 
+		}
 	}
 	if (init <= 1) si=swgt=schi=0.0;
 	if (init <= 2) { 
@@ -106,7 +109,6 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			for (int j=0;j<ndim;j++) {
 				d[j] = malloc((NDMX+1)*sizeof(double));
 				di[j] = malloc((NDMX+1)*sizeof(double));
-				xi[j] = malloc((NDMX+1)*sizeof(double));
 				rebin(ndo/xnd,nd,r,xin,xi,j);
 			}	
 			ndo=nd;
@@ -127,6 +129,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 		}
 	}
 	for (it=0;it<itmx;it++) {
+		printf("%d \n", it);
 		ti=tsi=0.0;
 		#pragma omp parallel for num_threads(N_2_level) schedule(static)
 		for (int j=0;j<ndim;j++) {
@@ -134,9 +137,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 			for (int i=0;i<nd;i++) d[j][i]=di[j][i]=0.0; //i and j have been inverted!!
 		}
 		
-		double *x = (double*)malloc(NDMX*sizeof(double));
 		int *ia = (int*)malloc(NDMX*sizeof(int)); 
-		int *iia = (int*)malloc(ndim*sizeof(int));
 		 
 		double *di_1d = (double*)malloc(ndim*sizeof(double));
 		double *d_1d = (double*)malloc(ndim*sizeof(double));
@@ -148,14 +149,20 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				di_1d[j] = 0.0;
 				d_1d[j] = 0.0;
 			}
-			#pragma omp parallel for num_threads(N_1_level) schedule(static) shared(npg, idum, xjac, dxg, xnd) private(wgt, k, x, iia) reduction(+: fb, f2b, di_1d[:ndim], d_1d[:ndim])
+			#pragma omp parallel for num_threads(N_1_level) schedule(static) shared(xi, npg, xjac, dxg, xnd) private(wgt, k) reduction(+: fb, f2b, di_1d[:ndim], d_1d[:ndim])
 			for (k=0;k<npg;k++) {
 				double wgt=xjac;
-				
+				int *iia = (int*)malloc(ndim*sizeof(int));
+				double *x = (double*)malloc(NDMX*sizeof(double));
+								
 
-				#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(ndim, idum, dxg, xnd) private(xo, xn, rc) reduction(*: wgt)
+				#pragma omp parallel for num_threads(N_2_level) schedule(static) shared(ndim, dxg, xnd) private(xo, xn, rc) reduction(*: wgt)
 				for (int j=0;j<ndim;j++) {
-					double xn=(kg[j]-ran2(&idum))*dxg+1.0; //on c++code it is different
+					double xn;
+					#pragma omp critical
+					{
+					xn=(kg[j]-ran2(&idum))*dxg+1.0; //on c++code it is different
+					}
 					double xo;
 					double rc;
 					iia[j]=IMAX(IMIN((int)(xn),NDMX),1);
@@ -188,12 +195,15 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 						di_1d[j] += f;
 					}
 				}
+				if (k==npg-1) {	
+					for (int j=0; j<ndim;j++) ia[j] = iia[j];
+				}
 			}
 			#pragma omp parallel for num_threads(N_2_level) schedule(static) 
 			for (int j=0;j<ndim;j++) {
-				di[j][iia[j]-1] += di_1d[j];
+				di[j][ia[j]-1] += di_1d[j];
 				if (mds >= 0){
-					d[j][iia[j]-1] += d_1d[j];
+					d[j][ia[j]-1] += d_1d[j];
 				}
 			}
 			

@@ -11,7 +11,7 @@
 double my_function(double x[], double weight) {
     double result = 1.0;  // Cambia questa funzione per test diversi
     for (int i = 0; i < 2; i++) {
-      result *= exp(x[i]+2) + 1e-6;
+      result *= sin(x[i]+2) + 1e-6;
     }
     return result;
 }
@@ -24,7 +24,7 @@ int main() {
 
     // Chiamata alla funzione vegas
     
-    vegas(regn, 2, my_function, 0, 100000, 5, 0, &tgral, &sd, &chi2a);
+    vegas(regn, 2, my_function, 0, 10000, 5, 0, &tgral, &sd, &chi2a);
     // Mostra i risultati
     printf("Risultato dell'integrale: %.7g\n", tgral);
     printf("Deviazione standard: %.7g\n", sd);
