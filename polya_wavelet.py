@@ -19,7 +19,7 @@ wavelet = 'db4'
 max_level = pywt.dwt_max_level(len(noisy_signal), pywt.Wavelet(wavelet).dec_len)
 level = min(5, max_level)
 print(level)
-def threshold(coeffs, threshold_value, mode='soft'):
+def threshold(coeffs, threshold_value, mode='hard'):
     thresholded_coeffs = []
     for i, coeff in enumerate(coeffs):
         if i == 0:  # Skip the approximation coefficients (low-pass component)
