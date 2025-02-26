@@ -32,8 +32,8 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 	int pool = omp_get_num_procs()-1;
 	omp_set_nested(1);
 	
-	int N_2_level = IMAX(2, (pool-ndim));
-	int N_1_level =1; 
+	int N_2_level = 1; 
+	int N_1_level =8; 
 	
 	
 	double ran2(long *idum);
@@ -160,7 +160,7 @@ void vegas(double *regn, int ndim, double (*fxn)(double *, double), int init,
 				for (int j=0;j<ndim;j++) {
 					double xn;
 					#pragma omp critical
-					{
+					{	
 					xn=(kg[j]-ran2(&idum))*dxg+1.0; //on c++code it is different
 					}
 					double xo;

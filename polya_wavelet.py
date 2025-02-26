@@ -10,7 +10,7 @@ t = np.arange(0, 10, 0.01)
 original_signal = (11-t)**(-0.75)*np.sin(20*(11-t)**(5/8))
 #t = t[::-N//10]
 #original_signal = original_signal[::-N//10]
-noisy_signal = original_signal + 0.1*np.random.normal(0, 1, len(t))
+noisy_signal = original_signal + np.random.normal(0, 0.1, len(t))
 
 
 
@@ -18,9 +18,23 @@ noisy_signal = original_signal + 0.1*np.random.normal(0, 1, len(t))
 wavelet = 'db4'
 max_level = pywt.dwt_max_level(len(noisy_signal), pywt.Wavelet(wavelet).dec_len)
 level = min(5, max_level)
+def threshold(coeffs, threshold_value, mode='soft'):
+    thresholded_coeffs = []
+    for i, coeff in enumerate(coeffs):
+        if i == 0:  # Skip the approximation coefficients (low-pass component)
+            thresholded_coeffs.append(coeff)
+            continue
+        if mode == 'soft':
+            thresholded_coeffs.append(pywt.threshold(coeff, threshold_value, mode='soft'))
+        elif mode == 'hard':
+            thresholded_coeffs.append(pywt.threshold(coeff, threshold_value, mode='hard'))
+    return thresholded_coeffs
 
-# Compute wavelet coefficients
 coeffs = pywt.wavedec(noisy_signal, wavelet, level=level)
+threshold_value = np.std(coeffs[-1]) * np.sqrt(2 * np.log(len(noisy_signal)))  # Universal threshold
+thresholded_coeffs = threshold(coeffs, threshold_value, mode='soft')
+# Compute wavelet coefficients
+
 #print(coeffs.shape)
 def polya_tree_threshold(coeffs, alpha=1.0, beta=1.0, c=2.0):
     """
@@ -29,9 +43,9 @@ def polya_tree_threshold(coeffs, alpha=1.0, beta=1.0, c=2.0):
     c: concentration parameter
     """
     selected_coeffs = [coeffs[0]]
-    
+    selected_coeffs1 = [coeffs[0]]
+ 
     # Handle approximation coefficients
-    
     
     # Process detail coefficients using Polya tree
     for level, coef in enumerate(coeffs[1:], 1):
@@ -57,40 +71,65 @@ def polya_tree_threshold(coeffs, alpha=1.0, beta=1.0, c=2.0):
         mask = coef_prob > threshold.mean()  # Using mean threshold for simplicity
         coef_selected = coef.copy()
         coef_selected[~mask] = 0
-        
+        threshold_std = np.sum(coef_energy)/coef_energy.shape[0]
+        mask1 = coef_energy>threshold_std
         selected_coeffs.append(coef_selected)
-    
-    return selected_coeffs
+        
+
+        coef_selected1 = coef.copy()
+        
+        coef_selected1[~mask1] = 0
+        selected_coeffs1.append(coef_selected1) 
+    return selected_coeffs, selected_coeffs1
 
 # Grid search over concentration parameter
 c_values = np.linspace(1.1, 5.0, 20)
 errors_polya = []
 reconstructions_polya = []
+errors_polya1 = []
+reconstructions_polya1=[]
 
 for c in c_values:
-    selected = polya_tree_threshold(coeffs, c=c)
+    selected, selected1 = polya_tree_threshold(coeffs, c=c)
     rec_signal = pywt.waverec(selected, wavelet)
+    rec_signal1 = pywt.waverec(selected1, wavelet)
     
     # Ensure reconstruction length matches
     if len(rec_signal) > len(t):
         rec_signal = rec_signal[:len(t)]
     elif len(rec_signal) < len(t):
         rec_signal = np.pad(rec_signal, (0, len(t) - len(rec_signal)), mode='edge')
+    if len(rec_signal1) > len(t):
+        rec_signal1 = rec_signal1[:len(t)]
+    elif len(rec_signal) < len(t):
+        rec_signal1 = np.pad(rec_signal1 (0, len(t) - len(rec_signal1)), mode='edge')
     
+   
     error = np.mean((original_signal - rec_signal) ** 2)
+    error1 = np.mean((original_signal - rec_signal1) ** 2)
+
     errors_polya.append(error)
+    errors_polya1.append(error1)
     reconstructions_polya.append(rec_signal)
+    reconstructions_polya1.append(rec_signal1)
 
 opt_index_polya = np.argmin(errors_polya)
 opt_c = c_values[opt_index_polya]
 opt_rec_signal_polya = reconstructions_polya[opt_index_polya]
-
+opt_index_polya1 = np.argmin(errors_polya1)
+opt_c1 = c_values[opt_index_polya1]
+#opt_rec_signal_polya1 = reconstructions_polya1[opt_index_polya1]
+reconstructed_signal = pywt.waverec(thresholded_coeffs, 'db4')
+opt_rec_signal_polya1 = reconstructed_signal
 print('Optimal concentration parameter:', opt_c)
 print('Minimum MSE (Polya):', errors_polya[opt_index_polya])
+print('Minimum MSE (std):', np.mean((original_signal - reconstructed_signal)**2)) 
 
 # Plot grid search results
 plt.figure(figsize=(10, 4))
 plt.plot(c_values, errors_polya, marker='o')
+plt.plot(c_values, errors_polya1, marker='o')
+
 plt.title('Polya Tree Grid Search: MSE vs Concentration Parameter')
 plt.xlabel('Concentration Parameter (c)')
 plt.ylabel('MSE')
@@ -99,26 +138,33 @@ plt.show()
 
 # Plot signal reconstruction and residuals
 residuals_polya = original_signal - opt_rec_signal_polya
-
+residuals_polya1 = original_signal - opt_rec_signal_polya1
+residuals_models = opt_rec_signal_polya - opt_rec_signal_polya1
 plt.figure(figsize=(12, 8))
 
 plt.subplot(3, 1, 1)
-plt.plot(t, original_signal, label='Original Signal', alpha=0.8)
-plt.plot(t, noisy_signal, label='Noisy Signal', alpha=0.4)
+#plt.plot(t, original_signal, label='Original Signal', alpha=0.8)
+#plt.plot(t, noisy_signal, label='Noisy Signal', alpha=0.4)
 plt.plot(t, opt_rec_signal_polya, label='Polya Tree Reconstructed', alpha=0.8)
+plt.plot(t, opt_rec_signal_polya1, label='Standard Reconstructed', alpha=0.8)
+
 plt.title('Original vs Polya Tree Reconstructed Signal')
 plt.legend()
 plt.grid(True)
 
 plt.subplot(3, 1, 2)
 plt.plot(t, residuals_polya, 'r', label='Residuals (Original - Polya Reconstructed)', alpha=0.7)
-plt.title('Residuals (Original - Polya Reconstructed)')
+plt.plot(t, residuals_polya1, 'b', label='Residuals (Original - Standard Reconstructed)', alpha=0.7)
+
+plt.title('Residuals (Original - Reconstructed)')
 plt.legend()
 plt.grid(True)
 
 plt.subplot(3, 1, 3)
-plt.hist(residuals_polya, bins=50, density=True, alpha=0.7)
-plt.title('Histogram of Residuals (Original - Polya Reconstructed)')
+plt.hist(residuals_polya, bins=50, density=True, alpha=0.7, label= 'Polya Tree Reconstruction')
+plt.hist(residuals_polya1, bins=50, density=True, alpha=0.7, label='Standard Reconstruction')
+
+plt.title('Histogram of Residuals (Original - Reconstructed)')
 plt.grid(True)
 
 plt.tight_layout()
