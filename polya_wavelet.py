@@ -18,6 +18,7 @@ noisy_signal = original_signal + np.random.normal(0, 0.1, len(t))
 wavelet = 'db4'
 max_level = pywt.dwt_max_level(len(noisy_signal), pywt.Wavelet(wavelet).dec_len)
 level = min(5, max_level)
+print(level)
 def threshold(coeffs, threshold_value, mode='soft'):
     thresholded_coeffs = []
     for i, coeff in enumerate(coeffs):
@@ -175,13 +176,12 @@ def count_nonzero_coeffs(coeffs_list):
     return sum(np.count_nonzero(c) for c in coeffs_list)
 
 # Get coefficients from both methods
-polya_coeffs = polya_tree_threshold(coeffs, c=opt_c)
-adaptive_coeffs = adaptive_polya_selection(coeffs, opt_fac_refined)
-
+polya_coeffs = polya_tree_threshold(coeffs, c=opt_c)[0]
+#print(polya_coeffs.shape)
 print('\
 Coefficient retention comparison:')
 print('Polya Tree nonzero coefficients:', count_nonzero_coeffs(polya_coeffs))
-print('Adaptive nonzero coefficients:', count_nonzero_coeffs(adaptive_coeffs))
+print('Soft thresholding nonzero coefficients:', count_nonzero_coeffs(thresholded_coeffs))
 
 print('\
 Residuals (Original - Polya Reconstructed) statistics:')
@@ -189,5 +189,12 @@ print('Mean:', np.mean(residuals_polya))
 print('Std:', np.std(residuals_polya))
 print('Min:', np.min(residuals_polya))
 print('Max:', np.max(residuals_polya))
+print('\
+Residuals (Original - Soft thresholding-Reconstructed) statistics:')
+print('Mean:', np.mean(residuals_polya1))
+print('Std:', np.std(residuals_polya1))
+print('Min:', np.min(residuals_polya1))
+print('Max:', np.max(residuals_polya1))
+
 
 print('Done.')
