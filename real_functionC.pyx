@@ -19,10 +19,10 @@ def safe_convert(value):
 
 cdef class RealFunctionC:
 
-    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None):
+    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time'):
         """Initialization"""
         self.func = func
-        
+        self.mode = mode 
         self.expr = expr 
         self.description = str(expr)  # Needed for printing 
         self.regular = False  # 100% useless 
@@ -133,6 +133,14 @@ cdef class RealFunctionC:
 
     cpdef get_domain(self):
         return self.domain
+    
+    cdef time_to_frequency(self, double[:] x, object data):
+        cdef double dt = x[1]-x[0]
+        cdef double fs = 1/dt
+        cdef double[:] f = np.fft.fftfreq(x.shape[0], dt)
+        cdef complex[:] dft = np.fft.fft(data) * dt
+        return f, dft
+        
 
     cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
         if params is None:

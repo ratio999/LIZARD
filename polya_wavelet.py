@@ -10,7 +10,7 @@ t = np.arange(0, 10, 0.01)
 original_signal = (11-t)**(-0.75)*np.sin(20*(11-t)**(5/8))
 #t = t[::-N//10]
 #original_signal = original_signal[::-N//10]
-noisy_signal = original_signal + np.random.normal(0, 0.1, len(t))
+noisy_signal = original_signal + np.random.normal(0, 0.51, len(t))
 
 
 
@@ -19,7 +19,7 @@ wavelet = 'db4'
 max_level = pywt.dwt_max_level(len(noisy_signal), pywt.Wavelet(wavelet).dec_len)
 level = min(5, max_level)
 print(level)
-def threshold(coeffs, threshold_value, mode='hard'):
+def threshold(coeffs, threshold_value, mode='soft'):
     thresholded_coeffs = []
     for i, coeff in enumerate(coeffs):
         if i == 0:  # Skip the approximation coefficients (low-pass component)
@@ -51,7 +51,7 @@ def polya_tree_threshold(coeffs, alpha=1.0, beta=1.0, c=2.0):
     # Process detail coefficients using Polya tree
     for level, coef in enumerate(coeffs[1:], 1):
         # Adjust parameters based on level
-        level_alpha = alpha * ((c) ** level)
+        level_alpha = alpha * (c**level)
         level_beta = beta * (c ** level)
         
         # Normalize coefficients
@@ -148,7 +148,7 @@ plt.subplot(3, 1, 1)
 #plt.plot(t, noisy_signal, label='Noisy Signal', alpha=0.4)
 plt.plot(t, opt_rec_signal_polya, label='Polya Tree Reconstructed', alpha=0.8)
 plt.plot(t, opt_rec_signal_polya1, label='Standard Reconstructed', alpha=0.8)
-
+plt.plot(t, noisy_signal, label='Noisy', alpha=0.4)
 plt.title('Original vs Polya Tree Reconstructed Signal')
 plt.legend()
 plt.grid(True)
