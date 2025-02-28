@@ -6,7 +6,14 @@ import matplotlib.pyplot as plt
 # Define the true dynamics (dx/dt = x^y)
 def true_dynamics(t, x, y):
     return x**y
+G = 6.67430e-11  # Gravitational constant (m^3 kg^-1 s^-2)
+c = 2.998e8      # Speed of light (m/s)
+M_sun = 1.98847e30  # Solar mass (kg)
+chirp_mass = 1.2 * M_sun  # Chirp mass (example value)
 
+# Define the true dynamics (df/dt)
+def true_dynamics(t, x, y):
+    return  x**(y)
 # Generate synthetic data
 t_span = (0, 10)  # Time range
 t_eval = np.linspace(0, 10, 1000)  # Time points
@@ -33,7 +40,7 @@ y_target = dx_dt_noisy.ravel()
 
 # Define the PySR model
 model = PySRRegressor(
-    niterations=100,  # Number of iterations
+    niterations=200,  # Number of iterations
     binary_operators=["+", "-", "*", "/", "^"],  # Allowed operators
     unary_operators=["exp", "log", "sqrt", "cos", "sin"],  # Allowed functions
     populations=20,  # Number of populations
