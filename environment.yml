@@ -9,9 +9,8 @@ dependencies:
   - binutils_impl_linux-64=2.43=h4bf12b8_2
   - bzip2=1.0.8=h4bc722e_7
   - c-ares=1.34.3=hb9d3cd8_1
-  - ca-certificates=2024.12.14=hbcca054_0
+  - ca-certificates=2025.1.31=hbcca054_0
   - cloudpickle=3.1.0=pyhd8ed1ab_1
-  - cmake=3.31.1=hf9cb763_0
   - colorama=0.4.6=pyhd8ed1ab_1
   - cuda-cccl_linux-64=12.6.77=ha770c72_0
   - cuda-cudart-dev_linux-64=12.6.77=h3f2d84a_0
@@ -33,6 +32,7 @@ dependencies:
   - gsl=2.7=he838d99_0
   - hyperopt=0.2.7=pyhd8ed1ab_0
   - impi_rt=2021.13.1=ha770c72_768
+  - joblib=1.4.2=pyhd8ed1ab_1
   - kernel-headers_linux-64=3.10.0=he073ed8_18
   - keyutils=1.6.1=h166bdaf_0
   - krb5=1.21.3=h659f571_0
@@ -79,13 +79,14 @@ dependencies:
   - ncurses=6.5=he02047a_1
   - networkx=3.2.1=pyhd8ed1ab_0
   - numpy=2.0.2=py39h9cb892a_0
-  - openssl=3.4.0=hb9d3cd8_0
+  - openssl=3.4.1=h7b32b05_0
   - pip=24.3.1=pyh8b19718_0
   - py4j=0.10.9.7=pyhd8ed1ab_0
   - python=3.9.20=h13acc7a_1_cpython
   - python_abi=3.9=5_cp39
   - readline=8.2=h8228510_1
   - rhash=1.4.5=hb9d3cd8_0
+  - scikit-learn=1.6.1=py39h4b7350c_0
   - scipy=1.13.1=py39haf93ffa_0
   - setuptools=75.6.0=pyhff2d567_1
   - simpy=4.1.1=pyhd8ed1ab_0
@@ -93,23 +94,39 @@ dependencies:
   - symengine=0.13.0=h3de209a_1
   - sympy=1.13.3=pypyh2585a3b_103
   - sysroot_linux-64=2.17=h4a8ded7_18
+  - threadpoolctl=3.5.0=pyhc1e730c_0
   - tk=8.6.13=noxft_h4845f30_101
   - tqdm=4.67.1=pyhd8ed1ab_0
-  - tzdata=2024b=hc8b5060_0
   - wheel=0.45.1=pyhd8ed1ab_1
   - xz=5.2.6=h166bdaf_0
   - zstd=1.5.6=ha6fb4c9_0
   - pip:
+      - click==8.1.8
+      - cmake==3.31.6
       - contourpy==1.3.0
       - cycler==0.12.1
       - cython==3.0.11
+      - derivative==0.6.3
+      - filelock==3.17.0
       - fonttools==4.54.1
+      - gplearn==0.4.2
+      - importlib-metadata==8.6.1
       - importlib-resources==6.4.5
+      - juliacall==0.9.23
+      - juliapkg==0.1.16
       - kiwisolver==1.4.7
       - matplotlib==3.9.2
       - packaging==24.1
+      - pandas==2.2.3
       - pillow==10.4.0
       - pyparsing==3.1.4
+      - pysindy==1.7.5
+      - pysr==0.19.4
       - python-dateutil==2.9.0.post0
+      - pytz==2025.1
+      - pywavelets==1.6.0
+      - scs==3.2.7.post2
+      - semver==3.0.4
+      - tzdata==2025.1
       - zipp==3.20.2
 prefix: /home/elbardo99/miniconda3/envs/mcmc_koopman
