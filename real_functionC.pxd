@@ -28,8 +28,8 @@ cdef class RealFunctionC:
         dict input_pars, double lambda_reg, str method_str=?)
     cdef sort_params_list(self, list pars)
     cdef get_par_string(self)
-    cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?, 
-    double lambda_reg=?)
+    cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?, double lambda_reg=?) 
+    cdef time_to_frequency(self, double[:] x, object data)
     cpdef get_domain(self) 
     
     cpdef is_param(self) 
