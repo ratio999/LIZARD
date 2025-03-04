@@ -10,7 +10,7 @@ t = np.arange(0, 10, 0.01)
 original_signal = (11-t)**(-0.75)*np.sin(20*(11-t)**(5/8))
 #t = t[::-N//10]
 #original_signal = original_signal[::-N//10]
-noisy_signal = original_signal + np.random.normal(0, 0.51, len(t))
+noisy_signal = original_signal + np.random.normal(0, 1.5, len(t))
 
 
 
@@ -144,18 +144,18 @@ residuals_models = opt_rec_signal_polya - opt_rec_signal_polya1
 plt.figure(figsize=(12, 8))
 
 plt.subplot(3, 1, 1)
-#plt.plot(t, original_signal, label='Original Signal', alpha=0.8)
+plt.plot(t, original_signal, label='Original Signal', alpha=0.8)
 #plt.plot(t, noisy_signal, label='Noisy Signal', alpha=0.4)
 plt.plot(t, opt_rec_signal_polya, label='Polya Tree Reconstructed', alpha=0.8)
-plt.plot(t, opt_rec_signal_polya1, label='Standard Reconstructed', alpha=0.8)
+#plt.plot(t, opt_rec_signal_polya1, label='Standard Reconstructed', alpha=0.8)
 plt.plot(t, noisy_signal, label='Noisy', alpha=0.4)
-plt.title('Original vs Polya Tree Reconstructed Signal')
+plt.title('Polya Tree Reconstructed Signal')
 plt.legend()
 plt.grid(True)
 
 plt.subplot(3, 1, 2)
 plt.plot(t, residuals_polya, 'r', label='Residuals (Original - Polya Reconstructed)', alpha=0.7)
-plt.plot(t, residuals_polya1, 'b', label='Residuals (Original - Standard Reconstructed)', alpha=0.7)
+#plt.plot(t, residuals_polya1, 'b', label='Residuals (Original - Standard Reconstructed)', alpha=0.7)
 
 plt.title('Residuals (Original - Reconstructed)')
 plt.legend()
@@ -163,13 +163,14 @@ plt.grid(True)
 
 plt.subplot(3, 1, 3)
 plt.hist(residuals_polya, bins=50, density=True, alpha=0.7, label= 'Polya Tree Reconstruction')
-plt.hist(residuals_polya1, bins=50, density=True, alpha=0.7, label='Standard Reconstruction')
+#plt.hist(residuals_polya1, bins=50, density=True, alpha=0.7, label='Standard Reconstruction')
 
 plt.title('Histogram of Residuals (Original - Reconstructed)')
 plt.grid(True)
 
 plt.tight_layout()
-plt.show()
+plt.savefig('Polya1.png')
+plt.close()
 
 # Compare coefficient retention between methods
 def count_nonzero_coeffs(coeffs_list):
