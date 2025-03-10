@@ -107,11 +107,14 @@ cdef refresh_params(function_treeC.Tree tree):
 
 
 @cython.boundscheck(True)
-cpdef point_mutation(function_treeC.Tree tree, functions, operations=None):
+cpdef point_mutation(function_treeC.Tree tree, functions, operations=None, function_treeC.Node node_to_mutate=None):
     """Modifica un singolo nodo cambiando la funzione o l'operazione."""
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    cdef function_treeC.Node node_to_mutate = tree.root.select_random_node()
+    
+    if node_to_mutate is None:
+        node_to_mutate = tree.root.select_random_node() 
+    
     cdef str new_func_str
     cdef function_treeC.Node parent = tree.root.find_parent(node_to_mutate)
     if node_to_mutate.is_leaf():
@@ -130,24 +133,32 @@ cpdef point_mutation(function_treeC.Tree tree, functions, operations=None):
         parent.right = node_to_mutate
     '''
     # Aggiorna la struttura dell'albero
-    tree.tree_update(parent)
+    if parent is None:
+        tree.tree_update(tree.root)
+    else:
+        tree.tree_update(parent)
     
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cpdef hoist_mutation(function_treeC.Tree tree):
+cpdef hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_to_lift = None):
     """Replaces subtree with one of its subtrees"""
  
     cdef function_treeC.Node subtree, parent_node, granpa
    
     if not tree.root.is_leaf():
         check=False
-        while not check:
-            subtree = tree.root.select_random_node()
-            parent_node = tree.root.find_parent(subtree)
+        if node_to_lift is None:
+            while not check:
+                subtree = tree.root.select_random_node()
+                parent_node = tree.root.find_parent(subtree)
             
-            check = parent_node is not None
+                check = parent_node is not None
+        else:
+            subtree = node_to_lift
+            parent_node = tree.root.find_parent(subtree)
+            if parent_node is None:
+                pass
         #parent_node = subtree
-        #Still causing issues when subtree is a leaf
         if not subtree.is_leaf():
             parent_node.assign_left(subtree.left)
             parent_node.assign_right(subtree.right)
@@ -338,3 +349,19 @@ def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32
 #Se fai cdef su tutto forse puoi tornare a cpdef nel file .pxd
 #add_node causa segmentation fault
 
+cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune = None):
+    if node_to_prune is None:
+       hoist_mutation(tree)
+       pass
+
+    cdef function_treeC.Node parent = tree.root.find_parent(node_to_prune)  
+    if parent is not None:
+        if parent.right == node_to_prune:
+            hoist_mutation(tree, parent.left)
+        else:
+            hoist_mutation(tree, parent.right)
+    else:
+        pass
+        #point_mutation(tree, node_to_prune)
+
+  
