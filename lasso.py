@@ -1,71 +1,84 @@
 import numpy as np
-from scipy.integrate import solve_ivp
-from pysr import PySRRegressor
 import matplotlib.pyplot as plt
+import pywt
 
-# Define the true dynamics (dx/dt = x^y)
-def true_dynamics(t, x, y):
-    return x**y
-G = 6.67430e-11  # Gravitational constant (m^3 kg^-1 s^-2)
-c = 2.998e8      # Speed of light (m/s)
-M_sun = 1.98847e30  # Solar mass (kg)
-chirp_mass = 1.2 * M_sun  # Chirp mass (example value)
+def generate_signal():
+    t = np.linspace(0, 10, 1000, endpoint=False)
+    signal = (11-t)**(-0.75)*np.sin(20*(11-t)**(5/8))  # 50 Hz + chirp
+    return t, signal
 
-# Define the true dynamics (df/dt)
-def true_dynamics(t, x, y):
-    return  x**(y)
-# Generate synthetic data
-t_span = (0, 10)  # Time range
-t_eval = np.linspace(0, 10, 1000)  # Time points
-x0 = [1.0]  # Initial condition
-y = 11.0/3.0  # Example non-integer exponent
+# Perform Continuous Wavelet Transform (CWT)
+def compute_cwt(signal, scales, wavelet='cmor'):
+    coefficients, frequencies = pywt.cwt(signal, scales, wavelet, sampling_period=1/1000)
+    return coefficients, frequencies
+scales = np.arange(1, 128)     
+t_gw_corrected, signal_gw_corrected = generate_signal()
 
-# Solve the differential equation
-sol = solve_ivp(true_dynamics, t_span, x0, t_eval=t_eval, args=(y,))
+# Perform CWT on the corrected GW signal
+coefficients_gw_corrected, frequencies_gw_corrected = compute_cwt(signal_gw_corrected, scales)
 
-# Extract data
-t = sol.t
-x = sol.y[0]
-dx_dt = true_dynamics(t, x, y)  # True derivative
-
-# Prepare data for PySR
-noise_level = 0.1  # Adjust the noise level (e.g., 10% of the signal)
-dx_dt_noisy = dx_dt + noise_level * np.std(dx_dt) * np.random.randn(len(dx_dt))
-
-# Prepare data for PySR
-X = x.reshape(-1, 1)  # Input: x
-y_target = dx_dt_noisy.ravel() 
-#X = x.reshape(-1, 1)  # Input: x
-#y_target = dx_dt.ravel()  # Target: dx/dt
-
-# Define the PySR model
-model = PySRRegressor(
-    niterations=200,  # Number of iterations
-    binary_operators=["+", "-", "*", "/", "^"],  # Allowed operators
-    unary_operators=["exp", "log", "sqrt", "cos", "sin"],  # Allowed functions
-    populations=20,  # Number of populations
-    population_size=50,  # Size of each population
-    maxsize=20,  # Maximum size of the expression
-    parsimony=0.01,  # Encourages simpler models
-    progress=True,  # Show progress bar
-)
-
-# Fit the model
-model.fit(X, y_target)
-
-# Print the best symbolic expression
-print("Discovered equation:")
-print(model.sympy())
-
-# Predict dx/dt using the discovered equation
-dx_dt_pred = model.predict(X)
-print(dx_dt_noisy.shape)
-# Plot the results
+# Plot the corrected time-frequency representation
 plt.figure(figsize=(10, 6))
-plt.plot(t, dx_dt_noisy, color='blue', alpha=0.6, label='Data')
-plt.plot(t, dx_dt_pred, color='red', linestyle='--', label=''.join(('Predicted: ', str(model.sympy()))))
-plt.xlabel('Time (t)')
-plt.ylabel('df/dt')
-plt.title('Symbolic Regression: True vs Predicted df/dt')
-plt.legend()
+plt.contourf(t_gw_corrected, frequencies_gw_corrected, np.abs(coefficients_gw_corrected), extend='both', cmap='viridis')
+plt.title('Time-Frequency Representation (CWT) for Corrected GW Inspiral Signal', fontsize=20, pad=15)
+plt.xlabel('Time (s)', fontsize=16, labelpad=10)
+plt.ylabel('Frequency (Hz)', fontsize=16, labelpad=10)
+plt.yscale('log')
+plt.colorbar(label='Magnitude')
+plt.grid(True)
+plt.tight_layout()
 plt.show()
+print('Displayed corrected time-frequency representation for GW signal.')
+def plot_frequency_vs_time(t, coefficients, frequencies):
+    # Find the dominant frequency at each time step
+    dominant_frequencies = frequencies[np.argmax(np.abs(coefficients), axis=0)]
+
+    # Plot the dominant frequency as a function of time
+    plt.figure(figsize=(10, 4))
+    plt.plot(t, dominant_frequencies, color='blue')
+    plt.title("Dominant Frequency as a Function of Time")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Frequency (Hz)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# Call the function to plot frequency vs time
+plot_frequency_vs_time(t_gw_corrected, coefficients_gw_corrected, frequencies_gw_corrected)
+signal = signal_gw_corrected
+t = t_gw_corrected
+renorm = max(np.correlate(signal, signal, mode='full'))**0.5
+signal /= renorm
+
+from scipy.signal import hilbert, savgol_filter
+from scipy.interpolate import CubicSpline
+# Define the spline regions
+spline_length = 1000  # Number of samples to spline at the beginning and end
+fs = 16384
+# Create a spline function for the beginning
+x_begin = np.linspace(0, 1, spline_length)
+spline_begin = CubicSpline([0, 1], [0, 1], bc_type=((1, 0), (2, 0)))  # Smooth transition from 0 to 1
+
+# Create a spline function for the end
+x_end = np.linspace(0, 1, spline_length)
+spline_end = CubicSpline([0, 1], [1, 0], bc_type=((1, 0), (2, 0)))  # Smooth transition from 1 to 0
+
+# Apply the spline to the signal
+splined_signal = signal.copy()
+splined_signal[:spline_length] *= spline_begin(x_begin)  # Spline the beginning
+#splined_signal[len(signal)-spline_length:] *= spline_end(x_end)  # Spline the end
+
+analytic_signal = hilbert(splined_signal)
+
+# Compute the instantaneous phase
+instantaneous_phase = np.unwrap(np.angle(analytic_signal))
+
+# Compute the instantaneous frequency
+instantaneous_frequency = np.diff(instantaneous_phase) / (2.0 * np.pi) * fs
+
+plt.plot(t[:-1], instantaneous_frequency)
+#plt.plot(t, frequencies_gw_corrected)
+dominant_frequencies = frequencies_gw_corrected[np.argmax(np.abs(coefficients_gw_corrected), axis=0)]
+#plt.plot(t[:-1], dominant_frequencies[:-1])
+plt.show()
+

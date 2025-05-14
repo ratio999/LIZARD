@@ -475,6 +475,9 @@ cdef class Tree:
         return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
 
 
+cdef lambda_2_tree(object lambda_func, reference_dict=None):
+    "build something for translating a lambda function or AT LEAST A STRING EXPRESSION in a tree "
+    return
 
 
 #cdef --> is cpdef for testing purposes only

@@ -4,6 +4,7 @@ import sympy as sp
 
 
 cdef class RealFunctionC:
+    cdef str mode
     cdef object func  # Funzione callable in Python
     cdef object expr, symbols # Espressione simbolica
     cdef bint regular  # Flag per la regolarizzazione

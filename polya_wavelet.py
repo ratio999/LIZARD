@@ -10,14 +10,14 @@ t = np.arange(0, 10, 0.01)
 original_signal = (11-t)**(-0.75)*np.sin(20*(11-t)**(5/8))
 #t = t[::-N//10]
 #original_signal = original_signal[::-N//10]
-noisy_signal = original_signal + np.random.normal(0, 1.5, len(t))
+noisy_signal = original_signal + np.random.normal(0, 1.8, len(t))
 
 
 
 # Wavelet transform parameters
 wavelet = 'db4'
 max_level = pywt.dwt_max_level(len(noisy_signal), pywt.Wavelet(wavelet).dec_len)
-level = min(5, max_level)
+level = min(6, max_level)
 print(level)
 def threshold(coeffs, threshold_value, mode='soft'):
     thresholded_coeffs = []
@@ -37,7 +37,7 @@ thresholded_coeffs = threshold(coeffs, threshold_value, mode='soft')
 # Compute wavelet coefficients
 
 #print(coeffs.shape)
-def polya_tree_threshold(coeffs, alpha=1.0, beta=1.0, c=2.0):
+def polya_tree_threshold(coeffs, max_level, alpha=1.0, beta=1.0, c=2.0):
     """
     Implement Polya tree based thresholding
     alpha, beta: parameters for Beta distribution
@@ -51,8 +51,8 @@ def polya_tree_threshold(coeffs, alpha=1.0, beta=1.0, c=2.0):
     # Process detail coefficients using Polya tree
     for level, coef in enumerate(coeffs[1:], 1):
         # Adjust parameters based on level
-        level_alpha = alpha * (c**level)
-        level_beta = beta * (c ** level)
+        level_alpha = alpha * (1/c) **( -level)
+        level_beta = beta * (1/c) ** (-level)
         
         # Normalize coefficients
         coef_energy = np.abs(coef)
@@ -60,11 +60,11 @@ def polya_tree_threshold(coeffs, alpha=1.0, beta=1.0, c=2.0):
             coef_prob = coef_energy / np.sum(coef_energy)
         else:
             coef_prob = np.zeros_like(coef_energy)
-            
-        # Calculate posterior parameters
-        post_alpha = level_alpha + coef_prob * len(coef)
-        post_beta = level_beta + (1 - coef_prob) * len(coef)
         
+        # Calculate posterior parameters
+        post_alpha = level_alpha + coef_prob * np.sum(coef_energy)#len(coef)
+        post_beta = level_beta + (1 - coef_prob) * np.sum(coef_energy)#len(coef)
+        #print(level_alpha, np.mean(post_alpha))
         # Calculate threshold using posterior mean
         threshold = post_alpha / (post_alpha + post_beta)
         
@@ -91,7 +91,7 @@ errors_polya1 = []
 reconstructions_polya1=[]
 
 for c in c_values:
-    selected, selected1 = polya_tree_threshold(coeffs, c=c)
+    selected, selected1 = polya_tree_threshold(coeffs, level, c=c)
     rec_signal = pywt.waverec(selected, wavelet)
     rec_signal1 = pywt.waverec(selected1, wavelet)
     
@@ -143,41 +143,50 @@ residuals_polya1 = original_signal - opt_rec_signal_polya1
 residuals_models = opt_rec_signal_polya - opt_rec_signal_polya1
 plt.figure(figsize=(12, 8))
 
-plt.subplot(3, 1, 1)
-plt.plot(t, original_signal, label='Original Signal', alpha=0.8)
+plt.subplot(4, 1, 1)
+plt.plot(t, original_signal, label='Original Signal', alpha=0.5)
 #plt.plot(t, noisy_signal, label='Noisy Signal', alpha=0.4)
-plt.plot(t, opt_rec_signal_polya, label='Polya Tree Reconstructed', alpha=0.8)
+plt.plot(t, opt_rec_signal_polya, label='Polya Tree Reconstructed', alpha=0.9)
 #plt.plot(t, opt_rec_signal_polya1, label='Standard Reconstructed', alpha=0.8)
 plt.plot(t, noisy_signal, label='Noisy', alpha=0.4)
 plt.title('Polya Tree Reconstructed Signal')
-plt.legend()
+plt.legend(loc='upper left')
 plt.grid(True)
 
-plt.subplot(3, 1, 2)
+plt.subplot(4, 1, 2)
 plt.plot(t, residuals_polya, 'r', label='Residuals (Original - Polya Reconstructed)', alpha=0.7)
-#plt.plot(t, residuals_polya1, 'b', label='Residuals (Original - Standard Reconstructed)', alpha=0.7)
+plt.plot(t, residuals_polya1, 'b', label='Residuals (Original - Standard Reconstructed)', alpha=0.7)
 
 plt.title('Residuals (Original - Reconstructed)')
 plt.legend()
 plt.grid(True)
 
-plt.subplot(3, 1, 3)
+plt.subplot(4, 1, 3)
 plt.hist(residuals_polya, bins=50, density=True, alpha=0.7, label= 'Polya Tree Reconstruction')
-#plt.hist(residuals_polya1, bins=50, density=True, alpha=0.7, label='Standard Reconstruction')
+plt.hist(residuals_polya1, bins=50, density=True, alpha=0.7, label='Standard Reconstruction')
 
 plt.title('Histogram of Residuals (Original - Reconstructed)')
 plt.grid(True)
-
+fftres = np.fft.fft(residuals_polya)*0.01
+fftres1 = np.fft.fft(residuals_polya1)*0.01
+f = np.zeros_like(fftres)
+df = 1/10
+for i in range(0, fftres.shape[0]):
+    f[i] += i*df 
+plt.subplot(4,1,4)
+plt.plot(f[:100], fftres[:100]*np.conjugate(fftres)[:100], label='Polya')
+plt.plot(f[:100], fftres1[:100]*np.conjugate(fftres1)[:100], label='Standard')
+plt.legend()
 plt.tight_layout()
-plt.savefig('Polya1.png')
-plt.close()
+plt.show()
+#plt.close()
 
 # Compare coefficient retention between methods
 def count_nonzero_coeffs(coeffs_list):
     return sum(np.count_nonzero(c) for c in coeffs_list)
 
 # Get coefficients from both methods
-polya_coeffs = polya_tree_threshold(coeffs, c=opt_c)[0]
+polya_coeffs = polya_tree_threshold(coeffs, level, c=opt_c)[0]
 #print(polya_coeffs.shape)
 print('\
 Coefficient retention comparison:')
