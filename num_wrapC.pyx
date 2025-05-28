@@ -12,12 +12,12 @@ from cpython.pycapsule cimport PyCapsule_New, PyCapsule_GetPointer
 from cpython.ref cimport Py_INCREF, Py_DECREF
 
 cdef void* apython_object_to_void_ptr(object py_obj):
-    """Converte un oggetto Python in un puntatore void*"""
+    '''Convert Python object to void* pointer'''
     Py_INCREF(py_obj)  # Incrementa il reference count per evitare la garbage collection
     return <void*> py_obj  # Cast esplicito a void*
 
 cdef object avoid_ptr_to_python_object(void* ptr):
-    """Riconverte un puntatore void* in un oggetto Python"""
+    '''Convert void* pointer to Python object'''
     return <object> ptr  # Cast diretto da void* a object
 
 
