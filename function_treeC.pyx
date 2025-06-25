@@ -642,22 +642,16 @@ cpdef new_par(list existing_params, str user_choice=None):
     user_choice = user_choice if user_choice else 'a'
     return f"{user_choice}0"
 
-# cython: language_level=3
-import sympy as sp
-cimport real_functionC
-from function_treeC cimport Node, Tree
-
-
-cdef expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain):
+cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list):
     """
-    Converte un'espressione SymPy in un albero Tree (Cython).
+    Sympy expr to Tree
 
     Parameters:
-        expr (sympy.Expr): Espressione simbolica da convertire.
-        domain (list): Dominio della funzione.
+        expr (sympy.Expr): expression to translate
+        domain: function domain
 
     Returns:
-        Tree: Albero corrispondente.
+        Tree
     """
     cdef Tree left_tree, right_tree, arg_tree
     cdef Node root_node
@@ -665,49 +659,47 @@ cdef expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain):
 
     if isinstance(expr, sp.Symbol):
         func = real_functionC.RealFunctionC.from_string(str(expr), domain)
-        root_node = Node(func)
-        return Tree(root_node)
+        root_node = Node(function = func)
+        return Tree(root_node.depth, root_node, function_list, root_node.domain)
 
     if isinstance(expr, sp.Number):
         func = real_functionC.RealFunctionC.from_string(str(expr), domain)
         root_node = Node(func)
-        return Tree(root_node)
+        return Tree(root_node.depth, root_node, function_list, root_node.domain)
 
-    # Somma
     if isinstance(expr, sp.Add):
-        left_tree = expr_to_tree(expr.args[0], domain)
-        right_tree = expr_to_tree(expr.args[1], domain)
+        left_tree = expr_to_tree(expr.args[0], domain, function_list)
+        right_tree = expr_to_tree(expr.args[1], domain, function_list))
         root_func = left_tree.root.get_fun() + right_tree.root.get_fun()
         root_node = Node(root_func, left_tree.root, right_tree.root, "+")
-        return Tree(root_node)
+        return Tree(root_node.depth, root_node, function_list, root_node.domain)
 
-    # Moltiplicazione
     if isinstance(expr, sp.Mul):
         left_tree = expr_to_tree(expr.args[0], domain)
         right_tree = expr_to_tree(expr.args[1], domain)
         root_func = left_tree.root.get_fun() * right_tree.root.get_fun()
         root_node = Node(root_func, left_tree.root, right_tree.root, "*")
-        return Tree(root_node)
+        return Tree(root_node.depth, root_node, function_list, root_node.domain)
 
-    # Potenza
     if isinstance(expr, sp.Pow):
         left_tree = expr_to_tree(expr.args[0], domain)
         right_tree = expr_to_tree(expr.args[1], domain)
         root_func = left_tree.root.get_fun() ** right_tree.root.get_fun()
         root_node = Node(root_func, left_tree.root, right_tree.root, "**")
-        return Tree(root_node)
+        return Tree(root_node.depth, root_node, function_list, root_node.domain)
 
-    # Funzioni unarie (sin, cos, exp, log, ecc.)
     if isinstance(expr, sp.Function):
         func_name = expr.func.__name__
         arg_tree = expr_to_tree(expr.args[0], domain)
-        if func_name in ["sin", "cos", "exp", "log"]:
+        if func_name in function_list: 
             composed_func = real_functionC.RealFunctionC.from_string(func_name, domain)
             root_func = composed_func.compose(arg_tree.root.get_fun())
             root_node = Node(root_func, composed_func, arg_tree.root, "o")
-            return Tree(root_node)
+            return Tree(root_node.depth, root_node, function_list, root_node.domain)
         else:
-            raise NotImplementedError(f"Funzione {func_name} non supportata nella conversione.")
+            raise NotImplementedError(f"Conversion {func_name} not supported") 
 
-    raise NotImplementedError(f"Tipo di espressione {type(expr)} non gestito.")
+    raise NotImplementedError(f" Expression{type(expr)} not supported.")
 
+def expr_to_tree(expr, domain):
+    return _expr_to_tree(expr, domain)
