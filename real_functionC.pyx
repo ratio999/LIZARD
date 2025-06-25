@@ -332,6 +332,7 @@ cdef class RealFunctionC:
     def compose(self, RealFunctionC other):
         """Composition of two RealFunctions (f1(f2(x)))."""
         cdef object x_sym = sp.symbols('x')
+        print('IN COMPOSE: ', x_sym, other.get_description())
         cdef object new_expr = self.expr.subs(x_sym, other.expr)
         if self.is_param():
             new_expr = self.expr * other.expr
