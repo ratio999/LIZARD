@@ -119,7 +119,7 @@ cpdef build_tree(int depth, list functions,
 
 cdef parameter_parser(int Npars)
 
-cpdef new_par(list existing_params, str user_choice=?)
+cdef new_par(list existing_params, str user_choice=?)
 
 cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list, dict params_used=?)
 

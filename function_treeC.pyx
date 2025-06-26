@@ -621,9 +621,9 @@ cdef parameter_parser(int Npars):
     return parameters
 
 #Naming parameters requires fix!    
-cpdef new_par(list existing_params, str user_choice=None):
+cdef new_par(list existing_params, str user_choice=None):
     '''Add a new parameter named with a specific logic'''
-    
+    existing_params = [item for sublist in existing_params for item in (sublist if isinstance(sublist, list) else [sublist])]
     if len(existing_params) > 0:
         param_pattern = re.compile(r"([a-zA-Z]+)(\d+)")
         param_names = [param_pattern.match(param).groups()[0] for param in existing_params if param_pattern.match(param)]
@@ -659,10 +659,15 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
     
     if params_used is None:
         params_used = {}
-    
+    print(params_used.values()) 
     if expr.is_Number:
         param_name = new_par(list(params_used.values()))
-        params_used[str(expr)] = param_name
+        print(param_name)
+        if str(expr) not in params_used: 
+            params_used[str(expr)] = [param_name]
+        else:
+            params_used[str(expr)].append(param_name)
+ 
         root_node = Node(real_functionC.RealFunctionC.from_string(param_name, domain))
         root_node.set_value(np.float64(expr))
         return Tree(0, function_list, domain, root_node)
