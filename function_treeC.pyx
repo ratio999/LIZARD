@@ -690,17 +690,18 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
 
     if isinstance(expr, sp.Function):
         func_name = ''.join((expr.func.__name__, '(x)'))
-        print('NAME: ', func_name)i
-        root_function = real_functionC.RealFunctionC.from_string(func_name, domain) 
-        if len(expr.args)==1 and expr.args[0] in expr.free_symbols:
-            root_node = Node(root_function)
-            return Tree(root_node.node_depth, function_list, domain, root_node)
-        arg_tree = _expr_to_tree(expr.args[0], domain, function_list)
-        if func_name in function_list: 
+        print('NAME: ', func_name)
+        if func_name in function_list:
+            root_function = real_functionC.RealFunctionC.from_string(func_name, domain) 
+            if len(expr.args)==1 and expr.args[0] in expr.free_symbols:
+                root_node = Node(root_function)
+                return Tree(0, function_list, domain, root_node)
+            arg_tree = _expr_to_tree(expr.args[0], domain, function_list)
             composed_function = root_function.compose(arg_tree.root.get_fun())
             #make subnode for composed_func
+             
             print('last stage: ', composed_function, root_function, arg_tree)
-            root_node = Node(composed_function, root_function, arg_tree.root, "o")
+            root_node = Node(composed_function, Node(root_function), arg_tree.root, "o")
             return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
         else:
             raise NotImplementedError(f"Conversion {func_name} not supported") 
