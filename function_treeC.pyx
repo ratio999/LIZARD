@@ -642,7 +642,7 @@ cpdef new_par(list existing_params, str user_choice=None):
     user_choice = user_choice if user_choice else 'a'
     return f"{user_choice}0"
 
-cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list):
+cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list, dict params_used = None):
     """
     Sympy expr to Tree
 
@@ -656,34 +656,49 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
     cdef Tree left_tree, right_tree, arg_tree
     cdef Node root_node
     cdef real_functionC.RealFunctionC func, root_func, composed_func
+    
+    if params_used is None:
+        params_used = {}
+    
+    if expr.is_Number:
+        param_name = new_par(list(params_used.values()))
+        params_used[str(expr)] = param_name
+        root_node = Node(real_functionC.RealFunctionC.from_string(param_name, domain))
+        root_node.set_value(np.float64(expr))
+        return Tree(0, function_list, domain, root_node)
 
     if isinstance(expr, sp.Symbol):
-        func = real_functionC.RealFunctionC.from_string(str(expr), domain)
-        root_node = Node(function = func)
-        return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
+        symbol_str = str(expr)
+        if symbol_str == 'x':
+            func = real_functionC.RealFunctionC.from_string(str(expr), domain)
+            root_node = Node(function = func)
+        else:
+            if symbol_str not in params_used:
+                param_name = new_par(list(params_used.values()))
+                params_used[symbol_str] = param_name
+            else:
+                param_name = params_used[symbol_str]
+            root_node = Node(real_functionC.RealFunctionC.from_string(param_name, domain))
 
-    if isinstance(expr, sp.Number):
-        func = real_functionC.RealFunctionC.from_string(str(expr), domain)
-        root_node = Node(func)
         return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
 
     if isinstance(expr, sp.Add):
-        left_tree = _expr_to_tree(expr.args[0], domain, function_list)
-        right_tree = _expr_to_tree(expr.args[1], domain, function_list)
+        left_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
+        right_tree = _expr_to_tree(expr.args[1], domain, function_list, params_used)
         root_func = left_tree.root.get_fun() + right_tree.root.get_fun()
         root_node = Node(root_func, left_tree.root, right_tree.root, "+")
         return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
 
     if isinstance(expr, sp.Mul):
-        left_tree = _expr_to_tree(expr.args[0], domain, function_list)
-        right_tree = _expr_to_tree(expr.args[1], domain, function_list)
+        left_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
+        right_tree = _expr_to_tree(expr.args[1], domain, function_list, params_used)
         root_func = left_tree.root.get_fun() * right_tree.root.get_fun()
         root_node = Node(root_func, left_tree.root, right_tree.root, "*")
         return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
 
     if isinstance(expr, sp.Pow):
-        left_tree = _expr_to_tree(expr.args[0], domain, function_list)
-        right_tree = _expr_to_tree(expr.args[1], domain, function_list)
+        left_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
+        right_tree = _expr_to_tree(expr.args[1], domain, function_list, params_used)
         root_func = left_tree.root.get_fun() ** right_tree.root.get_fun()
         root_node = Node(root_func, left_tree.root, right_tree.root, "**")
         return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
@@ -696,7 +711,7 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
             if len(expr.args)==1 and expr.args[0] in expr.free_symbols:
                 root_node = Node(root_function)
                 return Tree(0, function_list, domain, root_node)
-            arg_tree = _expr_to_tree(expr.args[0], domain, function_list)
+            arg_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
             composed_function = root_function.compose(arg_tree.root.get_fun())
             #make subnode for composed_func
              
@@ -710,3 +725,4 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
 
 def expr_to_tree(expr, domain, function_list):
     return _expr_to_tree(expr, domain, function_list)
+
