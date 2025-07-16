@@ -16,7 +16,7 @@ cdef class MCMCWalker:
                  cnp.ndarray[cnp.float64_t, ndim=1] data, double[:] T, int size,
                  int[:] depth, list funcs, object node_list = None, int Npars=0,
                  int value = 1, object operations = None, parallel=False, int max_iter = 1000,
-                 bint verbose=False):
+                 bint verbose=False, dict gp_probabilities = None):
         self.grove = groveC.Grove(x, T, size, depth, funcs, node_list, 
                            Npars, value, operations) 
         self.data = data
@@ -24,17 +24,26 @@ cdef class MCMCWalker:
         self.parallel_bint = parallel
         self.max_iter = max_iter
         self.verbose = verbose
-    
+        if gp_probabilities is None:
+            self.gp_probabilities = {'root_replacement': 0.05, 
+                                     'mutation': 0.2, 
+                                     'crossover':0.2,
+                                     'point':0.25, 
+                                     'hoist': 0.15,
+                                     'addition': 0.15}
+        else:
+            self.gp_probabilities = gp_probabilities
+
     cdef evolve(self, int i):
         cdef function_treeC.Tree current_tree = copy.deepcopy(self.grove.trees[i])
         cdef function_treeC.Tree old_tree = copy.deepcopy(self.grove.trees[i])
- 
         cdef  function_treeC.Tree other_tree
         
         random.seed(i)
-        cdef int move_type = random.choice([0, 1, 2, 3, 4]) 
-            
-        if move_type == 0:
+        cdef float move_type = np.random.uniform((0,1))
+        if move_type < self.gp_probabilities[0]:     
+            cgp.reset_tree(current_tree) #to define reset tree in gp_moves
+        if move_type >=self.gp_probabilities[0] and move_type < self.gp_probabilities[0]+ self.gp_probabilities[1]
             cgp.subtree_mutation(current_tree, self.grove.funcs)
         elif move_type == 1:
             random.seed(i**2 + 1000)
