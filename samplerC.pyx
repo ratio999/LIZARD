@@ -41,10 +41,13 @@ cdef class MCMCWalker:
             print('Unnormalized probabilities provided. Normalizing...')
             for item in gp_probabilities.items():
                 item /= norm
+        int i = 0
+        cdef list _cgp_ops_list = [cgp.rr, cgp.subtree_mutation, cgp.subtree_crossover, cgp.point_mutation, cgp.hoist_mutation, cgp.add_node]
         for key in self.gp_probabilities.keys():
-            self.op_range[key] = self.gp_probabilities[key] + opsum
+            self.op_range[key] = [opsum, self.gp_probabilities[key] + opsum]
             opsum += self.gp_probabilities[key]
-        
+            self._lambda_operations[key] = _cgp_ops_list[i]
+            i += 1
 
     cdef evolve(self, int i):
         cdef function_treeC.Tree current_tree = copy.deepcopy(self.grove.trees[i])
@@ -52,6 +55,9 @@ cdef class MCMCWalker:
         cdef  function_treeC.Tree other_tree
         random.seed(i)
         cdef float move_type = np.random.uniform((0,1))
+        for key in self.op_range.keys():
+            if move_type in range(self.op_range[key][0],self.op_range[key][1]):
+                next_move = self._lambda_operations[key]            #TODO: define cdef function using next_move
         if move_type < self.gp_probabilities[0]:     
             cgp.reset_tree(current_tree) #to define reset tree in gp_moves
         if move_type >=self.gp_probabilities[0] and move_type < self.gp_probabilities[0]+ self.gp_probabilities[1]
