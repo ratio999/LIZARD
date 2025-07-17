@@ -24,21 +24,32 @@ cdef class MCMCWalker:
         self.parallel_bint = parallel
         self.max_iter = max_iter
         self.verbose = verbose
-        if gp_probabilities is None:
-            self.gp_probabilities = {'root_replacement': 0.05, 
+        self.standard_probabilities ={'root_replacement': 0.05, 
                                      'mutation': 0.2, 
                                      'crossover':0.2,
                                      'point':0.25, 
                                      'hoist': 0.15,
                                      'addition': 0.15}
+  
+        if gp_probabilities is None:
+            self.gp_probabilities = self.standard_probabilities
         else:
             self.gp_probabilities = gp_probabilities
+        cdef float opsum = 0.0
+        cdef float norm = sum(self.gp_probabilities.items())
+        if norm != 1.0:
+            print('Unnormalized probabilities provided. Normalizing...')
+            for item in gp_probabilities.items():
+                item /= norm
+        for key in self.gp_probabilities.keys():
+            self.op_range[key] = self.gp_probabilities[key] + opsum
+            opsum += self.gp_probabilities[key]
+        
 
     cdef evolve(self, int i):
         cdef function_treeC.Tree current_tree = copy.deepcopy(self.grove.trees[i])
         cdef function_treeC.Tree old_tree = copy.deepcopy(self.grove.trees[i])
         cdef  function_treeC.Tree other_tree
-        
         random.seed(i)
         cdef float move_type = np.random.uniform((0,1))
         if move_type < self.gp_probabilities[0]:     
