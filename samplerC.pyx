@@ -41,13 +41,12 @@ cdef class MCMCWalker:
             print('Unnormalized probabilities provided. Normalizing...')
             for item in gp_probabilities.items():
                 item /= norm
-        int i = 0
+        cdef int i = 0
         cdef list _cgp_ops_list = [cgp.rr, cgp.subtree_mutation, cgp.subtree_crossover, cgp.point_mutation, cgp.hoist_mutation, cgp.add_node]
-        for key in self.gp_probabilities.keys():
+        for i, key in enumerate(self.gp_probabilities.keys()):
             self.op_range[key] = [opsum, self.gp_probabilities[key] + opsum]
             opsum += self.gp_probabilities[key]
-            self._lambda_operations[key] = _cgp_ops_list[i]
-            i += 1
+            #self._lambda_operations[key] = _cgp_ops_list[i]
 
     cdef evolve(self, int i):
         cdef function_treeC.Tree current_tree = copy.deepcopy(self.grove.trees[i])
@@ -57,24 +56,9 @@ cdef class MCMCWalker:
         cdef float move_type = np.random.uniform((0,1))
         for key in self.op_range.keys():
             if move_type in range(self.op_range[key][0],self.op_range[key][1]):
-                next_move = self._lambda_operations[key]            #TODO: define cdef function using next_move
-        if move_type < self.gp_probabilities[0]:     
-            cgp.reset_tree(current_tree) #to define reset tree in gp_moves
-        if move_type >=self.gp_probabilities[0] and move_type < self.gp_probabilities[0]+ self.gp_probabilities[1]
-            cgp.subtree_mutation(current_tree, self.grove.funcs)
-        elif move_type == 1:
-            random.seed(i**2 + 1000)
-            if random.choice([False, True]):
-                other_tree = copy.deepcopy(self.grove.trees[i+1]) if i+1 < self.grove.size else copy.deepcopy(self.grove.trees[i-1])
-            else:
-                other_tree = copy.deepcopy(self.grove.trees[i-1]) if i != 0 else copy.deepcopy(self.grove.trees[i+1])
-            cgp.subtree_crossover(current_tree, other_tree)
-        elif move_type == 2:
-            cgp.point_mutation(current_tree, self.grove.funcs, self.grove.operations)
-        elif move_type == 3:
-            cgp.hoist_mutation(current_tree)
-        else:
-            cgp.add_node(current_tree, self.grove.funcs, self.grove.operations)
+                next_move = key            #TODO: define cdef function using next_move
+       self.move(next_move, current_tree) 
+
         current_tree.compute_posterior_tree(self.data)
         cdef double old_posterior = self.grove.trees[i].root.posterior 
         cdef double proposed_posterior = current_tree.root.posterior 
@@ -86,6 +70,26 @@ cdef class MCMCWalker:
         else:
             return old_tree
     
+    cdef move(object move_type, function_treeC.Tree current_tree):
+        if move_type == 'root_replacement' 
+            cgp.reset_tree(current_tree) #to define reset tree in gp_moves
+        if move_type == 'mutation'
+            cgp.subtree_mutation(current_tree, self.grove.funcs)
+        elif move_type == crossover:
+            random.seed(i**2 + 1000)
+            if random.choice([False, True]):
+                other_tree = copy.deepcopy(self.grove.trees[i+1]) if i+1 < self.grove.size else copy.deepcopy(self.grove.trees[i-1])
+            else:
+                other_tree = copy.deepcopy(self.grove.trees[i-1]) if i != 0 else copy.deepcopy(self.grove.trees[i+1])
+            cgp.subtree_crossover(current_tree, other_tree)
+        elif move_type == 'point':
+            cgp.point_mutation(current_tree, self.grove.funcs, self.grove.operations)
+        elif move_type == 'hoist':
+            cgp.hoist_mutation(current_tree)
+        elif move_type = 'addition' 
+            cgp.add_node(current_tree, self.grove.funcs, self.grove.operations)
+        
+
     cdef print_best_tree(self):
         cdef int j = np.argsort(self.grove.posteriors)
         print(self.grove.trees[j])
