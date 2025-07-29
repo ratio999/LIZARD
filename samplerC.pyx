@@ -24,6 +24,8 @@ cdef class MCMCWalker:
         self.parallel_bint = parallel
         self.max_iter = max_iter
         self.verbose = verbose
+        self.funcs=funcs
+        self.operations = operations
         self.standard_probabilities ={'root_replacement': 0.05, 
                                      'mutation': 0.2, 
                                      'crossover':0.2,
@@ -35,34 +37,42 @@ cdef class MCMCWalker:
             self.gp_probabilities = self.standard_probabilities
         else:
             self.gp_probabilities = gp_probabilities
+        
         cdef float opsum = 0.0
         cdef float norm = sum(self.gp_probabilities.items())
+        
         if norm != 1.0:
             print('Unnormalized probabilities provided. Normalizing...')
             for item in gp_probabilities.items():
                 item /= norm
+        
         cdef int i = 0
-        cdef list _cgp_ops_list = [cgp.rr, cgp.subtree_mutation, cgp.subtree_crossover, cgp.point_mutation, cgp.hoist_mutation, cgp.add_node]
+        
         for i, key in enumerate(self.gp_probabilities.keys()):
-            self.op_range[key] = [opsum, self.gp_probabilities[key] + opsum]
+            self.op_range[opsum] = key 
             opsum += self.gp_probabilities[key]
             #self._lambda_operations[key] = _cgp_ops_list[i]
 
     cdef evolve(self, int i):
+        
         cdef function_treeC.Tree current_tree = copy.deepcopy(self.grove.trees[i])
         cdef function_treeC.Tree old_tree = copy.deepcopy(self.grove.trees[i])
-        cdef  function_treeC.Tree other_tree
-        random.seed(i)
+        
+        np.random.seed(i)
+        
         cdef float move_type = np.random.uniform((0,1))
-        for key in self.op_range.keys():
-            if move_type in range(self.op_range[key][0],self.op_range[key][1]):
-                next_move = key            #TODO: define cdef function using next_move
-       self.move(next_move, current_tree) 
+        
+        lesses = [v for v in op_range.keys() if v <= move_type]
+        
+        cdef float move = max(lesses)
+        cdef str selected_move = self.op_range[move] 
+        
+        cgp._operation_call(selected_move, current_tree, self.funcs, self.operations)
 
-        current_tree.compute_posterior_tree(self.data)
         cdef double old_posterior = self.grove.trees[i].root.posterior 
         cdef double proposed_posterior = current_tree.root.posterior 
         cdef double acceptance_ratio = np.exp((proposed_posterior - old_posterior) / self.grove.T[i])
+        
         np.random.seed(i*1000 + int(MPI.Wtime()*1000))
 
         if acceptance_ratio > np.random.rand():
