@@ -349,6 +349,14 @@ def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32
 #Se fai cdef su tutto forse puoi tornare a cpdef nel file .pxd
 #add_node causa segmentation fault
 
+cpdef root_replacement(function_treeC.Tree tree):
+    cdef int depth = tree.depth
+    cdef object x = tree.domain
+    cdef list funcs = tree.funcs
+    cdef function_treeC.Tree new_tree = function_treeC.Tree(depth, funcs, x)
+    tree = new_tree
+    tree.tree_update(tree.root) #RIGUARDA QUESTO METODO
+
 cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune = None):
     if node_to_prune is None:
        hoist_mutation(tree)

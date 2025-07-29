@@ -14,4 +14,5 @@ cpdef add_node(function_treeC.Tree tree, functions, operations=?, random_depth=?
 #cpdef find_parent(root, child)
 #cpdef compute_subtree_size(node)
 #cpdef generate_subtree_with_size(size, functions, x)
+cpdef root_replacement(function_treeC.Tree tree)
 cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune=?)

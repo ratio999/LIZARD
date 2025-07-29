@@ -22,3 +22,6 @@ cdef class Grove:
 
     cdef compute_posteriors(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     
+    cdef posterior_ranked_trees(self)
+
+    cdef posterior_ranked_neighbours(self, int index)
