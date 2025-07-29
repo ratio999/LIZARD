@@ -363,18 +363,3 @@ cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune = N
     else:
         pass
         #point_mutation(tree, node_to_prune)
-
-cpdef _operation_call(str selected_move, function_treeC.Tree current_tree, list functions, list operations):
-    if selected_move == 'root_replacement':
-        root_replacement(current_tree)
-    elif selected_move == 'mutation':
-        subtree_mutation(current_tree, functions, random_depth=False)
-    elif selected_move == 'point':
-        point_mutation(current_tree, functions, operations)
-    elif selected_move == 'hoist':
-        hoist_mutation(current_tree)
-    elif selected_move == 'addition':
-        add_node(current_tree, functions, operations, random_depth=False)
-    elif selected_move == 'crossover':
-        subtree_crossover(current_tree, parent2)
-

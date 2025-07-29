@@ -59,6 +59,17 @@ cdef class Grove:
         for i in range (0, self.size):
             self.trees[i].compute_posterior_tree(y)
             self.root_posteriors[i] = self.trees[i].root.posterior
+    
+    cdef posterior_ranked_trees(self):
+        cdef object posterior_map = np.argsort(np.array(self.root_posteriors))
+        cdef int j
+        return [self.trees[j] for j in posterior_map]
+
+    cdef posterior_ranked_neighbours(self, int index):
+        cdef int j
+        cdef list sub_root_posteriors = [self.root_posteriors[j] for j in range(0,self.size) if j != index] 
+        cdef object posterior_map = np.argsort(np.array(sub_root_posteriors))
+        return [self.trees[j] for j in posterior_map]
     '''
     cdef distribute(self, comm):
         if rank==0:

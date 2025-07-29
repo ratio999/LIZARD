@@ -57,7 +57,7 @@ cdef class MCMCWalker:
         
         cdef function_treeC.Tree current_tree = copy.deepcopy(self.grove.trees[i])
         cdef function_treeC.Tree old_tree = copy.deepcopy(self.grove.trees[i])
-        
+        cdef functino_treeC.Tree parent2 
         np.random.seed(i)
         
         cdef float move_type = np.random.uniform((0,1))
@@ -67,7 +67,20 @@ cdef class MCMCWalker:
         cdef float move = max(lesses)
         cdef str selected_move = self.op_range[move] 
         
-        cgp._operation_call(selected_move, current_tree, self.funcs, self.operations)
+        if selected_move == 'root_replacement':
+            cgp.root_replacement(current_tree)
+        elif selected_move == 'mutation':
+            cgp.subtree_mutation(current_tree, functions, random_depth=False)
+        elif selected_move == 'point':
+            cgp.point_mutation(current_tree, functions, operations)
+        elif selected_move == 'hoist':
+            cgp.hoist_mutation(current_tree)
+        elif selected_move == 'addition':
+            cgp.add_node(current_tree, functions, operations, random_depth=False)
+        elif selected_move == 'crossover':
+            post_ranked_neighbours = self.grove.posterior_ranked_neighbours(i)
+            parent2 = copy.deepcopy(post_ranked_neighbours[-1])
+            cgp.subtree_crossover(current_tree, parent2)
 
         cdef double old_posterior = self.grove.trees[i].root.posterior 
         cdef double proposed_posterior = current_tree.root.posterior 
