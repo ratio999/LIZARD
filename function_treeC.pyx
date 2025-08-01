@@ -473,9 +473,32 @@ cdef class Tree:
         str method_str='L-BFGS-B'):
         cdef dict input_pars = self.name_values
         return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
-
-
-
+    
+    cdef _root_replacement(self, object replacement=None, int replace_all = 0, dict kwargs= None, str op = None):
+        if replace_all==0:
+            if isinstance(replacement, sp.core.expr.Expr):
+                _expr_to_tree(replacement, self.domain, self.funcs)
+            elif isinstance(replacement, Node):
+                self.root = replacement
+            elif isinstance(replacement, Tree):
+                self.root = replacement.root
+            else:    
+                self.root = build_tree(self.depth, self.funcs, self.domain,
+                            Npars=self.Npars) #riguardare per distribuire depth e Npars (specialmente Npars)
+        elif replace_all==1:
+            if kwargs is not None:
+                self.root.left = Node(**kwargs)
+            else:
+                self.root.left = build_tree(1, self.funcs, self.domain, Npars=random.choice((0,1)))
+                self.root.assign_operation(op)
+        elif replace_all==2:
+            if kwargs is not None:
+                self.root.right = Node(**kwargs)
+            else:
+                self.root.right = build_tree(1, self.funcs, self.domain, Npars=random.choice((0,1)))
+                self.root.assign_operation(op)
+        self.tree_update(self.root)
+ 
 
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
