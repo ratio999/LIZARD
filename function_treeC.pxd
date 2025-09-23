@@ -112,6 +112,8 @@ cdef class Tree:
 
     cpdef node_count(self)
 
+    cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?)
+
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
     int Npars=?, object leaves_count=?, object arr_indices=?,

@@ -15,7 +15,7 @@ extensions = [
     Extension("function_treeC", sources=["function_treeC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("gp_movesC", sources=["gp_movesC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("groveC", sources=["groveC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    Extension("samplerC", sources=["samplerC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
+    #Extension("samplerC", sources=["samplerC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("num_wrapC", sources=["num_wrapC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     
     
