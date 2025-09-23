@@ -474,30 +474,65 @@ cdef class Tree:
         cdef dict input_pars = self.name_values
         return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
     
-    cdef _root_replacement(self, object replacement=None, int replace_all = 0, dict kwargs= None, str op = None):
+    cdef bint is_valid(self, object x=None, double max_abs=1e12):
+        """
+        Strict validity: evaluation must succeed, be finite, and not explode.
+        """
+        import numpy as _np
+        cdef object yhat
+        with _np.errstate(all='ignore'):
+            try:
+                yhat = self.evaluate(self.domain if x is None else x)
+            except Exception:
+                return False
+        yhat = _np.asarray(yhat)
+        if yhat.size == 0:
+            return False
+        if not _np.all(_np.isfinite(yhat)):
+            return False
+        if _np.any(_np.abs(yhat) > max_abs):
+            return False
+        return True
+
+
+    cdef _root_replacement(self, object replacement=None, int replace_all = 0, dict kwargs= None,
+     str op = None, int new_depth=1, bint ensure_valid=True):
+        cdef Node old_root = deepcopy(self.root)
         if replace_all==0:
             if isinstance(replacement, sp.core.expr.Expr):
-                _expr_to_tree(replacement, self.domain, self.funcs)
+                tmp_tree=_expr_to_tree(replacement, self.domain, self.functions)
+                self.root = tmp_tree.root
             elif isinstance(replacement, Node):
-                self.root = replacement
+                self.root=replacement
             elif isinstance(replacement, Tree):
                 self.root = replacement.root
             else:    
-                self.root = build_tree(self.depth, self.funcs, self.domain,
-                            Npars=self.Npars) #riguardare per distribuire depth e Npars (specialmente Npars)
+                self.root = build_tree(max(0, min(new_depth, self.depth)), self.functions, self.domain,
+                            Npars=self.Npars, value=self.value,
+                            alpha=self.alpha, sigma=self.sigma) #riguardare per distribuire depth e Npars (specialmente Npars)
         elif replace_all==1:
             if kwargs is not None:
                 self.root.left = Node(**kwargs)
             else:
-                self.root.left = build_tree(1, self.funcs, self.domain, Npars=random.choice((0,1)))
+                self.root.left = build_tree(max(0, new_depth), self.functions, 
+                        self.domain, Npars=random.choice((0,1)))
+            if op is not None:
                 self.root.assign_operation(op)
         elif replace_all==2:
             if kwargs is not None:
                 self.root.right = Node(**kwargs)
             else:
-                self.root.right = build_tree(1, self.funcs, self.domain, Npars=random.choice((0,1)))
+                self.root.right = build_tree(max(0, new_depth), self.functions, 
+                        self.domain, Npars=random.choice((0,1)))
+            if op is not None:    
                 self.root.assign_operation(op)
         self.tree_update(self.root)
+        if ensure_valid and not self.is_valid(self.domain):
+            # revert if invalid
+            self.root = old_root
+            self.tree_update(self.root)
+            return False
+        return True
  
 
 #cdef --> is cpdef for testing purposes only

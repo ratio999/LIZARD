@@ -25,7 +25,7 @@ cdef inline double _accept_prob(double dlogpost, double T) nogil:
 cdef class Grove:
     """
     A set of Trees evolving at a single temperature T (Metropolis-Hastings).
-    Higher T → broader proposals; lower T → conservative proposals.
+    Higher T broader proposals; lower T conservative proposals.
     """
     
     def __init__(self,
@@ -53,12 +53,12 @@ cdef class Grove:
         self.acceptance_count = 0.0
         self.proposal_count = 0.0
 
-    cdef list _init_trees(self, object node_list, int Npars, object init_value):
+    cdef list _init_trees(self, list node_list, int Npars, object init_value):
         cdef list trees = [None] * self.size
         cdef int i
         for i in range(self.size):
-            if node_list is not None:
-                trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
+            if node_list is not None and len(node_list)>i:
+                    trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
                                                node_list[i], Npars, init_value, self.T)
             else:
                 trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
@@ -78,7 +78,7 @@ cdef class Grove:
         cdef int i
         if full:
             for i in range(self.size):
-                self.trees[i].compute_posterior_tree(y)
+                self.trees[i].compute_posterior_tree(y) #controlla i metdi in functiontree
                 self.root_posteriors[i] = self.trees[i].root.posterior
         else:
             for i in range(self.size):
@@ -120,43 +120,49 @@ cdef class Grove:
         else:
             return ("subtree_crossover", {})  # needs donor tree
 
-    cdef function_treeC.Tree _propose(self, int i) :
+    cdef function_treeC.Tree _propose(self, int i, int max_attempts=64) :
         """
         Build a proposal from tree i using a move drawn from the temperature-dependent kernel.
         Returns a deepcopy candidate (original tree remains unchanged).
         """
-        cdef function_treeC.Tree cand = deepcopy(self.trees[i])
+        cdef function_treeC.Tree cand 
         cdef str move_name
         cdef dict kwargs
-        move_name, kwargs = self._choose_move()
+        cdef int attempts = 0
+               
+        while attempts < max_attempts:
+            cand = deepcopy(self.trees[i])
+            move_name, kwargs = self._choose_move()
 
-        if move_name == "point_mutation":
-            gp_movesC.point_mutation(cand, self.funcs, kwargs.get("operations", None))
-        elif move_name == "hoist_mutation":
-            gp_movesC.hoist_mutation(cand)
-        elif move_name == "add_node":
-            gp_movesC.add_node(cand, self.funcs,
-                               kwargs.get("operations", None),
-                               kwargs.get("random_depth", False))
-        elif move_name == "subtree_mutation":
-            gp_movesC.subtree_mutation(cand, self.funcs,
-                                       kwargs.get("random_depth", False))
-        elif move_name == "subtree_crossover":
-            # pick a donor tree (not i), deep-copied to keep original intact
-            if self.size > 1:
-                donor_idx = i
-                while donor_idx == i:
-                    donor_idx = random.randrange(self.size)
-                donor = deepcopy(self.trees[donor_idx])
-                gp_movesC.subtree_crossover(cand, donor)
+            if move_name == "point_mutation":
+                gp_movesC.point_mutation(cand, self.funcs, kwargs.get("operations", None))
+            elif move_name == "hoist_mutation":
+                gp_movesC.hoist_mutation(cand)
+            elif move_name == "add_node":
+                gp_movesC.add_node(cand, self.funcs,
+                                kwargs.get("operations", None),
+                                kwargs.get("random_depth", False))
+            elif move_name == "subtree_mutation":
+                gp_movesC.subtree_mutation(cand, self.funcs,
+                                        kwargs.get("random_depth", False))
+            elif move_name == "subtree_crossover":
+                # pick a donor tree (not i), deep-copied to keep original intact
+                if self.size > 1:
+                    donor_idx = i
+                    while donor_idx == i:
+                        donor_idx = random.randrange(self.size)
+                    donor = deepcopy(self.trees[donor_idx])
+                    gp_movesC.subtree_crossover(cand, donor)
+                else:
+                    # fallback to a local move if only one tree
+                    gp_movesC.point_mutation(cand, self.funcs, self.operations)
             else:
-                # fallback to a local move if only one tree
+                # default safety: point mutation
                 gp_movesC.point_mutation(cand, self.funcs, self.operations)
-        else:
-            # default safety: point mutation
-            gp_movesC.point_mutation(cand, self.funcs, self.operations)
-
-        return cand
+            if cand.is_valid(self.domain):
+                return cand
+            attempts += 1
+        return deepcopy(self.trees[i])
 
     cdef bint _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
         """
@@ -173,7 +179,7 @@ cdef class Grove:
 
         cdef double old_post = float(self.root_posteriors[i])
 
-        cdef function_treeC.Tree cand = self._propose(i)
+        cdef function_treeC.Tree cand = self._propose_valid(i)
         cdef double new_post = float(cand.get_superficial_posterior(y))
         cdef double dlogpost = new_post - old_post
 
@@ -192,7 +198,7 @@ cdef class Grove:
         """
         cdef int t
         for t in range(n_steps):
-            self.step(y)
+            self._step(y)
 
     cpdef double acceptance_rate(self):
         if self.proposal_count == 0.0:

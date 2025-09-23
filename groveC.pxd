@@ -18,7 +18,7 @@ cdef class Grove:
     cdef double acceptance_count
     cdef double proposal_count
 
-    cdef list _init_trees(self, object node_list, int Npars,
+    cdef list _init_trees(self, list node_list, int Npars,
                             object init_value)
 
     cpdef set_trees(self, list new_trees)
@@ -34,7 +34,7 @@ cdef class Grove:
     cdef tuple _choose_move(self)
     cpdef compute_posteriors(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
     
-    cdef function_treeC.Tree _propose(self, int i)
+    cdef function_treeC.Tree _propose(self, int i, int max_attempts=?)
 
     cdef bint _step(elf, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
