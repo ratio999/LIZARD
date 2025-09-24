@@ -179,7 +179,7 @@ cdef class Grove:
 
         cdef double old_post = float(self.root_posteriors[i])
 
-        cdef function_treeC.Tree cand = self._propose_valid(i)
+        cdef function_treeC.Tree cand = self._propose(i)
         cdef double new_post = float(cand.get_superficial_posterior(y))
         cdef double dlogpost = new_post - old_post
 
@@ -232,7 +232,7 @@ cdef class Forest:
             if node_lists is not None:
                 nodes_g = node_lists[g]
             self.groves.append(
-                Grove(x, np.array([self.temperatures[g]]), size_per_grove, depth, funcs,
+                Grove(x, self.temperatures[g], size_per_grove, depth, funcs,
                       node_list=nodes_g, Npars=Npars, init_value=init_value,
                       operations=operations, base_temp=base_temp)
             )
@@ -245,6 +245,7 @@ cdef class Forest:
             gr.run(y, n_steps_per_grove)
 
     cpdef compute_posteriors_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=False):
+        cdef Grove gr
         for gr in self.groves:
             gr.compute_posteriors(y, full=full)
 
