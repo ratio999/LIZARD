@@ -94,7 +94,7 @@ cdef class Tree:
 
     cpdef compute_fitness_tree(self, y)
 
-    cpdef evaluate(self, x=?)
+    cpdef evaluate(self, object x=?)
 
     cpdef get_root(self)
     
@@ -112,7 +112,7 @@ cdef class Tree:
 
     cpdef node_count(self)
 
-    cdef bint is_valid(self, object x=?, double max_abs=?)
+    cpdef is_valid(self, object x=?, double max_abs=?)
 
     cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?,
                             int new_depth=?, bint ensure_valid=?)

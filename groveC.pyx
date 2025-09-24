@@ -82,6 +82,7 @@ cdef class Grove:
                 self.root_posteriors[i] = self.trees[i].root.posterior
         else:
             for i in range(self.size):
+                #print('FITNESS', self.trees[i])
                 self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y)
 
     cpdef int best_index(self):
@@ -105,9 +106,9 @@ cdef class Grove:
         # bigger moves favored when tau >> 1
         p_subtree = 0.15 * (tau / (1.0 + tau)) + 0.10
         p_cross   = 0.10 * (tau / (1.0 + tau)) + 0.05
-        probs = np.array([p_point, p_hoist, p_add, p_subtree, p_cross], dtype=np.float64)
+        probs = np.array([p_point, p_hoist, p_add, p_subtree], dtype=np.float64)
         probs = probs / probs.sum()
-        idx = int(np.random.choice(np.arange(5), p=probs))
+        idx = int(np.random.choice(np.arange(4), p=probs))
         random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
             return ("point_mutation", {"operations": self.operations})
@@ -120,7 +121,7 @@ cdef class Grove:
         else:
             return ("subtree_crossover", {})  # needs donor tree
 
-    cdef function_treeC.Tree _propose(self, int i, int max_attempts=64) :
+    cdef function_treeC.Tree _propose(self, int i, int max_attempts=2) :
         """
         Build a proposal from tree i using a move drawn from the temperature-dependent kernel.
         Returns a deepcopy candidate (original tree remains unchanged).
@@ -133,7 +134,7 @@ cdef class Grove:
         while attempts < max_attempts:
             cand = deepcopy(self.trees[i])
             move_name, kwargs = self._choose_move()
-
+            print(move_name)
             if move_name == "point_mutation":
                 gp_movesC.point_mutation(cand, self.funcs, kwargs.get("operations", None))
             elif move_name == "hoist_mutation":
@@ -143,6 +144,7 @@ cdef class Grove:
                                 kwargs.get("operations", None),
                                 kwargs.get("random_depth", False))
             elif move_name == "subtree_mutation":
+                #print(kwargs.get('random_depth', False))
                 gp_movesC.subtree_mutation(cand, self.funcs,
                                         kwargs.get("random_depth", False))
             elif move_name == "subtree_crossover":
@@ -159,9 +161,13 @@ cdef class Grove:
             else:
                 # default safety: point mutation
                 gp_movesC.point_mutation(cand, self.funcs, self.operations)
+            
             if cand.is_valid(self.domain):
+                print('is valid')
                 return cand
             attempts += 1
+            #print(attempts)
+        print('is_not valid')
         return deepcopy(self.trees[i])
 
     cdef bint _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y):

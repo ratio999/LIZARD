@@ -21,7 +21,10 @@ cdef class Node:
         self.node_depth = self.depth()
         self.domain = self.function.domain
         self.bis_param = self.is_param()
-        self.value = np.nan
+        if self.bis_param:
+            self.value = 1
+        else:
+            self.value = np.nan
         self.fitness = None
         self.posterior = None
         self.prior = None
@@ -71,6 +74,7 @@ cdef class Node:
         if self.bis_param:
 
             self.value = value 
+        
     cdef sort_params(self, list pars):
         cdef Node i
         cdef list pars_str = [sp.symbols(i.function.get_description()) for i in pars]
@@ -309,6 +313,7 @@ cdef class Tree:
         cdef Node par
         cdef dict names_values = {}
         for par in self.params:
+            print(par.value)
             params_values[par] = par.value
             names_values[par.function.get_description()] = par.value
         return params_values, names_values
@@ -368,9 +373,8 @@ cdef class Tree:
             return self.root.function.is_defined(x, self.name_values)
 
 
-    cpdef evaluate(self,  x=None):
+    cpdef evaluate(self,  object x=None):
         """Evaluate root on its domain or on a specified one"""
-
         if x is None:
 
             return self.root.function.evaluate(self.domain, self.name_values)
@@ -417,9 +421,11 @@ cdef class Tree:
             
         self.update_tree_description()
         self.leaves = self.get_leaves()
+        print('before', self.name_values)
         self.params = self.get_params()
+        
         self.param_values, self.name_values = self.get_param_values()
-
+        print('after', self.name_values)
         #self.update_tree_description()
         #for j in range (0, len(self.get_params())):
         #    print(self.get_params()[j].get_fun().get_description())
@@ -466,6 +472,7 @@ cdef class Tree:
     cpdef get_superficial_posterior(self, y):
         if self.root.posterior is None:
             self.compute_superficial_posterior(y)
+        print('computed posterior', self.root.posterior)
         return self.root.posterior
             
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
@@ -474,7 +481,7 @@ cdef class Tree:
         cdef dict input_pars = self.name_values
         return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
     
-    cdef bint is_valid(self, object x=None, double max_abs=1e12):
+    cpdef is_valid(self, object x=None, double max_abs=1e12):
         """
         Strict validity: evaluation must succeed, be finite, and not explode.
         """
@@ -483,13 +490,18 @@ cdef class Tree:
         with _np.errstate(all='ignore'):
             try:
                 yhat = self.evaluate(self.domain if x is None else x)
+                print('yhat: ', yhat)
             except Exception:
                 return False
+        print('1-passed')
         yhat = _np.asarray(yhat)
         if yhat.size == 0:
             return False
+        print('2-passed')
         if not _np.all(_np.isfinite(yhat)):
+            #print(yhat)
             return False
+        print('3-passed')
         if _np.any(_np.abs(yhat) > max_abs):
             return False
         return True

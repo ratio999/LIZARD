@@ -10,7 +10,9 @@ cimport numpy as cnp
 @cython.boundscheck(True)  # Per migliorare le prestazioni
 cpdef subtree_mutation( function_treeC.Tree tree, functions, random_depth=False):
     """Substitutes a subtree with a random-generated new subtree"""
-    
+    if tree.root.is_leaf():
+        add_node(tree, functions, random_depth=random_depth)
+
     parent_node = None
     while parent_node is None:
         node_to_replace = tree.root.select_random_node()

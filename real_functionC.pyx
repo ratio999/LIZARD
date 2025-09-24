@@ -143,9 +143,12 @@ cdef class RealFunctionC:
         
 
     cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+        #print(params)
         if params is None:
+            print('params is NONE')
             params = {}
-        
+        #print('params in eval ', params)
+        #print('in evaluate: ', self.func(x, params=params))
         return self.func(x, params=params)
     
     def get_eval(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
@@ -155,22 +158,28 @@ cdef class RealFunctionC:
                    dict params=None, object fitness=None, object prior=None, 
                    object sigma=1.00, object x = None, double lambda_reg = 0.0):
         if fitness is None:
+            print('FITNESS IS NONE')
+            
+            if x is None:
+                x = self.domain
             fitness = self.fitness(y, params, x, lambda_reg)
-        if x is None:
-            x = self.domain
+        
         
         if prior is None:
-            prior = self.set_prior() 
+            prior = 0.0
+        print('fitness is: ', fitness, ' and prior is: ', prior)
         try:
             return -fitness/(2 * sigma**2) - prior  
         except:
             return -np.inf
 
     cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double lambda_reg=0.0): 
+        #print(x)
         if x is None:
             x = self.domain
         try:
             #if self.is_param():
+            #print('params in fitness', params, self.evaluate(x,params))
                 #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
             return np.nanmean((y - self.evaluate(x,  params))**2) + lambda_reg * np.sum(np.array(list(params.values()))**2)
         except:
