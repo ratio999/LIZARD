@@ -7,13 +7,15 @@ cimport function_treeC
 cimport real_functionC
 cimport numpy as cnp
 
-@cython.boundscheck(True)  # Per migliorare le prestazioni
+@cython.boundscheck(True) 
 cpdef subtree_mutation( function_treeC.Tree tree, functions, random_depth=False):
     """Substitutes a subtree with a random-generated new subtree"""
     if tree.root.is_leaf():
+        #print('actually addnode')
         add_node(tree, functions, random_depth=random_depth)
-
+        return
     parent_node = None
+    #print('starting while')
     while parent_node is None:
         node_to_replace = tree.root.select_random_node()
         parent_node = tree.root.find_parent(node_to_replace)
@@ -25,7 +27,6 @@ cpdef subtree_mutation( function_treeC.Tree tree, functions, random_depth=False)
     cdef function_treeC.Node new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
 
     if parent_node is None:
-        # Se non c'è genitore, significa che stai sostituendo la radice
         tree.root = new_subtree
     elif parent_node.get_left() == node_to_replace:
         parent_node.assign_left(new_subtree)
@@ -60,7 +61,6 @@ cpdef subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent
         parent_node.right = node2
     parent1.tree_update(parent_node)
     
-    # Aggiorna la struttura dell'albero
     refresh_params(parent1)
 
 cdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
@@ -80,7 +80,7 @@ cdef refresh_params(function_treeC.Tree tree):
     cdef dict rename_map = {}
     cdef int max_index = -1
     for param in params:
-        if param[0] == 'a' and param[1:].isdigit():  # Controlla che dopo 'a' ci siano solo cifre
+        if param[0] == 'a' and param[1:].isdigit():  
             max_index = max(max_index, int(param[1:]))
     cdef int counter = max_index + 1    
     for param in params:
@@ -110,7 +110,6 @@ cdef refresh_params(function_treeC.Tree tree):
 
 @cython.boundscheck(True)
 cpdef point_mutation(function_treeC.Tree tree, functions, operations=None, function_treeC.Node node_to_mutate=None):
-    """Modifica un singolo nodo cambiando la funzione o l'operazione."""
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
     
@@ -247,7 +246,6 @@ def replace_with_subtree(function_treeC.Tree tree, list functions, cnp.ndarray[c
 '''
 @cython.boundscheck(True)
 cpdef add_node(function_treeC.Tree tree, functions, operations):
-    """Aggiunge un nodo a un albero esistente."""
     cdef function_treeC.Node node_to_expand = tree.root.select_random_leaf()
     cdef function_treeC.Node parent = tree.root.find_parent(node_to_expand)
     cdef str new_func_str = random.choice(functions)
@@ -279,7 +277,6 @@ cpdef add_node(function_treeC.Tree tree, functions, operations):
     #print(tree.root.find_parent(node_to_expand).update_func())
     tree.tree_update(parent)
 
-# Funzioni di utilità per operare sui nodi
 '''
 
 @cython.boundscheck(True)  # Per migliorare le prestazioni
@@ -311,7 +308,6 @@ cpdef add_node( function_treeC.Tree tree, functions, operations=None, random_dep
        
 
         if parent_node is None:
-            # Se non c'è genitore, significa che stai sostituendo la radice
             tree.root = new_subtree
         elif parent_node.get_left() == node_to_replace:
             parent_node.assign_left(new_subtree)
@@ -344,12 +340,10 @@ cpdef add_node( function_treeC.Tree tree, functions, operations=None, random_dep
         
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Generates a random subtree with chosen size"""
-    depth = size // 2  # Calcola una profondità approssimativa
+    depth = size // 2  #  profondità approssimativa
     cdef function_treeC.Tree tree = function_treeC.Tree(depth, functions, x)
     return tree.root
 
-#Se fai cdef su tutto forse puoi tornare a cpdef nel file .pxd
-#add_node causa segmentation fault
 
 cpdef root_replacement(function_treeC.Tree tree):
     cdef int depth = tree.depth

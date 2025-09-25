@@ -163,11 +163,9 @@ cdef class Grove:
                 gp_movesC.point_mutation(cand, self.funcs, self.operations)
             
             if cand.is_valid(self.domain):
-                print('is valid')
                 return cand
             attempts += 1
             #print(attempts)
-        print('is_not valid')
         return deepcopy(self.trees[i])
 
     cdef bint _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y):

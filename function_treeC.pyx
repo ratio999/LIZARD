@@ -313,7 +313,7 @@ cdef class Tree:
         cdef Node par
         cdef dict names_values = {}
         for par in self.params:
-            print(par.value)
+            #print(par.value)
             params_values[par] = par.value
             names_values[par.function.get_description()] = par.value
         return params_values, names_values
@@ -421,11 +421,11 @@ cdef class Tree:
             
         self.update_tree_description()
         self.leaves = self.get_leaves()
-        print('before', self.name_values)
+        #print('before', self.name_values)
         self.params = self.get_params()
         
         self.param_values, self.name_values = self.get_param_values()
-        print('after', self.name_values)
+        #print('after', self.name_values)
         #self.update_tree_description()
         #for j in range (0, len(self.get_params())):
         #    print(self.get_params()[j].get_fun().get_description())
@@ -486,22 +486,23 @@ cdef class Tree:
         Strict validity: evaluation must succeed, be finite, and not explode.
         """
         import numpy as _np
+        #print('checking validity...')
         cdef object yhat
         with _np.errstate(all='ignore'):
             try:
                 yhat = self.evaluate(self.domain if x is None else x)
-                print('yhat: ', yhat)
+                #print('yhat: ', yhat)
             except Exception:
                 return False
-        print('1-passed')
+        #print('1-passed')
         yhat = _np.asarray(yhat)
         if yhat.size == 0:
             return False
-        print('2-passed')
+        #print('2-passed')
         if not _np.all(_np.isfinite(yhat)):
             #print(yhat)
             return False
-        print('3-passed')
+        #print('3-passed')
         if _np.any(_np.abs(yhat) > max_abs):
             return False
         return True
@@ -673,7 +674,7 @@ cdef parameter_parser(int Npars):
         for i in prange(Npars, nogil=True):
             buffer[i] = <char *>malloc(16)
             if buffer[i]==NULL:
-                printf("ohno")
+                printf("ohno NULL BUFFER IN PARAMETER PARSER")
             snprintf(buffer[i], 16, b"a%d", i)
 
         for i in range(Npars):

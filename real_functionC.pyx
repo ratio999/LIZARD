@@ -145,7 +145,7 @@ cdef class RealFunctionC:
     cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
         #print(params)
         if params is None:
-            print('params is NONE')
+            #print('params is NONE')
             params = {}
         #print('params in eval ', params)
         #print('in evaluate: ', self.func(x, params=params))
@@ -158,7 +158,7 @@ cdef class RealFunctionC:
                    dict params=None, object fitness=None, object prior=None, 
                    object sigma=1.00, object x = None, double lambda_reg = 0.0):
         if fitness is None:
-            print('FITNESS IS NONE')
+            #print('FITNESS IS NONE')
             
             if x is None:
                 x = self.domain
@@ -167,7 +167,7 @@ cdef class RealFunctionC:
         
         if prior is None:
             prior = 0.0
-        print('fitness is: ', fitness, ' and prior is: ', prior)
+        #print('fitness is: ', fitness, ' and prior is: ', prior)
         try:
             return -fitness/(2 * sigma**2) - prior  
         except:
