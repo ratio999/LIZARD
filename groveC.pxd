@@ -12,7 +12,8 @@ cdef class Grove:
     cdef int n_pars
     cdef double T
     cdef object root_posteriors
-    cdef list trees
+    cdef public list trees
+    cdef double lambda_reg
     cdef double base_temp
     cdef object domain
     cdef double acceptance_count

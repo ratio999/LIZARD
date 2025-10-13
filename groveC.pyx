@@ -38,7 +38,9 @@ cdef class Grove:
                  int Npars=0,
                  object init_value=1.0,
                  list operations=None,
-                 double base_temp=1.0):
+                 double base_temp=1.0,
+                 double lambda_reg=0.00):
+        self.lambda_reg = lambda_reg  # default; can be changed in optimize()
         if operations is None:
             operations = ["+", "-", "*", "/", "**", "o"]
         self.operations = operations
@@ -48,10 +50,11 @@ cdef class Grove:
         self.size = size
         self.T = float(T)
         self.base_temp = base_temp if base_temp > 0.0 else 1.0
-        self.trees = self._init_trees(node_list, Npars, init_value)
+        #self.trees = self._init_trees(node_list, Npars, init_value)
         self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
         self.acceptance_count = 0.0
         self.proposal_count = 0.0
+        self.trees = self._init_trees(node_list, Npars, init_value)
 
     cdef list _init_trees(self, list node_list, int Npars, object init_value):
         cdef list trees = [None] * self.size
@@ -106,9 +109,9 @@ cdef class Grove:
         # bigger moves favored when tau >> 1
         p_subtree = 0.15 * (tau / (1.0 + tau)) + 0.10
         p_cross   = 0.10 * (tau / (1.0 + tau)) + 0.05
-        probs = np.array([p_point, p_hoist, p_add, p_subtree], dtype=np.float64)
+        probs = np.array([p_point, p_hoist, p_add, p_subtree, p_cross], dtype=np.float64)
         probs = probs / probs.sum()
-        idx = int(np.random.choice(np.arange(4), p=probs))
+        idx = int(np.random.choice(np.arange(5), p=probs))
         random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
             return ("point_mutation", {"operations": self.operations})
@@ -154,6 +157,8 @@ cdef class Grove:
                     while donor_idx == i:
                         donor_idx = random.randrange(self.size)
                     donor = deepcopy(self.trees[donor_idx])
+                    print('DONOR:')
+                    print(donor)
                     gp_movesC.subtree_crossover(cand, donor)
                 else:
                     # fallback to a local move if only one tree
@@ -163,6 +168,9 @@ cdef class Grove:
                 gp_movesC.point_mutation(cand, self.funcs, self.operations)
             
             if cand.is_valid(self.domain):
+                print('VALID:')
+                print(cand)
+                
                 return cand
             attempts += 1
             #print(attempts)
@@ -175,7 +183,7 @@ cdef class Grove:
         """
         if self.size == 0:
             return False
-        cdef int i = random.randrange(self.size)
+        cdef int i = 0 #random.randrange(self.size)
 
         # ensure current posterior is available
         if np.isnan(self.root_posteriors[i]):
@@ -184,12 +192,14 @@ cdef class Grove:
         cdef double old_post = float(self.root_posteriors[i])
 
         cdef function_treeC.Tree cand = self._propose(i)
+        cand.optimize(self.domain, y, self.lambda_reg)
         cdef double new_post = float(cand.get_superficial_posterior(y))
         cdef double dlogpost = new_post - old_post
 
         cdef double acc_p = _accept_prob(dlogpost, self.T)
         self.proposal_count += 1.0
         if random.random() < acc_p:
+            print('ACCEPTED')
             self.trees[i] = cand
             self.root_posteriors[i] = new_post
             self.acceptance_count += 1.0
