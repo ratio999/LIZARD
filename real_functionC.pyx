@@ -228,7 +228,7 @@ cdef class RealFunctionC:
                 options={'disp': True}
                 )
         #self.params = dict(zip(self.param_str, result.x))
-        optimized_params = dict(zip(input_pars.keys(), result.x))
+        
         return result
 
     cdef sort_params_list(self, list pars):

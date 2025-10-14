@@ -195,7 +195,7 @@ cdef class Grove:
         #print(cand.name_values)
         
         if len(cand.param_values)>0:
-            cand.optimize(self.domain, y, self.lambda_reg)
+            cand.update_parameters(self.domain, y, self.lambda_reg)
         
         cdef double new_post = float(cand.get_superficial_posterior(y))
         cdef double dlogpost = new_post - old_post

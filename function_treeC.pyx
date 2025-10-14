@@ -304,7 +304,9 @@ cdef class Tree:
                 )
         memo[id(self)] = copy_tree
         return copy_tree
-         
+    
+    
+    
     cdef get_param_values(self):
         '''Builds parameters' dictionaries: one with memory locations and values 
         and one with strings and values'''
@@ -481,6 +483,30 @@ cdef class Tree:
         cdef dict input_pars = self.name_values
         return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
     
+    cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        str method_str='L-BFGS-B'):
+        '''Finds optimal parameters and sets them in the tree'''
+        
+        cdef dict input_pars = self.name_values
+        cdef object result
+        cdef dict optimized_params
+        cdef Node par
+
+        result = self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
+        optimized_params = dict(zip(input_pars.keys(), result.x))
+        
+        for par in self.params:
+            par.set_value(optimized_params[par.function.get_description()])
+        
+        self.param_values, self.name_values = self.get_param_values()
+        self.tree_update(self.root)
+        print('Updated parameters to: ', self.name_values) #comment out in production
+        
+    cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        str method_str='L-BFGS-B'):
+        self._update_parameters(x_data, y_data, lambda_reg, method_str)
     cpdef is_valid(self, object x=None, double max_abs=1e12):
         """
         Strict validity: evaluation must succeed, be finite, and not explode.

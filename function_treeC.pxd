@@ -31,6 +31,7 @@ cdef class Node:
     cdef set_alpha(self, double newalpha)
 
     cdef set_prior(self)
+    
 
     cdef set_sigma(self, object newsigma)
 
@@ -80,6 +81,13 @@ cdef class Tree:
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
         str method_str=?)
+    cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        str method_str=?)
+    cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        str method_str=?)
+    
     cdef build_fitness_tree(self, Node node, str prefix=?, bint is_left=?)
     #cpdef build_tree(self, depth, functions, x )
     cdef compute_posterior_tree(self, y)
