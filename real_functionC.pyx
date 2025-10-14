@@ -142,14 +142,21 @@ cdef class RealFunctionC:
         return f, dft
         
 
-    cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+    cdef object evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
         #print(params)
         if params is None:
             #print('params is NONE')
             params = {}
         #print('params in eval ', params)
         #print('in evaluate: ', self.func(x, params=params))
-        return self.func(x, params=params)
+        cdef object out = self.func(x, params=params)
+        try:
+            vector_safe_convert = np.vectorize(safe_convert)
+            out_safe = vector_safe_convert(out)
+            return np.ascontiguousarray(out_safe, dtype=np.float64).ravel()
+        except:
+            return np.full_like(x, np.nan, dtype=np.float64)
+        #return self.func(x, params=params)
     
     def get_eval(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
         return self.evaluate(x, params)
@@ -188,15 +195,16 @@ cdef class RealFunctionC:
     cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x = None, dict params=None, double lambda_reg = 0.0):
         if x is None:
             x=self.domain
-        cdef double[:] y_pred = self.evaluate(x, params)
-        cdef double[:] residuals = y_pred - y
-        cdef double grad_a0, grad_a1, grad_a2
-        grad_a0 = 2 * np.mean(residuals * x**2)
-        grad_a1 = 2 * np.mean(residuals *x)
-        grad_a2 = 2 * np.mean(residuals)
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] y_pred = np.ascontiguousarray(self.evaluate(x, params), dtype=np.float64).ravel()
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] y_true = np.ascontiguousarray(y, dtype=np.float64).ravel()
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] residuals = y_pred - y_true
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] grad_a0, grad_a1, grad_a2
+        #grad_a0 = 2 * np.mean(residuals * x**2)
+        #grad_a1 = 2 * np.mean(residuals *x)
+        #grad_a2 = 2 * np.mean(residuals)
         
 
-        cdef object par_values = np.array(list(params.values()))
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] par_values = np.ascontiguousarray(list(params.values()), dtype=np.float64)
         return 2*par_values + 2*lambda_reg*par_values
 
     def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):
@@ -209,7 +217,8 @@ cdef class RealFunctionC:
         return self.gradient( y_data, x_data, params_dict, lambda_reg)
 
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, dict input_pars, double lambda_reg, str method_str='Powell'):
-        cdef double[:] initial_params = np.array(list(input_pars.values()))
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
+        #cdef double[:] initial_params = np.array(list(input_pars.values()))
         cdef object result = minimize(
                 fun=self.objective,
                 x0=initial_params,
@@ -219,6 +228,7 @@ cdef class RealFunctionC:
                 options={'disp': True}
                 )
         #self.params = dict(zip(self.param_str, result.x))
+        optimized_params = dict(zip(input_pars.keys(), result.x))
         return result
 
     cdef sort_params_list(self, list pars):

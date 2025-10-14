@@ -192,7 +192,11 @@ cdef class Grove:
         cdef double old_post = float(self.root_posteriors[i])
 
         cdef function_treeC.Tree cand = self._propose(i)
-        cand.optimize(self.domain, y, self.lambda_reg)
+        #print(cand.name_values)
+        
+        if len(cand.param_values)>0:
+            cand.optimize(self.domain, y, self.lambda_reg)
+        
         cdef double new_post = float(cand.get_superficial_posterior(y))
         cdef double dlogpost = new_post - old_post
 
