@@ -4,7 +4,8 @@ import numpy as np
 cimport numpy as cnp
 cimport function_treeC
 cimport gp_movesC
-
+cimport real_functionC
+import itertools
 from copy import deepcopy
 from libc.math cimport exp, fmax
 
@@ -222,6 +223,375 @@ cdef class Grove:
         if self.proposal_count == 0.0:
             return 0.0
         return self.acceptance_count / self.proposal_count
+
+    
+    cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+                                bint replace_all=True, bint optimize_params=True):
+        self._burn_in_combinations(y, replace_all=replace_all, 
+                                optimize_params=optimize_params)
+
+    cdef _burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+                                bint replace_all=True, bint optimize_params=True):
+        """
+        Systematic burn-in: generate all combinations of (func1 op func2) 
+        for all operations and all pairs of functions (including parameters).
+        
+        Parameters
+        ----------
+        y : array
+            Target data for posterior evaluation.
+        replace_all : bool
+            If True, replace all trees. If False, replace only if better.
+        optimize_params : bool
+            If True, optimize parameters for each candidate.
+        """
+      
+        cdef list candidates = []
+        cdef list all_primitives = []
+        cdef str func_str, left_str, right_str, op
+        cdef function_treeC.Tree tree
+        cdef double post
+        cdef int i, idx
+        
+        # Build full primitive set: functions + one parameter
+        all_primitives = self.funcs.copy()
+        all_primitives.append("a0")  # add a parameter primitive
+        
+        print(f"Burn-in: exploring {len(all_primitives)} squared times {len(self.operations)} = "
+              f"{len(all_primitives)**2 * len(self.operations)} combinations")
+        
+        # Generate all (left, op, right) combinations
+        for left_str, right_str in itertools.product(all_primitives, repeat=2):
+            for op in self.operations:
+                '''if op == 'o':  # composition: only makes sense when right is a function of x
+                    # Skip if right is a parameter
+                    if left_str == "a0" or right_str == "a0":
+                        continue'''
+                
+                
+                tree = function_treeC.Tree(
+                    depth=1, 
+                    functions=self.funcs, 
+                    domain=self.domain, 
+                    Npars=0,  # will add params manually
+                    value=1.0, 
+                    T=self.T
+                )
+                
+                # Build left child
+                if left_str == "a0":
+                    tree.root.left = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string("a0", self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                    tree.root.left.set_value(1.0)
+                else:
+                    tree.root.left = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string(left_str, self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                
+                # Build right child
+                if right_str == "a0":
+                    tree.root.right = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string("a1", self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                    tree.root.right.set_value(1.0)
+                else:
+                    tree.root.right = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string(right_str, self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                
+                # Assign operation and update
+                tree.root.assign_operation(op)
+                tree.tree_update(tree.root)
+                
+                # Validate
+                if not tree.is_valid(self.domain):
+                    continue
+                
+                # Optimize parameters if any exist
+                if optimize_params and len(tree.params) > 0:
+                    tree.update_parameters(self.domain, y, self.lambda_reg)
+                    
+                
+                # Compute posterior
+                post = tree.get_superficial_posterior(y)
+                if np.isfinite(post):
+                    candidates.append((tree, post))
+            
+        
+        if len(candidates) == 0:
+            print("Warning: No valid burn-in candidates generated")
+            return
+        
+        # Sort by posterior (descending = better)
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        print(f"Burn-in: {len(candidates)} valid candidates generated")
+        print(f"  Best 3 posteriors: {[c[1] for c in candidates[:3]]}")
+        print(f"  Best 3 expressions: {[c[0].tree_get_description() for c in candidates[:3]]}")
+        
+        # Replace grove trees
+        if replace_all:
+            # Take top `size` candidates, cycling if fewer
+            for i in range(self.size):
+                idx = i % len(candidates)
+                self.trees[i] = deepcopy(candidates[idx][0])
+                self.root_posteriors[i] = candidates[idx][1]
+        else:
+            # Replace only if new candidate is better
+            for i in range(min(self.size, len(candidates))):
+                if np.isnan(self.root_posteriors[i]) or candidates[i][1] > self.root_posteriors[i]:
+                    self.trees[i] = deepcopy(candidates[i][0])
+                    self.root_posteriors[i] = candidates[i][1]
+        
+        print(f"Burn-in complete. Grove best posterior: {self.root_posteriors[self.best_index()]:.4f}")
+
+    cpdef burn_in_depth2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                         bint replace_all=True, bint optimize_params=True,
+                         int max_depth1_trees=10):
+        """
+        Stage 2 burn-in: combine top depth-1 trees with primitives and each other.
+        Call this AFTER burn_in_combinations to build depth-2 expressions.
+        
+        Parameters
+        ----------
+        y : target data
+        replace_all : if True, replace all grove trees with best depth-2 candidates
+        optimize_params : if True, optimize parameters for each candidate
+        max_depth1_trees : how many top depth-1 trees to combine (avoid explosion)
+        """
+        # First, run stage 1 to get depth-1 candidates
+        depth1_candidates = self._get_depth1_candidates(y, optimize_params)
+        
+        if len(depth1_candidates) == 0:
+            print("Warning: No depth-1 candidates; cannot build depth-2")
+            return
+        
+        # Now combine them
+        self._burn_in_stage2(y, depth1_candidates, replace_all, optimize_params, max_depth1_trees)
+    
+    cdef list _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                      bint optimize_params=True):
+        """
+        Build all depth-1 trees (primitive op primitive) and return sorted list.
+        Reuses logic from _burn_in_combinations but returns candidates instead of replacing.
+        """
+        cdef list candidates = []
+        cdef list all_primitives = self.funcs.copy()
+        all_primitives.append("a0")
+        
+        print(f"Stage 1: building {len(all_primitives)**2 * len(self.operations)} depth-1 trees")
+        
+        cdef str left_str, right_str, op
+        cdef function_treeC.Tree tree
+        cdef double post
+        
+        for left_str, right_str in itertools.product(all_primitives, repeat=2):
+            for op in self.operations:
+                tree = function_treeC.Tree(
+                    depth=1, functions=self.funcs, domain=self.domain,
+                    Npars=0, value=1.0, T=self.T
+                )
+                
+                # Build left child
+                if left_str == "a0":
+                    tree.root.left = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string("a0", self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                    tree.root.left.set_value(1.0)
+                else:
+                    tree.root.left = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string(left_str, self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                
+                # Build right child
+                if right_str == "a0":
+                    tree.root.right = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string("a1", self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                    tree.root.right.set_value(1.0)
+                else:
+                    tree.root.right = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string(right_str, self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                
+                tree.root.assign_operation(op)
+                tree.tree_update(tree.root)
+                
+                if not tree.is_valid(self.domain):
+                    continue
+                
+                if optimize_params and len(tree.params) > 0:
+                    tree.update_parameters(self.domain, y, self.lambda_reg)
+                
+                post = tree.get_superficial_posterior(y)
+                if np.isfinite(post):
+                    candidates.append((tree, post))
+        
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        print(f"Stage 1: {len(candidates)} valid depth-1 candidates")
+        if len(candidates) > 0:
+            print(f"  Top-3: {[(c[0].tree_get_description(), f'{c[1]:.3f}') for c in candidates[:3]]}")
+        
+        return candidates
+
+    cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                          list depth1_candidates,
+                          bint replace_all=True,
+                          bint optimize_params=True,
+                          int max_depth1_trees=10):
+        """
+        Combine top depth-1 trees with primitives and with each other to build depth-2 trees.
+        """
+        cdef list candidates = []
+        cdef list all_primitives = self.funcs.copy()
+        all_primitives.append("a0")
+        
+        # Keep top N to avoid combinatorial explosion
+        cdef int n_top = min(max_depth1_trees, len(depth1_candidates))
+        cdef list top_depth1 = [c[0] for c in depth1_candidates[:n_top]]
+        
+        print(f"Stage 2: combining {n_top} depth-1 trees with {len(all_primitives)} primitives + themselves")
+        print(f"  Estimated combinations: ~{n_top * (len(all_primitives) + n_top) * len(self.operations)}")
+        
+        cdef str prim_str, op
+        cdef function_treeC.Tree tree, d1_tree
+        cdef double post
+        cdef int i, j, idx
+        
+        # 1) depth-1 op primitive (both directions)
+        for i in range(n_top):
+            for prim_str in all_primitives:
+                for op in self.operations:
+                    # left = depth-1, right = primitive
+                    tree = self._combine_depth1_prim(top_depth1[i], prim_str, op, left_is_tree=True)
+                    if tree is not None and tree.is_valid(self.domain):
+                        if optimize_params and len(tree.params) > 0:
+                            tree.update_parameters(self.domain, y, self.lambda_reg)
+                        post = tree.get_superficial_posterior(y)
+                        if np.isfinite(post):
+                            candidates.append((tree, post))
+                    
+                    # left = primitive, right = depth-1
+                    tree = self._combine_depth1_prim(prim_str, top_depth1[i], op, left_is_tree=False)
+                    if tree is not None and tree.is_valid(self.domain):
+                        if optimize_params and len(tree.params) > 0:
+                            tree.update_parameters(self.domain, y, self.lambda_reg)
+                        post = tree.get_superficial_posterior(y)
+                        if np.isfinite(post):
+                            candidates.append((tree, post))
+        
+        # 2) depth-1 op depth-1 (all pairs)
+        for i in range(n_top):
+            for j in range(n_top):
+                for op in self.operations:
+                    tree = self._combine_two_depth1(top_depth1[i], top_depth1[j], op)
+                    if tree is not None and tree.is_valid(self.domain):
+                        if optimize_params and len(tree.params) > 0:
+                            tree.update_parameters(self.domain, y, self.lambda_reg)
+                        post = tree.get_superficial_posterior(y)
+                        if np.isfinite(post):
+                            candidates.append((tree, post))
+        
+        if len(candidates) == 0:
+            print("Warning: No valid depth-2 candidates")
+            return
+        
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        print(f"Stage 2: {len(candidates)} valid depth-2 candidates")
+        print(f"  Top-3: {[(c[0].tree_get_description(), f'{c[1]:.3f}') for c in candidates[:3]]}")
+        
+        # Replace grove trees
+        if replace_all:
+            for i in range(self.size):
+                idx = i % len(candidates)
+                self.trees[i] = deepcopy(candidates[idx][0])
+                self.root_posteriors[i] = candidates[idx][1]
+        else:
+            for i in range(min(self.size, len(candidates))):
+                if np.isnan(self.root_posteriors[i]) or candidates[i][1] > self.root_posteriors[i]:
+                    self.trees[i] = deepcopy(candidates[i][0])
+                    self.root_posteriors[i] = candidates[i][1]
+        
+        print(f"Burn-in depth-2 complete. Best: {self.root_posteriors[self.best_index()]:.4f}")
+    
+
+    cdef function_treeC.Tree _combine_depth1_prim(self, object left, object right, object op,
+                                                   bint left_is_tree=False):
+        """
+        Combine depth-1 tree with a primitive (or vice versa).
+        left/right can be Tree or str (primitive name).
+        """
+        try:
+            tree = function_treeC.Tree(depth=2, functions=self.funcs, domain=self.domain,
+                                       Npars=0, value=1.0, T=self.T)
+            
+            # Left side
+            if left_is_tree:
+                tree.root.left = deepcopy((<function_treeC.Tree>left).root)
+            else:
+                # left is primitive string
+                if left == "a0":
+                    tree.root.left = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string("a0", self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                    tree.root.left.set_value(1.0)
+                else:
+                    tree.root.left = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string(<str>left, self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+            
+            # Right side
+            if not left_is_tree:  # right is tree
+                tree.root.right = deepcopy((<function_treeC.Tree>right).root)
+            else:  # right is primitive string
+                if right == "a0":
+                    # Use next available parameter name
+                    next_par = f"a{len([p for p in tree.get_params()])}"
+                    tree.root.right = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string(next_par, self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+                    tree.root.right.set_value(1.0)
+                else:
+                    tree.root.right = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string(<str>right, self.domain),
+                        alpha=tree.alpha, sigma=tree.sigma
+                    )
+            
+            tree.root.assign_operation(op)
+            tree.tree_update(tree.root)
+            return tree
+        except:
+            return None
+
+    cdef function_treeC.Tree _combine_two_depth1(self, function_treeC.Tree left_tree,
+                                                  function_treeC.Tree right_tree, object op):
+        """
+        Combine two depth-1 trees: left_tree op right_tree.
+        """
+        try:
+            tree = function_treeC.Tree(depth=2, functions=self.funcs, domain=self.domain,
+                                       Npars=0, value=1.0, T=self.T)
+            tree.root.left = deepcopy(left_tree.root)
+            tree.root.right = deepcopy(right_tree.root)
+            tree.root.assign_operation(op)
+            tree.tree_update(tree.root)
+            return tree
+        except:
+            return None
+
+
 
 
 cdef class Forest:

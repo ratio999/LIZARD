@@ -23,6 +23,7 @@ cpdef subtree_mutation( function_treeC.Tree tree, functions, random_depth=False)
     if not random_depth:
         max_depth = node_to_replace.depth()
     else:
+        #max_depth = max(1, int(random.expovariate(1/2)))
         max_depth = random.choice(list(np.arange(1, node_to_replace.depth()+2)))
     cdef function_treeC.Node new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
 

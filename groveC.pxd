@@ -40,6 +40,31 @@ cdef class Grove:
     cdef bint _step(elf, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
 
+    cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+                                bint replace_all=?, bint optimize_params=?)
+
+    cdef _burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+                                bint replace_all=?, bint optimize_params=?)
+
+    cpdef burn_in_depth2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                         bint replace_all=?, bint optimize_params=?,
+                         int max_depth1_trees=?)
+
+    cdef list _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                      bint optimize_params=?)    
+
+    cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                          list depth1_candidates,
+                          bint replace_all=?,
+                          bint optimize_params=?,
+                          int max_depth1_trees=?)
+
+    cdef function_treeC.Tree _combine_depth1_prim(self, object left, object right, object op,
+                                                   bint left_is_tree=?)
+
+    cdef function_treeC.Tree _combine_two_depth1(self, function_treeC.Tree left_tree,
+                                                  function_treeC.Tree right_tree, object op)
+
     cpdef double acceptance_rate(self)
 
 cdef class Forest:
