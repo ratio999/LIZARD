@@ -391,6 +391,8 @@ cdef class Grove:
         cdef double post
         
         for left_str, right_str in itertools.product(all_primitives, repeat=2):
+            if left_str=='a0' and right_str=='a0':
+                continue
             for op in self.operations:
                 tree = function_treeC.Tree(
                     depth=1, functions=self.funcs, domain=self.domain,
