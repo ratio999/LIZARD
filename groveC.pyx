@@ -532,67 +532,65 @@ cdef class Grove:
         Combine depth-1 tree with a primitive (or vice versa).
         left/right can be Tree or str (primitive name).
         """
-        try:
-            tree = function_treeC.Tree(depth=2, functions=self.funcs, domain=self.domain,
-                                       Npars=0, value=1.0, T=self.T)
-            
-            # Left side
-            if left_is_tree:
-                tree.root.left = deepcopy((<function_treeC.Tree>left).root)
+        
+        cdef function_treeC.Tree tree = function_treeC.Tree(depth=2, functions=self.funcs, domain=self.domain,
+                                    Npars=0, value=1.0, T=self.T)
+        cdef str next_par
+
+        # Left side
+        if left_is_tree:
+            tree.root.left = deepcopy(left.root)
+        else:
+            # left is primitive string
+            if left == "a0":
+                tree.root.left = function_treeC.Node(
+                    function=real_functionC.RealFunctionC.from_string("a0", self.domain),
+                    alpha=tree.alpha, sigma=tree.sigma
+                )
+                tree.root.left.set_value(1.0)
             else:
-                # left is primitive string
-                if left == "a0":
-                    tree.root.left = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string("a0", self.domain),
-                        alpha=tree.alpha, sigma=tree.sigma
-                    )
-                    tree.root.left.set_value(1.0)
-                else:
-                    tree.root.left = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(<str>left, self.domain),
-                        alpha=tree.alpha, sigma=tree.sigma
-                    )
-            
-            # Right side
-            if not left_is_tree:  # right is tree
-                tree.root.right = deepcopy((<function_treeC.Tree>right).root)
-            else:  # right is primitive string
-                if right == "a0":
-                    # Use next available parameter name
-                    next_par = f"a{len([p for p in tree.get_params()])}"
-                    tree.root.right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(next_par, self.domain),
-                        alpha=tree.alpha, sigma=tree.sigma
-                    )
-                    tree.root.right.set_value(1.0)
-                else:
-                    tree.root.right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(<str>right, self.domain),
-                        alpha=tree.alpha, sigma=tree.sigma
-                    )
-            
-            tree.root.assign_operation(op)
-            tree.tree_update(tree.root)
-            return tree
-        except:
-            return None
+                tree.root.left = function_treeC.Node(
+                    function=real_functionC.RealFunctionC.from_string(<str>left, self.domain),
+                    alpha=tree.alpha, sigma=tree.sigma
+                )
+        
+        # Right side
+        if not left_is_tree:  # right is tree
+            tree.root.right = deepcopy(right.root)
+        else:  # right is primitive string
+            if right == "a0":
+                # Use next available parameter name
+                next_par = f"a{len([p for p in tree.get_params()])}" #THIS HOULD BE OK BUT DOBULE CHECK
+                tree.root.right = function_treeC.Node(
+                    function=real_functionC.RealFunctionC.from_string(next_par, self.domain),
+                    alpha=tree.alpha, sigma=tree.sigma
+                )
+                tree.root.right.set_value(1.0)
+            else:
+                tree.root.right = function_treeC.Node(
+                    function=real_functionC.RealFunctionC.from_string(<str>right, self.domain),
+                    alpha=tree.alpha, sigma=tree.sigma
+                )
+        
+        tree.root.assign_operation(op)
+        tree.tree_update(tree.root)
+        return tree
+        
 
     cdef function_treeC.Tree _combine_two_depth1(self, function_treeC.Tree left_tree,
                                                   function_treeC.Tree right_tree, object op):
         """
         Combine two depth-1 trees: left_tree op right_tree.
         """
-        try:
-            tree = function_treeC.Tree(depth=2, functions=self.funcs, domain=self.domain,
-                                       Npars=0, value=1.0, T=self.T)
-            tree.root.left = deepcopy(left_tree.root)
-            tree.root.right = deepcopy(right_tree.root)
-            tree.root.assign_operation(op)
-            tree.tree_update(tree.root)
-            return tree
-        except:
-            return None
-
+        cdef function_treeC.Tree tree
+        tree = function_treeC.Tree(depth=2, functions=self.funcs, domain=self.domain,
+                                    Npars=0, value=1.0, T=self.T)
+        tree.root.left = deepcopy(left_tree.root)
+        tree.root.right = deepcopy(right_tree.root)
+        tree.root.assign_operation(op)
+        tree.tree_update(tree.root)
+        return tree
+        
 
 
 
