@@ -40,7 +40,8 @@ cdef class Grove:
                  object init_value=1.0,
                  list operations=None,
                  double base_temp=1.0,
-                 double lambda_reg=0.00):
+                 double lambda_reg=0.00,
+                 bint burn_in=False):
         self.lambda_reg = lambda_reg  # default; can be changed in optimize()
         if operations is None:
             operations = ["+", "-", "*", "/", "**", "o"]
@@ -52,11 +53,18 @@ cdef class Grove:
         self.T = float(T)
         self.base_temp = base_temp if base_temp > 0.0 else 1.0
         #self.trees = self._init_trees(node_list, Npars, init_value)
-        self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
+        if self.size > 0:
+            self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
+            self.burn_in = burn_in
+        else:
+            self.root_posteriors=None
+            self.burn_in = True
+
         self.acceptance_count = 0.0
         self.proposal_count = 0.0
-        self.trees = self._init_trees(node_list, Npars, init_value)
-
+        if not burn_in:
+            self.trees = self._init_trees(node_list, Npars, init_value)
+        
     cdef list _init_trees(self, list node_list, int Npars, object init_value):
         cdef list trees = [None] * self.size
         cdef int i

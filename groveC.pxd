@@ -37,7 +37,7 @@ cdef class Grove:
     
     cdef function_treeC.Tree _propose(self, int i, int max_attempts=?)
 
-    cdef bint _step(elf, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cdef bint _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
 
     cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
