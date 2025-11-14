@@ -79,7 +79,7 @@ cdef class Grove:
                 self._burn_in_stage2(
                     y if 'y' in locals() else self.data,
                     depth1_candidates,
-                    replace_all=False,  # Will replace after trees are initialized
+                    replace_all=True,  # Will replace after trees are initialized
                     optimize_params=True,
                     max_depth1_trees=10
                 )
