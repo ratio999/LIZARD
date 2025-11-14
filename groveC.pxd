@@ -4,6 +4,7 @@ cimport function_treeC
 
 cdef class Grove:
     cdef list operations
+    cdef cnp.float64_t[::1] data
     cdef int size
     cdef int depth
     cdef list funcs

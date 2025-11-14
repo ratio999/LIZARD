@@ -31,6 +31,7 @@ cdef class Grove:
     
     def __init__(self,
                  cnp.ndarray[cnp.float64_t, ndim=1] x,
+                 cnp.ndarray[cnp.float64_t, ndim=1] y,
                  double T,  # accepts scalar or array; use T_arr[0]
                  int size,
                  int depth,
@@ -42,6 +43,11 @@ cdef class Grove:
                  double base_temp=1.0,
                  double lambda_reg=0.00,
                  bint burn_in=False):
+
+        # Memory view - safer alternative to raw pointers
+        cdef cnp.float64_t[::1] x_view = x
+        # Store y as instance attribute for use in optimization and posterior computation
+        self.data = np.asarray(y, dtype=np.float64)
         self.lambda_reg = lambda_reg  # default; can be changed in optimize()
         if operations is None:
             operations = ["+", "-", "*", "/", "**", "o"]
@@ -56,12 +62,32 @@ cdef class Grove:
         if self.size > 0:
             self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
             self.burn_in = burn_in
+            self.size=0            
         else:
             self.root_posteriors=None
             self.burn_in = True
 
         self.acceptance_count = 0.0
         self.proposal_count = 0.0
+        if self.burn_in:
+            # Run two-stage burn-in procedure to initialize trees
+            # Stage 1: Generate all depth-1 combinations (primitive op primitive)
+            depth1_candidates = self._get_depth1_candidates(y if 'y' in locals() else self.data, optimize_params=True)
+            
+            # Stage 2: Combine top depth-1 trees to create depth-2 trees
+            if len(depth1_candidates) > 0:
+                self._burn_in_stage2(
+                    y if 'y' in locals() else self.data,
+                    depth1_candidates,
+                    replace_all=False,  # Will replace after trees are initialized
+                    optimize_params=True,
+                    max_depth1_trees=10
+                )
+            
+            # Initialize trees list if not already done
+            if not hasattr(self, 'trees') or self.trees is None:
+                self.trees = [None] * self.size
+                self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
         if not burn_in:
             self.trees = self._init_trees(node_list, Npars, init_value)
         
