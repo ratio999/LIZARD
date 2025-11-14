@@ -88,7 +88,7 @@ cdef class Grove:
             if not hasattr(self, 'trees') or self.trees is None:
                 self.trees = [None] * self.size
                 self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
-        if not burn_in:
+        else:
             self.trees = self._init_trees(node_list, Npars, init_value)
         
     cdef list _init_trees(self, list node_list, int Npars, object init_value):
@@ -547,14 +547,22 @@ cdef class Grove:
         
         # Replace grove trees
         if replace_all:
-            for i in range(self.size):
-                idx = i % len(candidates)
-                self.trees[i] = deepcopy(candidates[idx][0])
-                self.root_posteriors[i] = candidates[idx][1]
+            if self.trees is None:
+                self.trees = [None] * len(candidates)
+                self.root_posteriors = np.full((len(candidates),), np.nan, dtype=np.float64)
+                self.size = len(candidates)
+                for i in range(self.size):
+                    self.trees[i] = candidates[i][0]
+                    self.root_posteriors[i] = candidates[i][1]
+            else:
+                for i in range(self.size):
+                    idx = i % len(candidates)
+                    self.trees[i] = candidates[idx][0]
+                    self.root_posteriors[i] = candidates[idx][1]
         else:
             for i in range(min(self.size, len(candidates))):
                 if np.isnan(self.root_posteriors[i]) or candidates[i][1] > self.root_posteriors[i]:
-                    self.trees[i] = deepcopy(candidates[i][0])
+                    self.trees[i] = candidates[i][0]
                     self.root_posteriors[i] = candidates[i][1]
         
         print(f"Burn-in depth-2 complete. Best: {self.root_posteriors[self.best_index()]:.4f}")
