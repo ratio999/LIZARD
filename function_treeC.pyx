@@ -69,7 +69,7 @@ cdef class Node:
         self.posterior = self.evaluate_node_posterior(y, parameters)
     
  
-    cdef set_value(self, cnp.float64_t value = 1):
+    cpdef set_value(self, cnp.float64_t value = 1):
         '''Forcedly sets parameter to value'''
         if self.bis_param:
 

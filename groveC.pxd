@@ -19,6 +19,7 @@ cdef class Grove:
     cdef object domain
     cdef double acceptance_count
     cdef double proposal_count
+    cdef bint burn_in
 
     cdef list _init_trees(self, list node_list, int Npars,
                             object init_value)

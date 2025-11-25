@@ -53,7 +53,7 @@ cdef class Grove:
             operations = ["+", "-", "*", "/", "**", "o"]
         self.operations = operations
         self.funcs = funcs
-        self.domain = np.asarray(x, dtype=np.float64)
+        self.domain = x
         self.depth = depth
         self.size = size
         self.T = float(T)
@@ -429,7 +429,7 @@ cdef class Grove:
                 continue
             for op in self.operations:
                 tree = function_treeC.Tree(
-                    depth=1, functions=self.funcs, domain=self.domain,
+                    depth=1, functions=self.funcs, x=self.domain,
                     Npars=0, value=1.0, T=self.T
                 )
                 

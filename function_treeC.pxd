@@ -11,7 +11,7 @@ cdef class Node:
     cdef int node_depth
     cdef cnp.float64_t value    
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?) 
-    cdef set_value(self, cnp.float64_t value=?)
+    cpdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
     cdef object fitness
     cdef object posterior
