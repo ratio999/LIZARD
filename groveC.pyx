@@ -419,7 +419,31 @@ cdef class Grove:
         all_primitives.append("a0")
         
         print(f"Stage 1: building {len(all_primitives)**2 * len(self.operations)} depth-1 trees")
-        
+        # Initialize candidates with primitive functions (depth-0 trees)
+        for func_str in all_primitives:
+            tree = function_treeC.Tree(
+                depth=0, functions=self.funcs, domain=self.domain,
+                Npars=0, value=1.0, T=self.T
+            )
+            if func_str == "a0":
+                tree.root = function_treeC.Node(
+                    function=real_functionC.RealFunctionC.from_string("a0", self.domain),
+                    alpha=tree.alpha, sigma=tree.sigma
+                )
+                tree.root.set_value(1.0)
+            else:
+                tree.root = function_treeC.Node(
+                    function=real_functionC.RealFunctionC.from_string(func_str, self.domain),
+                    alpha=tree.alpha, sigma=tree.sigma
+                )
+            tree.tree_update(tree.root)
+            if tree.is_valid(self.domain):
+                if optimize_params and len(tree.params) > 0:
+                    tree.update_parameters(self.domain, y, self.lambda_reg)
+                post = tree.get_superficial_posterior(y)
+                if np.isfinite(post):
+                    candidates.append((tree, post))
+
         cdef str left_str, right_str, op
         cdef function_treeC.Tree tree
         cdef double post
