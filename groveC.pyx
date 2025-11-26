@@ -557,26 +557,26 @@ cdef class Grove:
         for i in range(n_top):
             for j in range(n_top):
                 for op in self.operations:
-                    tree = self._combine_two_depth1(top_depth1[i], top_depth1[j], op)
+                    tree = self._combine_two_depth1(depth1_candidates[i][0], depth1_candidates[j][0], op)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, self.lambda_reg)
                         post = tree.get_superficial_posterior(y)
                         if np.isfinite(post):
-                            candidates.append((tree, post))
+                            candidates.append((tree, post, 2)) # depth 2
         
         if len(candidates) == 0:
             print("Warning: No valid depth-2 candidates")
             return
-        
+        '''
         candidates.sort(key=lambda x: x[1], reverse=True)
         print(f"Stage 2: {len(candidates)} valid depth-2 candidates")
         print(f"  Top-3: {[(c[0].tree_get_description(), f'{c[1]:.3f}') for c in candidates[:3]]}")
-        
+        '''
         # Replace grove trees
         # Append depth-1 candidates to depth-2 candidates
-        for i in range(len(depth1_candidates)):
-            candidates.append(depth1_candidates[i])
+        for i in range(len(up2depth1_candidates)):
+            candidates.append(up2depth1_candidates[i])
         
         # Re-sort the combined list (maybe delete?)
         candidates.sort(key=lambda x: x[1], reverse=True)
