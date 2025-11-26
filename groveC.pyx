@@ -442,7 +442,7 @@ cdef class Grove:
                     tree.update_parameters(self.domain, y, self.lambda_reg)
                 post = tree.get_superficial_posterior(y)
                 if np.isfinite(post):
-                    candidates.append((tree, post))
+                    candidates.append((tree, post, 0))  # depth 0
 
         cdef str left_str, right_str, op
         cdef function_treeC.Tree tree
@@ -494,7 +494,7 @@ cdef class Grove:
                 
                 post = tree.get_superficial_posterior(y)
                 if np.isfinite(post):
-                    candidates.append((tree, post))
+                    candidates.append((tree, post, 1)) # depth 1
         
         candidates.sort(key=lambda x: x[1], reverse=True)
         print(f"Stage 1: {len(candidates)} valid depth-1 candidates")
@@ -504,7 +504,7 @@ cdef class Grove:
         return candidates
 
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
-                          list depth1_candidates,
+                          list up2depth1_candidates,
                           bint replace_all=True,
                           bint optimize_params=True
                           ):
@@ -514,11 +514,14 @@ cdef class Grove:
         cdef list candidates = []
         cdef list all_primitives = self.funcs.copy()
         all_primitives.append("a0")
+        # Filter for only depth-1 candidates (third element == 1)
         
-        # Keep top N to avoid combinatorial explosion
+        depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
+        
+
         cdef int n_top = len(depth1_candidates)
-        cdef list top_depth1 = [c[0] for c in depth1_candidates[:n_top]]
         
+
         print(f"Stage 2: combining {n_top} depth-1 trees with {len(all_primitives)} primitives + themselves")
         print(f"  Estimated combinations: ~{n_top * (len(all_primitives) + n_top) * len(self.operations)}")
         
@@ -528,12 +531,12 @@ cdef class Grove:
         cdef int i, j, idx
         
         # 1) depth-1 op primitive (both directions)
-        '''
+        
         for i in range(n_top):
             for prim_str in all_primitives:
                 for op in self.operations:
                     # left = depth-1, right = primitive
-                    tree = self._combine_depth1_prim(top_depth1[i], prim_str, op, left_is_tree=True)
+                    tree = self._combine_depth1_prim(depth1_candidates[i][0], prim_str, op, left_is_tree=True)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, self.lambda_reg)
@@ -542,14 +545,14 @@ cdef class Grove:
                             candidates.append((tree, post))
                     
                     # left = primitive, right = depth-1
-                    tree = self._combine_depth1_prim(prim_str, top_depth1[i], op, left_is_tree=False)
+                    tree = self._combine_depth1_prim(prim_str, depth1_candidates[i][0], op, left_is_tree=False)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, self.lambda_reg)
                         post = tree.get_superficial_posterior(y)
                         if np.isfinite(post):
-                            candidates.append((tree, post))
-        '''
+                            candidates.append((tree, post, 2)) # depth 2
+        
         # 2) depth-1 op depth-1 (all pairs)
         for i in range(n_top):
             for j in range(n_top):
@@ -571,10 +574,18 @@ cdef class Grove:
         print(f"  Top-3: {[(c[0].tree_get_description(), f'{c[1]:.3f}') for c in candidates[:3]]}")
         
         # Replace grove trees
+        # Append depth-1 candidates to depth-2 candidates
+        for i in range(len(depth1_candidates)):
+            candidates.append(depth1_candidates[i])
+        
+        # Re-sort the combined list (maybe delete?)
+        candidates.sort(key=lambda x: x[1], reverse=True)
+            
         if replace_all:
             if self.trees is None:
-                self.trees = [None] * len(candidates)
-                self.root_posteriors = np.full((len(candidates),), np.nan, dtype=np.float64)
+                self.trees = [None] * (len(candidates))
+                self.root_posteriors = np.full((len(candidates),),
+                     np.nan, dtype=np.float64)
                 self.size = len(candidates)
                 for i in range(self.size):
                     self.trees[i] = candidates[i][0]
