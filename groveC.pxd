@@ -21,7 +21,7 @@ cdef class Grove:
     cdef double proposal_count
     cdef bint burn_in
 
-    cdef list _init_trees(self, list node_list, int Npars,
+    cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
 
     cpdef set_trees(self, list new_trees)
@@ -30,16 +30,16 @@ cdef class Grove:
 
     #cdef grow_grove(self)
 
-    cpdef int best_index(self)
+    cpdef  best_index(self)
 
-    cpdef function_treeC.Tree best_tree(self)
+    cpdef  best_tree(self)
 
-    cdef tuple _choose_move(self)
+    cdef  _choose_move(self)
     cpdef compute_posteriors(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
     
-    cdef function_treeC.Tree _propose(self, int i, int max_attempts=?)
+    cdef  _propose(self, int i, int max_attempts=?)
 
-    cdef bint _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cdef  _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
 
     cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
@@ -49,10 +49,9 @@ cdef class Grove:
                                 bint replace_all=?, bint optimize_params=?)
 
     cpdef burn_in_depth2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
-                         bint replace_all=?, bint optimize_params=?,
-                         int max_depth1_trees=?)
+                         bint replace_all=?, bint optimize_params=?)
 
-    cdef list _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+    cdef  _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                                       bint optimize_params=?)    
 
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -60,13 +59,13 @@ cdef class Grove:
                           bint replace_all=?,
                           bint optimize_params=?)
 
-    cdef function_treeC.Tree _combine_depth1_prim(self, object left, object right, object op,
+    cdef  _combine_depth1_prim(self, function_treeC.Node left, function_treeC.Node right, object op,
                                                    bint left_is_tree=?)
 
-    cdef function_treeC.Tree _combine_two_depth1(self, function_treeC.Tree left_tree,
+    cdef  _combine_two_depth1(self, function_treeC.Tree left_tree,
                                                   function_treeC.Tree right_tree, object op)
 
-    cpdef double acceptance_rate(self)
+    cpdef  acceptance_rate(self)
 
 cdef class Forest:
     cdef list groves

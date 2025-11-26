@@ -80,8 +80,7 @@ cdef class Grove:
                     y if 'y' in locals() else self.data,
                     depth1_candidates,
                     replace_all=True,  # Will replace after trees are initialized
-                    optimize_params=True,
-                    max_depth1_trees=10
+                    optimize_params=True
                 )
             
             # Initialize trees list if not already done
@@ -91,7 +90,7 @@ cdef class Grove:
         else:
             self.trees = self._init_trees(node_list, Npars, init_value)
         
-    cdef list _init_trees(self, list node_list, int Npars, object init_value):
+    cdef _init_trees(self, list node_list, int Npars, object init_value):
         cdef list trees = [None] * self.size
         cdef int i
         for i in range(self.size):
@@ -123,13 +122,13 @@ cdef class Grove:
                 #print('FITNESS', self.trees[i])
                 self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y)
 
-    cpdef int best_index(self):
+    cpdef best_index(self):
         return int(np.nanargmax(self.root_posteriors))
 
-    cpdef function_treeC.Tree best_tree(self):
+    cpdef best_tree(self):
         return self.trees[self.best_index()]
 
-    cdef tuple _choose_move(self) :
+    cdef _choose_move(self) :
         """
         Select a move and parameters based on temperature.
         Returns (name, kwargs_dict).
@@ -159,7 +158,7 @@ cdef class Grove:
         else:
             return ("subtree_crossover", {})  # needs donor tree
 
-    cdef function_treeC.Tree _propose(self, int i, int max_attempts=2) :
+    cdef _propose(self, int i, int max_attempts=2) :
         """
         Build a proposal from tree i using a move drawn from the temperature-dependent kernel.
         Returns a deepcopy candidate (original tree remains unchanged).
@@ -211,7 +210,7 @@ cdef class Grove:
             #print(attempts)
         return deepcopy(self.trees[i])
 
-    cdef bint _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+    cdef _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
         """
         One MH step on a random tree in this grove.
         Returns True if accepted.
@@ -253,7 +252,7 @@ cdef class Grove:
         for t in range(n_steps):
             self._step(y)
 
-    cpdef double acceptance_rate(self):
+    cpdef acceptance_rate(self):
         if self.proposal_count == 0.0:
             return 0.0
         return self.acceptance_count / self.proposal_count
@@ -306,7 +305,7 @@ cdef class Grove:
                 tree = function_treeC.Tree(
                     depth=1, 
                     functions=self.funcs, 
-                    domain=self.domain, 
+                    x=self.domain, 
                     Npars=0,  # will add params manually
                     value=1.0, 
                     T=self.T
@@ -385,8 +384,7 @@ cdef class Grove:
         print(f"Burn-in complete. Grove best posterior: {self.root_posteriors[self.best_index()]:.4f}")
 
     cpdef burn_in_depth2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
-                         bint replace_all=True, bint optimize_params=True,
-                         int max_depth1_trees=10):
+                         bint replace_all=True, bint optimize_params=True):
         """
         Stage 2 burn-in: combine top depth-1 trees with primitives and each other.
         Call this AFTER burn_in_combinations to build depth-2 expressions.
@@ -396,7 +394,7 @@ cdef class Grove:
         y : target data
         replace_all : if True, replace all grove trees with best depth-2 candidates
         optimize_params : if True, optimize parameters for each candidate
-        max_depth1_trees : how many top depth-1 trees to combine (avoid explosion)
+        
         """
         # First, run stage 1 to get depth-1 candidates
         depth1_candidates = self._get_depth1_candidates(y, optimize_params)
@@ -406,9 +404,9 @@ cdef class Grove:
             return
         
         # Now combine them
-        self._burn_in_stage2(y, depth1_candidates, replace_all, optimize_params, max_depth1_trees)
+        self._burn_in_stage2(y, depth1_candidates, replace_all, optimize_params)
     
-    cdef list _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+    cdef _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                                       bint optimize_params=True):
         """
         Build all depth-1 trees (primitive op primitive) and return sorted list.
@@ -417,12 +415,14 @@ cdef class Grove:
         cdef list candidates = []
         cdef list all_primitives = self.funcs.copy()
         all_primitives.append("a0")
-        
+        cdef str left_str, right_str, op
+        cdef function_treeC.Tree tree
+        cdef double post
         print(f"Stage 1: building {len(all_primitives)**2 * len(self.operations)} depth-1 trees")
         # Initialize candidates with primitive functions (depth-0 trees)
         for func_str in all_primitives:
             tree = function_treeC.Tree(
-                depth=0, functions=self.funcs, domain=self.domain,
+                depth=0, functions=self.funcs, x=self.domain,
                 Npars=0, value=1.0, T=self.T
             )
             if func_str == "a0":
@@ -444,9 +444,7 @@ cdef class Grove:
                 if np.isfinite(post):
                     candidates.append((tree, post, 0))  # depth 0
 
-        cdef str left_str, right_str, op
-        cdef function_treeC.Tree tree
-        cdef double post
+        
         
         for left_str, right_str in itertools.product(all_primitives, repeat=2):
             if left_str=='a0' and right_str=='a0':
@@ -529,14 +527,17 @@ cdef class Grove:
         cdef function_treeC.Tree tree, d1_tree
         cdef double post
         cdef int i, j, idx
+        cdef function_treeC.Node prim_node
         
         # 1) depth-1 op primitive (both directions)
         
         for i in range(n_top):
             for prim_str in all_primitives:
+                prim_node = function_treeC.Node(function=real_functionC.RealFunctionC.from_string(prim_str, self.domain))
                 for op in self.operations:
                     # left = depth-1, right = primitive
-                    tree = self._combine_depth1_prim(depth1_candidates[i][0], prim_str, op, left_is_tree=True)
+                    d1_tree = depth1_candidates[i][0] 
+                    tree = self._combine_depth1_prim(d1_tree.root, prim_node, op, left_is_tree=True)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, self.lambda_reg)
@@ -545,7 +546,7 @@ cdef class Grove:
                             candidates.append((tree, post))
                     
                     # left = primitive, right = depth-1
-                    tree = self._combine_depth1_prim(prim_str, depth1_candidates[i][0], op, left_is_tree=False)
+                    tree = self._combine_depth1_prim(prim_node, d1_tree.root, op, left_is_tree=False)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, self.lambda_reg)
@@ -604,64 +605,33 @@ cdef class Grove:
         print(f"Burn-in depth-2 complete. Best: {self.root_posteriors[self.best_index()]:.4f}")
     
 
-    cdef function_treeC.Tree _combine_depth1_prim(self, object left, object right, object op,
+    cdef  _combine_depth1_prim(self, function_treeC.Node left, function_treeC.Node right, object op,
                                                    bint left_is_tree=False):
         """
         Combine depth-1 tree with a primitive (or vice versa).
         left/right can be Tree or str (primitive name).
         """
         
-        cdef function_treeC.Tree tree = function_treeC.Tree(depth=2, functions=self.funcs, domain=self.domain,
+        cdef function_treeC.Tree tree = function_treeC.Tree(depth=2, functions=self.funcs, x=self.domain,
                                     Npars=0, value=1.0, T=self.T)
         cdef str next_par
 
         # Left side
-        if left_is_tree:
-            tree.root.left = deepcopy(left.root)
-        else:
-            # left is primitive string
-            if left == "a0":
-                tree.root.left = function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string("a0", self.domain),
-                    alpha=tree.alpha, sigma=tree.sigma
-                )
-                tree.root.left.set_value(1.0)
-            else:
-                tree.root.left = function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string(<str>left, self.domain),
-                    alpha=tree.alpha, sigma=tree.sigma
-                )
-        
-        # Right side
-        if not left_is_tree:  # right is tree
-            tree.root.right = deepcopy(right.root)
-        else:  # right is primitive string
-            if right == "a0":
-                # Use next available parameter name
-                next_par = f"a{len([p for p in tree.get_params()])}" #THIS HOULD BE OK BUT DOBULE CHECK
-                tree.root.right = function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string(next_par, self.domain),
-                    alpha=tree.alpha, sigma=tree.sigma
-                )
-                tree.root.right.set_value(1.0)
-            else:
-                tree.root.right = function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string(<str>right, self.domain),
-                    alpha=tree.alpha, sigma=tree.sigma
-                )
-        
+        tree.root.left = deepcopy(left)
+        tree.root.right = deepcopy(right)
+                
         tree.root.assign_operation(op)
         tree.tree_update(tree.root)
         return tree
         
 
-    cdef function_treeC.Tree _combine_two_depth1(self, function_treeC.Tree left_tree,
+    cdef _combine_two_depth1(self, function_treeC.Tree left_tree,
                                                   function_treeC.Tree right_tree, object op):
         """
         Combine two depth-1 trees: left_tree op right_tree.
         """
         cdef function_treeC.Tree tree
-        tree = function_treeC.Tree(depth=2, functions=self.funcs, domain=self.domain,
+        tree = function_treeC.Tree(depth=2, functions=self.funcs, x=self.domain,
                                     Npars=0, value=1.0, T=self.T)
         tree.root.left = deepcopy(left_tree.root)
         tree.root.right = deepcopy(right_tree.root)
