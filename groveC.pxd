@@ -58,8 +58,7 @@ cdef class Grove:
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                           list depth1_candidates,
                           bint replace_all=?,
-                          bint optimize_params=?,
-                          int max_depth1_trees=?)
+                          bint optimize_params=?)
 
     cdef function_treeC.Tree _combine_depth1_prim(self, object left, object right, object op,
                                                    bint left_is_tree=?)

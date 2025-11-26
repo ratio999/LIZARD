@@ -506,8 +506,8 @@ cdef class Grove:
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                           list depth1_candidates,
                           bint replace_all=True,
-                          bint optimize_params=True,
-                          int max_depth1_trees=None):
+                          bint optimize_params=True
+                          ):
         """
         Combine top depth-1 trees with primitives and with each other to build depth-2 trees.
         """
@@ -516,7 +516,7 @@ cdef class Grove:
         all_primitives.append("a0")
         
         # Keep top N to avoid combinatorial explosion
-        cdef int n_top = min(max_depth1_trees, len(depth1_candidates))
+        cdef int n_top = len(depth1_candidates)
         cdef list top_depth1 = [c[0] for c in depth1_candidates[:n_top]]
         
         print(f"Stage 2: combining {n_top} depth-1 trees with {len(all_primitives)} primitives + themselves")
