@@ -528,6 +528,7 @@ cdef class Grove:
         cdef int i, j, idx
         
         # 1) depth-1 op primitive (both directions)
+        '''
         for i in range(n_top):
             for prim_str in all_primitives:
                 for op in self.operations:
@@ -548,7 +549,7 @@ cdef class Grove:
                         post = tree.get_superficial_posterior(y)
                         if np.isfinite(post):
                             candidates.append((tree, post))
-        
+        '''
         # 2) depth-1 op depth-1 (all pairs)
         for i in range(n_top):
             for j in range(n_top):
