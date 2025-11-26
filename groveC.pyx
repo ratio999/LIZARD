@@ -507,7 +507,7 @@ cdef class Grove:
                           list depth1_candidates,
                           bint replace_all=True,
                           bint optimize_params=True,
-                          int max_depth1_trees=10):
+                          int max_depth1_trees=None):
         """
         Combine top depth-1 trees with primitives and with each other to build depth-2 trees.
         """
