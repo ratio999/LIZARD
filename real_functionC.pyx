@@ -32,6 +32,7 @@ cdef class RealFunctionC:
         self.params, self.variables = self.classify_symbols()      
         self.params_strs = self.get_par_string()         
         self.prior = None
+        self.grad_funcs = self._build_gradient_functions()
         #self.fit = self.fitness()
         if not isinstance(domain, (np.ndarray)):  # is domain one single element? 
             if self.is_defined(domain):
@@ -192,9 +193,144 @@ cdef class RealFunctionC:
         except:
             return np.inf
 
+
+    cdef dict _build_gradient_functions(self):
+        """
+        Compute analytical gradients symbolically using SymPy.
+        Returns dict: {param_name: lambdified_gradient_function}
+        """
+        if len(self.params) == 0:
+            return {}
+        
+        cdef dict grad_dict = {}
+        cdef object x_sym = sp.symbols('x')
+        cdef object param_sym, grad_expr, grad_func
+        
+        for param_sym in self.params:
+            # Symbolic differentiation: d(expr)/d(param)
+            grad_expr = sp.diff(self.expr, param_sym)
+            
+            # Lambdify: convert to fast NumPy function
+            # Include all params + x as arguments
+            all_syms = [x_sym] + list(self.params)
+            grad_func = sp.lambdify(all_syms, grad_expr, "numpy")
+            
+            grad_dict[str(param_sym)] = grad_func
+
+        return grad_dict
+
+    cdef _symbolic_gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+                  object x=None, dict params=None, double lambda_reg=0.0):
+        """
+        Compute analytical gradient of MSE loss w.r.t. parameters.
+        Uses chain rule: dLoss/dParam = dLoss/dPred * dPred/dParam
+        """
+        if x is None:
+            x = self.domain
+        if params is None or len(params) == 0:
+            return np.array([], dtype=np.float64)
+        
+        # Predictions and residuals
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] y_pred = self.evaluate(x, params)
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] residuals = y_pred - y
+        cdef int n = len(y)
+        
+        # Gradient array: one element per parameter
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] grad = np.zeros(len(params), dtype=np.float64)
+        cdef int i = 0
+        cdef str param_name
+        cdef object grad_func
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] dpred_dparam
+        
+        for param_name in self.params_strs:
+            if param_name not in self.grad_funcs:
+                # Fallback: finite differences if symbolic gradient not available
+                grad[i] = self._finite_diff_gradient(param_name, params, x, y, lambda_reg)
+            else:
+                grad_func = self.grad_funcs[param_name]
+                
+                # Evaluate d(f)/d(param) at each x point
+                # grad_func expects (x, a0, a1, ...) where params are in order
+                param_values = [params[p] for p in self.params_strs]
+                
+                try:
+                    dpred_dparam = np.asarray(grad_func(x, *param_values), dtype=np.float64)
+                    
+                    # Chain rule: dLoss/dParam = (2/n) * sum(residuals * dpred/dparam)
+                    grad[i] = (2.0 / n) * np.nansum(residuals * dpred_dparam)
+                    
+                    # Add regularization term: d(lambda*param^2)/d(param) = 2*lambda*param
+                    grad[i] += 2.0 * lambda_reg * params[param_name]
+                    
+                except Exception as e:
+                    # If evaluation fails, use finite differences
+                    grad[i] = self._finite_diff_gradient(param_name, params, x, y, lambda_reg)
+            
+            i += 1
+        
+        return grad
+
+    cdef _symbolic_gradient_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=None, 
+              dict params=None, double lambda_reg=0.0):
+        if x is None:
+            x = self.domain
+        if params is None or len(params) == 0:
+            return np.array([], dtype=np.float64)
+        
+        # Build gradient functions if not already done
+        if not hasattr(self, 'grad_funcs') or self.grad_funcs is None:
+            self.grad_funcs = self._build_gradient_functions()
+        
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] y_pred = self.evaluate(x, params)
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] residuals = y_pred - y
+        cdef int n = len(y)
+        
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] grad = np.zeros(len(params), dtype=np.float64)
+        cdef list param_values = [params[p] for p in self.params_strs]
+        cdef int i
+        cdef object grad_func
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] dpred_dparam
+        
+        # Compute gradient for each parameter
+        for i in range(len(self.params_strs)):
+            grad_func = self.grad_funcs.get(self.params_strs[i])
+            
+            if grad_func is not None:
+                # Evaluate d(f)/d(param) - this is where NumPy vectorization helps
+                dpred_dparam = np.asarray(grad_func(x, *param_values), dtype=np.float64)
+                
+                # Chain rule: dLoss/dParam = (2/n) * sum(residuals * dpred/dparam)
+                grad[i] = (2.0 / n) * np.nansum(residuals * dpred_dparam)
+                
+                # Add L2 regularization term
+                grad[i] += 2.0 * lambda_reg * params[self.params_strs[i]]
+            else:
+                # Fallback: finite differences
+                grad[i] = 0.0  # or implement finite diff
+        
+        return grad
+
+    cdef double _finite_diff_gradient(self, str param_name, dict params, 
+                                       cnp.ndarray[cnp.float64_t, ndim=1] x,
+                                       cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                       double lambda_reg, double h=1e-7):
+        """Finite difference fallback for gradient computation."""
+        cdef dict params_plus = params.copy()
+        cdef dict params_minus = params.copy()
+        
+        params_plus[param_name] = params[param_name] + h
+        params_minus[param_name] = params[param_name] - h
+        
+        cdef double f_plus = self.fitness(y, params_plus, x, lambda_reg)
+        cdef double f_minus = self.fitness(y, params_minus, x, lambda_reg)
+        
+        return (f_plus - f_minus) / (2.0 * h)
+
     cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x = None, dict params=None, double lambda_reg = 0.0):
         if x is None:
             x=self.domain
+        if params is None or len(params)==0:
+            return np.array([], dtype=np.float64)
         cdef cnp.ndarray[cnp.float64_t, ndim=1] y_pred = np.ascontiguousarray(self.evaluate(x, params), dtype=np.float64).ravel()
         cdef cnp.ndarray[cnp.float64_t, ndim=1] y_true = np.ascontiguousarray(y, dtype=np.float64).ravel()
         cdef cnp.ndarray[cnp.float64_t, ndim=1] residuals = y_pred - y_true
@@ -216,6 +352,32 @@ cdef class RealFunctionC:
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.gradient( y_data, x_data, params_dict, lambda_reg)
 
+    cdef _optimize_with_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+              cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+              dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
+    
+        if len(input_pars) == 0:
+            return None  # No parameters to optimize
+        
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(
+            list(input_pars.values()), dtype=np.float64)
+        
+        # Use gradient-based method if gradients available
+        cdef bint use_gradients = len(self.grad_funcs) > 0
+        
+        cdef object result = minimize(
+            fun=self.objective,
+            x0=initial_params,
+            jac=self.grad if use_gradients else None,
+            args=(x_data, y_data, lambda_reg),
+            method=method_str if use_gradients else 'Powell',
+            options={'disp': False}
+        )
+        
+        return result
+    
+    
+    
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, dict input_pars, double lambda_reg, str method_str='Powell'):
         cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
         #cdef double[:] initial_params = np.array(list(input_pars.values()))

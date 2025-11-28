@@ -505,7 +505,7 @@ cdef class Tree:
         
     cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
-        str method_str='L-BFGS-B'):
+        str method_str='Powell'):
         self._update_parameters(x_data, y_data, lambda_reg, method_str)
     cpdef is_valid(self, object x=None, double max_abs=1e12):
         """

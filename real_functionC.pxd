@@ -24,7 +24,23 @@ cdef class RealFunctionC:
     cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
             dict params=?, object fitness=?, object prior=?,
             object sigma=?, object x=?, double lambda_reg=?)
- 
+    
+    cdef dict _build_gradient_functions(self)
+
+    cdef _symbolic_gradient(self,cnp.ndarray[cnp.float64_t, ndim=1] y, 
+                  object x=?, dict params=?, double lambda_reg=? )
+    
+    cdef _symbolic_gradient_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, 
+              dict params=?, double lambda_reg=?)
+
+    cdef double _finite_diff_gradient(self, str param_name, dict params, 
+                                       cnp.ndarray[cnp.float64_t, ndim=1] x,
+                                       cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                       double lambda_reg, double h=?)
+    cdef _optimize_with_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+              cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+              dict input_pars, double lambda_reg, str method_str=?)
+    
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, double lambda_reg, str method_str=?)
     cdef sort_params_list(self, list pars)
