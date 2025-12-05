@@ -352,7 +352,9 @@ cdef class RealFunctionC:
     def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.gradient( y_data, x_data, params_dict, lambda_reg)
-
+    def symb_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
+        cdef dict params_dict = dict(zip(self.params_strs, flat_params))
+        return self._symbolic_gradient( y_data, x_data, params_dict, lambda_reg)
     cdef _optimize_with_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
               cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
               dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
