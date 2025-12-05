@@ -5,17 +5,18 @@ import sympy as sp
 
 cdef class RealFunctionC:
     cdef str mode
-    cdef object func  # Funzione callable in Python
-    cdef object expr, symbols # Espressione simbolica
-    cdef bint regular  # Flag per la regolarizzazione
-    cdef object domain  # Non utilizzato, puoi rimuoverlo se non serve
-    cdef str description  # Descrizione della funzione
+    cdef object func  
+    cdef object expr, symbols 
+    cdef bint regular  
+    cdef object domain 
+    cdef str description  
     cdef list params
     cdef list params_strs
     cdef object prior
     cdef list variables 
     cdef object cfit
     cdef object cfit_expr
+    cdef dict grad_funcs
     cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = ?)   
     cdef set_prior(self)
     cdef classify_symbols(self)

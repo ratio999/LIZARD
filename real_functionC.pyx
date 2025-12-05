@@ -19,7 +19,7 @@ def safe_convert(value):
 
 cdef class RealFunctionC:
 
-    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time', bint compute_grad = False):
+    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time', bint compute_grad = True):
         """Initialization"""
         self.func = func
         self.mode = mode 
@@ -32,6 +32,7 @@ cdef class RealFunctionC:
         self.params, self.variables = self.classify_symbols()      
         self.params_strs = self.get_par_string()         
         self.prior = None
+        #self.is_differentiable = compute_grad
 
         self.grad_funcs = self._build_gradient_functions() if compute_grad else None
         #self.fit = self.fitness()
@@ -210,8 +211,6 @@ cdef class RealFunctionC:
         for param_sym in self.params:
             # Symbolic differentiation: d(expr)/d(param)
             grad_expr = sp.diff(self.expr, param_sym)
-            
-            # Lambdify: convert to fast NumPy function
             # Include all params + x as arguments
             all_syms = [x_sym] + list(self.params)
             grad_func = sp.lambdify(all_syms, grad_expr, "numpy")
@@ -352,9 +351,11 @@ cdef class RealFunctionC:
     def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.gradient( y_data, x_data, params_dict, lambda_reg)
+    
     def symb_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self._symbolic_gradient( y_data, x_data, params_dict, lambda_reg)
+    
     cdef _optimize_with_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
               cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
               dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
@@ -362,16 +363,23 @@ cdef class RealFunctionC:
         if len(input_pars) == 0:
             return None  # No parameters to optimize
         
+        
         cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(
             list(input_pars.values()), dtype=np.float64)
         
         # Use gradient-based method if gradients available
-        cdef bint use_gradients = len(self.grad_funcs)==initial_params.shape[0] 
         
+        cdef list test_grad = self.symb_grad(initial_params, x_data, y_data, lambda_reg)
+        use_gradients=False
+        if self.grad_funcs is None or len(self.grad_funcs) != initial_params.shape[0] or np.any(~np.isfinite(test_grad)) or np.allclose(test_grad, 0.0):    
+            return self.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
+        else:
+            use_gradients=True
+
         cdef object result = minimize(
             fun=self.objective,
             x0=initial_params,
-            jac=self.grad if use_gradients else None,
+            jac=self.symb_grad if use_gradients else None,
             args=(x_data, y_data, lambda_reg),
             method=method_str if use_gradients else 'Powell',
             options={'disp': False}
@@ -381,7 +389,8 @@ cdef class RealFunctionC:
     
     
     
-    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, dict input_pars, double lambda_reg, str method_str='Powell'):
+    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+        dict input_pars, double lambda_reg, str method_str='Powell'):
         cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
         #cdef double[:] initial_params = np.array(list(input_pars.values()))
         cdef object result = minimize(
