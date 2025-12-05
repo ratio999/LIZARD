@@ -19,7 +19,7 @@ def safe_convert(value):
 
 cdef class RealFunctionC:
 
-    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time'):
+    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time', bint compute_grad = False):
         """Initialization"""
         self.func = func
         self.mode = mode 
@@ -32,7 +32,8 @@ cdef class RealFunctionC:
         self.params, self.variables = self.classify_symbols()      
         self.params_strs = self.get_par_string()         
         self.prior = None
-        self.grad_funcs = self._build_gradient_functions()
+
+        self.grad_funcs = self._build_gradient_functions() if compute_grad else None
         #self.fit = self.fitness()
         if not isinstance(domain, (np.ndarray)):  # is domain one single element? 
             if self.is_defined(domain):
@@ -363,7 +364,7 @@ cdef class RealFunctionC:
             list(input_pars.values()), dtype=np.float64)
         
         # Use gradient-based method if gradients available
-        cdef bint use_gradients = len(self.grad_funcs) > 0
+        cdef bint use_gradients = len(self.grad_funcs)==initial_params.shape[0] 
         
         cdef object result = minimize(
             fun=self.objective,
@@ -416,8 +417,7 @@ cdef class RealFunctionC:
         return np.all(np.isclose(y, y[0]))
         '''
     
-    # Use as less as possible: loop on check_single_value is bottleneck --> NEEDS FIX! 
-    #ONLY DEF SUPPORTS INNER DEFs!
+    # Use as less as possible: loop on check_single_value is bottleneck 
     def is_defined(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = None):
         if params is None:
             params = {}
