@@ -42,7 +42,8 @@ cdef class Grove:
                  list operations=None,
                  double base_temp=1.0,
                  double lambda_reg=0.00,
-                 bint burn_in=False):
+                 bint burn_in=False,
+                 int use_mpi=0):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -56,6 +57,8 @@ cdef class Grove:
         self.domain = x
         self.depth = depth
         self.size = size
+        self.use_mpi = use_mpi >= 2
+        self.n_procs = use_mpi
         self.T = float(T)
         self.base_temp = base_temp if base_temp > 0.0 else 1.0
         #self.trees = self._init_trees(node_list, Npars, init_value)
@@ -639,7 +642,8 @@ cdef class Grove:
         tree.tree_update(tree.root)
         return tree
         
-
+    
+    
 
 
 cdef class Forest:

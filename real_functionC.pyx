@@ -325,7 +325,8 @@ cdef class RealFunctionC:
         cdef double f_minus = self.fitness(y, params_minus, x, lambda_reg)
         
         return (f_plus - f_minus) / (2.0 * h)
-
+    
+    #deprecated
     cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x = None, dict params=None, double lambda_reg = 0.0):
         if x is None:
             x=self.domain

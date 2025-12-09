@@ -20,6 +20,8 @@ cdef class Grove:
     cdef double acceptance_count
     cdef double proposal_count
     cdef bint burn_in
+    cdef bint use_mpi
+    cdef int n_procs
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
