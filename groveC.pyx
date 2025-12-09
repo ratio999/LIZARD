@@ -662,9 +662,12 @@ cdef class Forest:
                  int Npars=0,
                  object init_value=1.0,
                  list operations=None,
-                 double base_temp=1.0):
+                 double base_temp=1.0,
+                 int n_procs=0):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
+        self.n_procs = n_procs
+        self.use_mpi = self.n_procs >= 2
         cdef int G = self.temperatures.shape[0]
         cdef int g
         for g in range(G):

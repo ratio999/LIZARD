@@ -72,6 +72,8 @@ cdef class Grove:
 cdef class Forest:
     cdef list groves
     cdef object temperatures
+    cdef int n_procs
+    cdef bint use_mpi
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove)
     cpdef compute_posteriors_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
     cdef bint _attempt_swap_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y)
