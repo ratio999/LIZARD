@@ -42,6 +42,7 @@ cdef class Grove:
                  list operations=None,
                  double base_temp=1.0,
                  double lambda_reg=0.00,
+                 bint use_gradients=True,
                  bint burn_in=False,
                  int use_mpi=0):
 
@@ -55,6 +56,8 @@ cdef class Grove:
         self.operations = operations
         self.funcs = funcs
         self.domain = x
+        self.use_gradients = use_gradients
+        self.method_str = 'L-BFGS-B' if self.use_gradients else 'Powell'
         self.depth = depth
         self.size = size
         self.use_mpi = use_mpi >= 2
@@ -232,7 +235,8 @@ cdef class Grove:
         #print(cand.name_values)
         
         if len(cand.param_values)>0:
-            cand.update_parameters(self.domain, y, self.lambda_reg)
+            cand.update_parameters(self.domain, y, self.lambda_reg,
+                 self.method_str, self.use_gradients)
         
         cdef double new_post = float(cand.get_superficial_posterior(y))
         cdef double dlogpost = new_post - old_post
@@ -350,7 +354,8 @@ cdef class Grove:
                 
                 # Optimize parameters if any exist
                 if optimize_params and len(tree.params) > 0:
-                    tree.update_parameters(self.domain, y, self.lambda_reg)
+                    tree.update_parameters(self.domain, y, self.lambda_reg, 
+                        self.method_str, self.use_gradients)
                     
                 
                 # Compute posterior
@@ -442,7 +447,8 @@ cdef class Grove:
             tree.tree_update(tree.root)
             if tree.is_valid(self.domain):
                 if optimize_params and len(tree.params) > 0:
-                    tree.update_parameters(self.domain, y, self.lambda_reg)
+                    tree.update_parameters(self.domain, y, self.lambda_reg, 
+                    self.method_str, self.use_gradients)
                 post = tree.get_superficial_posterior(y)
                 if np.isfinite(post):
                     candidates.append((tree, post, 0))  # depth 0
@@ -491,7 +497,8 @@ cdef class Grove:
                     continue
                 
                 if optimize_params and len(tree.params) > 0:
-                    tree.update_parameters(self.domain, y, self.lambda_reg)
+                    tree.update_parameters(self.domain, y, self.lambda_reg,
+                        self.method_str, self.use_gradients)
                 
                 post = tree.get_superficial_posterior(y)
                 if np.isfinite(post):
@@ -543,7 +550,8 @@ cdef class Grove:
                     tree = self._combine_depth1_prim(d1_tree.root, prim_node, op, left_is_tree=True)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y, self.lambda_reg)
+                            tree.update_parameters(self.domain, y, self.lambda_reg, 
+                                self.method_str, self.use_gradients)
                         post = tree.get_superficial_posterior(y)
                         if np.isfinite(post):
                             candidates.append((tree, post))
@@ -552,7 +560,8 @@ cdef class Grove:
                     tree = self._combine_depth1_prim(prim_node, d1_tree.root, op, left_is_tree=False)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y, self.lambda_reg)
+                            tree.update_parameters(self.domain, y, self.lambda_reg,
+                                self.method_str, self.use_gradients)
                         post = tree.get_superficial_posterior(y)
                         if np.isfinite(post):
                             candidates.append((tree, post, 2)) # depth 2
@@ -564,7 +573,8 @@ cdef class Grove:
                     tree = self._combine_two_depth1(depth1_candidates[i][0], depth1_candidates[j][0], op)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y, self.lambda_reg)
+                            tree.update_parameters(self.domain, y, self.lambda_reg,
+                                self.method_str, self.use_gradients)
                         post = tree.get_superficial_posterior(y)
                         if np.isfinite(post):
                             candidates.append((tree, post, 2)) # depth 2
