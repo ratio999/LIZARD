@@ -94,9 +94,12 @@ cdef class Node:
             self.right.posterior_tree(y, parameters)
          
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
-        dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
-        return self.function.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
-
+        dict input_pars, double lambda_reg, str method_str='L-BFGS-B', bint use_gradients=True):
+        if use_gradients:
+            return self.function._optimize_with_grad(x_data, y_data, input_pars, lambda_reg, method_str)
+        else:
+            return self.function.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
+        
         
     cdef set_prior(self):
         self.prior = self.function.prior
@@ -479,21 +482,21 @@ cdef class Tree:
             
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
-        str method_str='L-BFGS-B'):
+        str method_str='L-BFGS-B', bint use_gradients=True):
         cdef dict input_pars = self.name_values
-        return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
+        return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str, use_gradients)
     
     cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
-        str method_str='L-BFGS-B'):
+        str method_str='L-BFGS-B', bint use_gradients=True):
         '''Finds optimal parameters and sets them in the tree'''
         
         cdef dict input_pars = self.name_values
         cdef object result
         cdef dict optimized_params
         cdef Node par
-
-        result = self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str)
+        
+        result = self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str, use_gradients)
         optimized_params = dict(zip(input_pars.keys(), result.x))
         
         for par in self.params:
@@ -505,8 +508,8 @@ cdef class Tree:
         
     cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
-        str method_str='Powell'):
-        self._update_parameters(x_data, y_data, lambda_reg, method_str)
+        str method_str='L-BFGS-B', bint use_gradients=True):
+        self._update_parameters(x_data, y_data, lambda_reg, method_str, use_gradients)
     cpdef is_valid(self, object x=None, double max_abs=1e12):
         """
         Strict validity: evaluation must succeed, be finite, and not explode.

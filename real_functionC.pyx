@@ -369,10 +369,17 @@ cdef class RealFunctionC:
             list(input_pars.values()), dtype=np.float64)
         
         # Use gradient-based method if gradients available
+        if self.grad_funcs is None:
+            try:
+                self.grad_funcs = self._build_gradient_functions()
+            except:
+                return self.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
+
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] test_grad = self.symb_grad(initial_params, x_data, y_data, lambda_reg)
         
-        cdef list test_grad = self.symb_grad(initial_params, x_data, y_data, lambda_reg)
         use_gradients=False
-        if self.grad_funcs is None or len(self.grad_funcs) != initial_params.shape[0] or np.any(~np.isfinite(test_grad)) or np.allclose(test_grad, 0.0):    
+        
+        if len(self.grad_funcs) != initial_params.shape[0] or np.any(~np.isfinite(test_grad)) or np.allclose(test_grad, 0.0):    
             return self.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
         else:
             use_gradients=True
