@@ -606,7 +606,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
             if leaves_count in arr_indices:
                 if len(params_used) < Npars:
                     param_name = par_list[len(params_used)]
-                    return_node = Node(real_functionC.RealFunctionC.from_string(param_name, x),
+                    return_node = Node(real_functionC.RealFunctionC.from_string(param_name, x, compute_grad = False),
                             alpha=alpha, sigma=sigma)
  
 
@@ -617,7 +617,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
                 else:
                     print('ParamsError')
             func_str = random.choice(functions)
-            return_node =Node(real_functionC.RealFunctionC.from_string(func_str, x),
+            return_node =Node(real_functionC.RealFunctionC.from_string(func_str, x, compute_grad = False),
                               alpha=alpha, sigma=sigma) 
             return return_node 
         '''

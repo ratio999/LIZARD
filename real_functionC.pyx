@@ -235,7 +235,8 @@ cdef class RealFunctionC:
             # Symbolic differentiation: d(expr)/d(param)
             grad_expr = sp.diff(self.expr, param_sym)
             # Include all params + x as arguments
-            diff_obj = RealFunctionC.from_string(str(grad_expr), self.domain)
+            diff_obj = RealFunctionC.from_string(str(grad_expr), self.domain, compute_grad=False)
+            print('Gradient expression for param', str(param_sym), ':', grad_expr, ' in ', self.expr)
             if diff_obj.is_valid(self.domain):    
                 all_syms = [x_sym] + list(self.params)
                 grad_func = sp.lambdify(all_syms, grad_expr, "numpy")
@@ -491,7 +492,7 @@ cdef class RealFunctionC:
         return self.evaluate(x)
     # Very important: keep it Python func    
     @classmethod
-    def from_string(cls, expr_str,  cnp.ndarray[cnp.float64_t, ndim=1] x):
+    def from_string(cls, expr_str,  cnp.ndarray[cnp.float64_t, ndim=1] x, compute_grad=True):
         """Creates function class from string"""
        
       
@@ -515,7 +516,7 @@ cdef class RealFunctionC:
             except:
                 return np.full_like(input_x, np.nan, dtype=np.float64)
            
-        return cls(func, expr, x) 
+        return cls(func, expr, x, compute_grad=compute_grad) 
 
     def get_description(self):
         """Access str(self.expr) directly --> redundancy with str(get_expr(self))"""

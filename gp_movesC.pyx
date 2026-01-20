@@ -72,7 +72,7 @@ cdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
     for node in tree.params:
         old_rep = node.function.get_description()
         param_suffix = old_rep[1:]
-        node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain)
+        node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain, compute_grad = False)
 
 cdef refresh_params(function_treeC.Tree tree):
     '''Conforms all parameters to one prefix'''
@@ -95,7 +95,7 @@ cdef refresh_params(function_treeC.Tree tree):
         if param_name in rename_map:
             parent_node = tree.root.find_parent(node)
             old_node = node
-            node.function = real_functionC.RealFunctionC.from_string(rename_map[param_name], tree.domain)
+            node.function = real_functionC.RealFunctionC.from_string(rename_map[param_name], tree.domain, compute_grad = False)
             node.update_func()
             if parent_node is None:
     
@@ -121,7 +121,7 @@ cpdef point_mutation(function_treeC.Tree tree, functions, operations=None, funct
     cdef function_treeC.Node parent = tree.root.find_parent(node_to_mutate)
     if node_to_mutate.is_leaf():
         new_func_str= random.choice(functions)
-        node_to_mutate.function = real_functionC.RealFunctionC.from_string(new_func_str, tree.domain)
+        node_to_mutate.function = real_functionC.RealFunctionC.from_string(new_func_str, tree.domain, compute_grad = False)
     else:
         node_to_mutate.op_symbol = random.choice(operations)
         node_to_mutate.update_func()

@@ -321,26 +321,26 @@ cdef class Grove:
                 # Build left child
                 if left_str == "a0":
                     tree.root.left = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string("a0", self.domain),
+                        function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
                         alpha=tree.alpha, sigma=tree.sigma
                     )
                     tree.root.left.set_value(1.0)
                 else:
                     tree.root.left = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(left_str, self.domain),
+                        function=real_functionC.RealFunctionC.from_string(left_str, self.domain, compute_grad = False),
                         alpha=tree.alpha, sigma=tree.sigma
                     )
                 
                 # Build right child
                 if right_str == "a0":
                     tree.root.right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string("a1", self.domain),
+                        function=real_functionC.RealFunctionC.from_string("a1", self.domain, compute_grad = False),
                         alpha=tree.alpha, sigma=tree.sigma
                     )
                     tree.root.right.set_value(1.0)
                 else:
                     tree.root.right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(right_str, self.domain),
+                        function=real_functionC.RealFunctionC.from_string(right_str, self.domain, compute_grad = False),
                         alpha=tree.alpha, sigma=tree.sigma
                     )
                 
@@ -435,13 +435,13 @@ cdef class Grove:
             )
             if func_str == "a0":
                 tree.root = function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string("a0", self.domain),
+                    function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
                     alpha=tree.alpha, sigma=tree.sigma
                 )
                 tree.root.set_value(1.0)
             else:
                 tree.root = function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string(func_str, self.domain),
+                    function=real_functionC.RealFunctionC.from_string(func_str, self.domain, compute_grad = False),
                     alpha=tree.alpha, sigma=tree.sigma
                 )
             tree.tree_update(tree.root)
@@ -467,26 +467,26 @@ cdef class Grove:
                 # Build left child
                 if left_str == "a0":
                     tree.root.left = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string("a0", self.domain),
+                        function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
                         alpha=tree.alpha, sigma=tree.sigma
                     )
                     tree.root.left.set_value(1.0)
                 else:
                     tree.root.left = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(left_str, self.domain),
+                        function=real_functionC.RealFunctionC.from_string(left_str, self.domain, compute_grad = False),
                         alpha=tree.alpha, sigma=tree.sigma
                     )
                 
                 # Build right child
                 if right_str == "a0":
                     tree.root.right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string("a1", self.domain),
+                        function=real_functionC.RealFunctionC.from_string("a1", self.domain, compute_grad = False),
                         alpha=tree.alpha, sigma=tree.sigma
                     )
                     tree.root.right.set_value(1.0)
                 else:
                     tree.root.right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(right_str, self.domain),
+                        function=real_functionC.RealFunctionC.from_string(right_str, self.domain, compute_grad = False),
                         alpha=tree.alpha, sigma=tree.sigma
                     )
                 
@@ -544,7 +544,7 @@ cdef class Grove:
         
         for i in range(n_top):
             for prim_str in all_primitives:
-                prim_node = function_treeC.Node(function=real_functionC.RealFunctionC.from_string(prim_str, self.domain))
+                prim_node = function_treeC.Node(function=real_functionC.RealFunctionC.from_string(prim_str, self.domain, compute_grad = False))
                 for op in self.operations:
                     # left = depth-1, right = primitive
                     d1_tree = depth1_candidates[i][0] 
