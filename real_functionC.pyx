@@ -372,11 +372,12 @@ cdef class RealFunctionC:
         if self.grad_funcs is None:
             try:
                 self.grad_funcs = self._build_gradient_functions()
+                
             except:
                 return self.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
 
         cdef cnp.ndarray[cnp.float64_t, ndim=1] test_grad = self.symb_grad(initial_params, x_data, y_data, lambda_reg)
-        
+        print('Done computing gradients')
         use_gradients=False
         
         if len(self.grad_funcs) != initial_params.shape[0] or np.any(~np.isfinite(test_grad)) or np.allclose(test_grad, 0.0):    
@@ -392,6 +393,10 @@ cdef class RealFunctionC:
             method=method_str if use_gradients else 'Powell',
             options={'disp': False}
         )
+        if use_gradients:
+            print('Optimization with gradients succeeded.')
+        else:
+            print('Optimization without gradients (Powell) succeeded.')
         
         return result
     

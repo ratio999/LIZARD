@@ -23,7 +23,7 @@ cdef class Grove:
     cdef bint use_mpi
     cdef int n_procs
     cdef bint use_gradients
-    cdef str method_str
+    cdef object method_str
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
