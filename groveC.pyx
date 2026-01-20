@@ -6,6 +6,7 @@ cimport function_treeC
 cimport gp_movesC
 cimport real_functionC
 import itertools
+import sys
 from copy import deepcopy
 from libc.math cimport exp, fmax
 
@@ -351,7 +352,7 @@ cdef class Grove:
                 # Validate
                 if not tree.is_valid(self.domain):
                     continue
-                
+                print(tree)
                 # Optimize parameters if any exist
                 if optimize_params and len(tree.params) > 0:
                     tree.update_parameters(self.domain, y, self.lambda_reg, 
@@ -495,7 +496,7 @@ cdef class Grove:
                 
                 if not tree.is_valid(self.domain):
                     continue
-                
+                print(tree)
                 if optimize_params and len(tree.params) > 0:
                     print('computing params for ', tree.tree_get_description())
                     tree.update_parameters(self.domain, y, self.lambda_reg,
@@ -533,6 +534,7 @@ cdef class Grove:
 
         print(f"Stage 2: combining {n_top} depth-1 trees with {len(all_primitives)} primitives + themselves")
         print(f"  Estimated combinations: ~{n_top * (len(all_primitives) + n_top) * len(self.operations)}")
+        print(f"  Estimated RAM occupancy of the grove: ~{n_top * (len(all_primitives) + n_top) * len(self.operations) * 160 / 1000000} MegaBytes")
         
         cdef str prim_str, op
         cdef function_treeC.Tree tree, d1_tree
@@ -550,6 +552,7 @@ cdef class Grove:
                     d1_tree = depth1_candidates[i][0] 
                     tree = self._combine_depth1_prim(d1_tree.root, prim_node, op, left_is_tree=True)
                     if tree is not None and tree.is_valid(self.domain):
+                        print(sys.getsizeof(tree))
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, self.lambda_reg, 
                                 self.method_str, self.use_gradients)
@@ -560,6 +563,8 @@ cdef class Grove:
                     # left = primitive, right = depth-1
                     tree = self._combine_depth1_prim(prim_node, d1_tree.root, op, left_is_tree=False)
                     if tree is not None and tree.is_valid(self.domain):
+                        print(tree)
+                        print(sys.getsizeof(tree))
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, self.lambda_reg,
                                 self.method_str, self.use_gradients)
@@ -574,6 +579,8 @@ cdef class Grove:
                     tree = self._combine_two_depth1(depth1_candidates[i][0], depth1_candidates[j][0], op)
                     if tree is not None and tree.is_valid(self.domain):
                         if optimize_params and len(tree.params) > 0:
+                            print(tree)
+                            print(sys.getsizeof(tree))
                             tree.update_parameters(self.domain, y, self.lambda_reg,
                                 self.method_str, self.use_gradients)
                         post = tree.get_superficial_posterior(y)
