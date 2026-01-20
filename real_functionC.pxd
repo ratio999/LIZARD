@@ -48,6 +48,10 @@ cdef class RealFunctionC:
     cdef get_par_string(self)
     cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?, double lambda_reg=?) 
     cdef time_to_frequency(self, double[:] x, object data)
+
+    cdef bint is_valid(self, object x=?, double max_abs=?)
+
+
     cpdef get_domain(self) 
     
     cpdef is_param(self) 

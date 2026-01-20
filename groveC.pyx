@@ -497,6 +497,7 @@ cdef class Grove:
                     continue
                 
                 if optimize_params and len(tree.params) > 0:
+                    print('computing params for ', tree.tree_get_description())
                     tree.update_parameters(self.domain, y, self.lambda_reg,
                         self.method_str, self.use_gradients)
                 

@@ -215,6 +215,9 @@ cdef class Node:
                 
             elif self.op_symbol == 'o':   # Composition symbol
                 self.function = self.left.get_fun().compose(self.right.get_fun())
+
+    cdef bint is_valid(self,object x=None, double max_abs=1e12):
+        return self.function.is_valid(x, max_abs)
                 
     cpdef get_leaves(self, leaves_list = None):
         """ Find leaves in the subtree rooted by self"""
@@ -510,31 +513,12 @@ cdef class Tree:
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
         str method_str='L-BFGS-B', bint use_gradients=True):
         self._update_parameters(x_data, y_data, lambda_reg, method_str, use_gradients)
-    cpdef is_valid(self, object x=None, double max_abs=1e12):
+    cpdef bint is_valid(self, object x=None, double max_abs=1e12):
         """
         Strict validity: evaluation must succeed, be finite, and not explode.
         """
-        import numpy as _np
-        #print('checking validity...')
-        cdef object yhat
-        with _np.errstate(all='ignore'):
-            try:
-                yhat = self.evaluate(self.domain if x is None else x)
-                #print('yhat: ', yhat)
-            except Exception:
-                return False
-        #print('1-passed')
-        yhat = _np.asarray(yhat)
-        if yhat.size == 0:
-            return False
-        #print('2-passed')
-        if not _np.all(_np.isfinite(yhat)):
-            #print(yhat)
-            return False
-        #print('3-passed')
-        if _np.any(_np.abs(yhat) > max_abs):
-            return False
-        return True
+        return self.root.is_valid(x, max_abs)
+        
 
 
     cdef _root_replacement(self, object replacement=None, int replace_all = 0, dict kwargs= None,

@@ -9,6 +9,7 @@ cdef class Node:
     cdef str op_symbol
     cdef object domain
     cdef int node_depth
+    cdef bint is_valid(self, object x=?, double max_abs=?)
     cdef cnp.float64_t value    
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?) 
     cpdef set_value(self, cnp.float64_t value=?)
@@ -120,7 +121,7 @@ cdef class Tree:
 
     cpdef node_count(self)
 
-    cpdef is_valid(self, object x=?, double max_abs=?)
+    cpdef bint is_valid(self, object x=?, double max_abs=?)
 
     cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?,
                             int new_depth=?, bint ensure_valid=?)

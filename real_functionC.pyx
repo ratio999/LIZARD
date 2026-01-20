@@ -144,6 +144,29 @@ cdef class RealFunctionC:
         cdef complex[:] dft = np.fft.fft(data) * dt
         return f, dft
         
+    cdef bint is_valid(self, object x=None, double max_abs=1e12):
+                #print('checking validity...')
+        cdef object yhat
+        with np.errstate(all='ignore'):
+            try:
+                yhat = self.evaluate(self.domain if x is None else x)
+                #print('yhat: ', yhat)
+            except Exception:
+                return False
+        #print('1-passed')
+        yhat = np.asarray(yhat)
+        if yhat.size == 0:
+            return False
+        #print('2-passed')
+        if not np.all(np.isfinite(yhat)):
+            #print(yhat)
+            return False
+        #print('3-passed')
+        if np.any(np.abs(yhat) > max_abs):
+            return False
+        print('is_valid passed for expression:', self.get_description())
+        return True
+
 
     cdef object evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
         #print(params)
@@ -207,15 +230,17 @@ cdef class RealFunctionC:
         cdef dict grad_dict = {}
         cdef object x_sym = sp.symbols('x')
         cdef object param_sym, grad_expr, grad_func
-        
+        cdef RealFunctionC diff_obj
         for param_sym in self.params:
             # Symbolic differentiation: d(expr)/d(param)
             grad_expr = sp.diff(self.expr, param_sym)
             # Include all params + x as arguments
-            all_syms = [x_sym] + list(self.params)
-            grad_func = sp.lambdify(all_syms, grad_expr, "numpy")
-            
-            grad_dict[str(param_sym)] = grad_func
+            diff_obj = RealFunctionC.from_string(str(grad_expr), self.domain)
+            if diff_obj.is_valid(self.domain):    
+                all_syms = [x_sym] + list(self.params)
+                grad_func = sp.lambdify(all_syms, grad_expr, "numpy")
+                
+                grad_dict[str(param_sym)] = grad_func
 
         return grad_dict
 
@@ -375,7 +400,7 @@ cdef class RealFunctionC:
                 
             except:
                 return self.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
-
+        
         cdef cnp.ndarray[cnp.float64_t, ndim=1] test_grad = self.symb_grad(initial_params, x_data, y_data, lambda_reg)
         print('Done computing gradients')
         use_gradients=False
