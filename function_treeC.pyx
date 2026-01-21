@@ -30,6 +30,7 @@ cdef class Node:
         self.prior = None
         self.alpha = alpha #keep alpha as it could weight an externally computed prior
         self.sigma = sigma
+        
     def __copy__(self):
         return Node(copy(self.function), copy(self.left), copy(self.right),
             self.op_symbol, alpha=self.alpha, sigma=self.sigma)
@@ -94,7 +95,7 @@ cdef class Node:
             self.right.posterior_tree(y, parameters)
          
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
-        dict input_pars, double lambda_reg, str method_str='L-BFGS-B', bint use_gradients=True):
+        dict input_pars, double lambda_reg, str method_str='L-BFGS-B', bint use_gradients=False):
         if use_gradients:
             return self.function._optimize_with_grad(x_data, y_data, input_pars, lambda_reg, method_str)
         else:
@@ -277,7 +278,10 @@ cdef class Node:
 cdef class Tree:
      
 
-    def __init__(self, int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, Node node=None, int Npars = 0, object value=1, double T=0, double alpha=0.01, object sigma = 1.0):
+    def __init__(self, int depth, list functions, 
+            cnp.ndarray[cnp.float64_t, ndim=1] x, 
+            Node node=None, int Npars = 0, object value=1, 
+            double T=0, double alpha=0.01, object sigma = 1.0):
         '''Tree class initialization'''
         self.T = T
         self.domain = x
@@ -291,6 +295,7 @@ cdef class Tree:
             self.root = build_tree(depth, functions, self.domain, Npars=Npars, value=value, alpha=self.alpha, sigma=self.sigma)
         else:
             self.root = node
+            self.depth = node.depth()
         self.current_description = self.root.function.get_description()
         self.leaves = self.get_leaves()
         self.params = self.get_params()
@@ -485,13 +490,13 @@ cdef class Tree:
             
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
-        str method_str='L-BFGS-B', bint use_gradients=True):
+        str method_str='L-BFGS-B', bint use_gradients=False):
         cdef dict input_pars = self.name_values
         return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str, use_gradients)
     
     cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
-        str method_str='L-BFGS-B', bint use_gradients=True):
+        str method_str='L-BFGS-B', bint use_gradients=False):
         '''Finds optimal parameters and sets them in the tree'''
         
         cdef dict input_pars = self.name_values
@@ -511,7 +516,7 @@ cdef class Tree:
         
     cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
-        str method_str='L-BFGS-B', bint use_gradients=True):
+        str method_str='L-BFGS-B', bint use_gradients=False):
         self._update_parameters(x_data, y_data, lambda_reg, method_str, use_gradients)
     cpdef bint is_valid(self, object x=None, double max_abs=1e12):
         """

@@ -405,6 +405,7 @@ cdef class Grove:
         optimize_params : if True, optimize parameters for each candidate
         
         """
+        cdef tree_cache = {}
         # First, run stage 1 to get depth-1 candidates
         depth1_candidates = self._get_depth1_candidates(y, optimize_params)
         
@@ -426,25 +427,27 @@ cdef class Grove:
         all_primitives.append("a0")
         cdef str left_str, right_str, op
         cdef function_treeC.Tree tree
+        cdef function_treeC.Node root_node
         cdef double post
         print(f"Stage 1: building {len(all_primitives)**2 * len(self.operations)} depth-1 trees")
         # Initialize candidates with primitive functions (depth-0 trees)
         for func_str in all_primitives:
-            tree = function_treeC.Tree(
-                depth=0, functions=self.funcs, x=self.domain,
-                Npars=0, value=1.0, T=self.T
-            )
             if func_str == "a0":
-                tree.root = function_treeC.Node(
+                print('A0\n!\n!\n!\nA0')
+                root_node= function_treeC.Node(
                     function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
-                    alpha=tree.alpha, sigma=tree.sigma
-                )
-                tree.root.set_value(1.0)
+                    )
+                root_node.set_value(1.0)
             else:
-                tree.root = function_treeC.Node(
+                root_node = function_treeC.Node(
                     function=real_functionC.RealFunctionC.from_string(func_str, self.domain, compute_grad = False),
-                    alpha=tree.alpha, sigma=tree.sigma
-                )
+                    )
+            tree = function_treeC.Tree(
+                depth=0, functions=self.funcs, x=self.domain, node=root_node,
+                Npars=len(root_node.function.params()), value=1.0, T=self.T
+            )
+            
+            
             tree.tree_update(tree.root)
             if tree.is_valid(self.domain):
                 if optimize_params and len(tree.params) > 0:
@@ -454,44 +457,48 @@ cdef class Grove:
                 if np.isfinite(post):
                     candidates.append((tree, post, 0))  # depth 0
 
-        
-        
+        cdef function_treeC.Node root_left, root_right, root_tree
         for left_str, right_str in itertools.product(all_primitives, repeat=2):
             if left_str=='a0' and right_str=='a0':
                 continue
             for op in self.operations:
-                tree = function_treeC.Tree(
-                    depth=1, functions=self.funcs, x=self.domain,
-                    Npars=0, value=1.0, T=self.T
-                )
                 
-                # Build left child
                 if left_str == "a0":
-                    tree.root.left = function_treeC.Node(
+                    root_left = function_treeC.Node(
                         function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
-                        alpha=tree.alpha, sigma=tree.sigma
                     )
-                    tree.root.left.set_value(1.0)
+                    root_left.set_value(1.0)
                 else:
-                    tree.root.left = function_treeC.Node(
+                    root_left = function_treeC.Node(
                         function=real_functionC.RealFunctionC.from_string(left_str, self.domain, compute_grad = False),
-                        alpha=tree.alpha, sigma=tree.sigma
                     )
                 
                 # Build right child
                 if right_str == "a0":
-                    tree.root.right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string("a1", self.domain, compute_grad = False),
-                        alpha=tree.alpha, sigma=tree.sigma
+                    root_right = function_treeC.Node(
+                        function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
                     )
-                    tree.root.right.set_value(1.0)
+                    root_right.set_value(1.0)
                 else:
-                    tree.root.right = function_treeC.Node(
+                    root_right = function_treeC.Node(
                         function=real_functionC.RealFunctionC.from_string(right_str, self.domain, compute_grad = False),
-                        alpha=tree.alpha, sigma=tree.sigma
                     )
                 
-                tree.root.assign_operation(op)
+                
+                root_tree = function_treeC.Node(
+                    function=None,
+                    left=root_left,
+                    right=root_right,
+                    symbol=op
+                )                
+                tree = function_treeC.Tree(
+                    depth=root_tree.depth(), functions=self.funcs, x=self.domain, node=root_tree,
+                    Npars=len(root_tree.function.params()), value=1.0, T=self.T
+                )
+                
+                # Build left child
+                
+                #tree.root.assign_operation(op)
                 tree.tree_update(tree.root)
                 
                 if not tree.is_valid(self.domain):

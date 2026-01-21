@@ -46,7 +46,7 @@ def grove_smoke_test():
     y = 2.0 + np.sin(x)
 
     # Primitive set
-    functions = ["sin(x)", "cos(x)", "exp(x)", "x**2", "x**3"]
+    functions = ["sin(x)", "cos(x)", "exp(x)", "x**2", "x**3", "x", "log(x)"]
     operations = ["+", "-", "*", "/", "o", "**"]
 
     # Grove config
@@ -54,7 +54,7 @@ def grove_smoke_test():
     size = 6
     depth = 2
     grove = Grove(x,y, T, size, depth, functions, Npars=4, init_value=1.0, 
-                  operations=operations, base_temp=1.0)
+                  operations=operations, base_temp=1.0, use_gradients=False, burn_in=True)
     
     print("=" * 60)
     print("Initial random trees:")
@@ -63,8 +63,8 @@ def grove_smoke_test():
     print("=" * 60)
     
     # Two-stage burn-in (does both depth-1 and depth-2 internally)
-    print("\n--- Two-Stage Burn-in ---")
-    grove.burn_in_depth2(y, replace_all=True, optimize_params=True )
+    #print("\n--- Two-Stage Burn-in ---")
+    #grove.burn_in_depth2(y, replace_all=True, optimize_params=True )
     
     print(f"\nAfter burn-in, grove contains {grove.size} depth-2 trees")
     for i, tree in enumerate(grove.trees):
