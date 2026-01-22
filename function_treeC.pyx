@@ -245,6 +245,7 @@ cdef class Node:
                 self.function = self.left.get_fun().compose(self.right.get_fun())
 
     cdef bint is_valid(self,object x=None, double max_abs=1e12):
+        print('function: ', self.function.get_description())
         return self.function.is_valid(x, max_abs)
                 
     cpdef get_leaves(self, leaves_list = None):

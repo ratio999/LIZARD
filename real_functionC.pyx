@@ -19,7 +19,7 @@ def safe_convert(value):
 
 cdef class RealFunctionC:
 
-    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time', bint compute_grad = False):
+    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time', bint compute_grad = False, double constant_value=1.0):
         """Initialization"""
         self.func = func
         self.mode = mode 
@@ -32,8 +32,11 @@ cdef class RealFunctionC:
         self.params, self.variables = self.classify_symbols()      
         self.params_strs = self.get_par_string()         
         self.prior = None
+        if self.is_param():
+            self.constant_value = constant_value
         #self.is_differentiable = compute_grad
-
+        else:
+            self.constant_value = None
         self.grad_funcs = self._build_gradient_functions() if compute_grad else None
         #self.fit = self.fitness()
         if not isinstance(domain, (np.ndarray)):  # is domain one single element? 
@@ -153,15 +156,15 @@ cdef class RealFunctionC:
                 #print('yhat: ', yhat)
             except Exception:
                 return False
-        #print('1-passed')
+        print('1-passed')
         yhat = np.asarray(yhat)
         if yhat.size == 0:
             return False
-        #print('2-passed')
+        print('2-passed')
         if not np.all(np.isfinite(yhat)):
-            #print(yhat)
+            print(yhat)
             return False
-        #print('3-passed')
+        print('3-passed')
         if np.any(np.abs(yhat) > max_abs):
             return False
         print('is_valid passed for expression:', self.get_description())
@@ -175,7 +178,10 @@ cdef class RealFunctionC:
             params = {}
         #print('params in eval ', params)
         #print('in evaluate: ', self.func(x, params=params))
+        if self.is_param():
+            return np.full_like(x, self.constant_value, dtype=np.float64).ravel()
         cdef object out = self.func(x, params=params)
+        print('out: ', out, '\n', 'x: ', x  )
         try:
             vector_safe_convert = np.vectorize(safe_convert)
             out_safe = vector_safe_convert(out)
