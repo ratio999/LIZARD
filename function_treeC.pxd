@@ -19,7 +19,7 @@ cdef class Node:
     cdef object prior
     cdef double alpha
     cdef object sigma
-
+    cdef fetch_fun(self, Node left = ?, Node right = ?, str operation = ?)
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         dict input_pars, double lambda_reg, str method_str=?, bint use_gradients=?)
     

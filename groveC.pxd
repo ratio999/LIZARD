@@ -24,6 +24,7 @@ cdef class Grove:
     cdef int n_procs
     cdef bint use_gradients
     cdef object method_str
+    cdef dict cache
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
@@ -55,19 +56,16 @@ cdef class Grove:
     cpdef burn_in_depth2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                          bint replace_all=?, bint optimize_params=?)
 
-    cdef  _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+    cdef  _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict tree_cache,
                                       bint optimize_params=?)    
 
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
-                          list depth1_candidates,
+                          list up2depth1_candidates,
+                          dict tree_cache,
                           bint replace_all=?,
                           bint optimize_params=?)
 
-    cdef  _combine_depth1_prim(self, function_treeC.Node left, function_treeC.Node right, object op,
-                                                   bint left_is_tree=?)
-
-    cdef  _combine_two_depth1(self, function_treeC.Tree left_tree,
-                                                  function_treeC.Tree right_tree, object op)
+    cdef  _combine_depth1(self, function_treeC.Node left, function_treeC.Node right, object op)
 
     cpdef  acceptance_rate(self)
 

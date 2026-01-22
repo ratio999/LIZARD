@@ -14,7 +14,7 @@ import re
 cdef class Node:
     '''Node of a Tree: either a leaf, or an operation on two other nodes'''    
     def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=None, double alpha = 0.01, object sigma = 1.00):
-        self.function = function
+        self.function = function if function is not None else self.fetch_fun()
         self.left = left
         self.right = right
         self.op_symbol = symbol
@@ -80,6 +80,33 @@ cdef class Node:
         cdef Node i
         cdef list pars_str = [sp.symbols(i.function.get_description()) for i in pars]
         self.function.sort_params_list(pars_str)
+
+    cdef fetch_fun(self, Node left = None, Node right = None, str operation = None):
+        '''Fetches function if none is provided'''
+        if left is None and right is None and operation is None:
+            return None
+        cdef real_functionC.RealFunctionC auxiliary_fun  
+        if left is None:
+            left = self.left
+        if right is None:
+            right = self.right     
+        if operation is None:
+            operation = self.op_symbol
+        
+        if operation == '+':
+            auxiliary_fun = left.function + right.function
+        elif operation == '-':
+            auxiliary_fun = left.function - right.function
+        elif operation == '*':
+            auxiliary_fun = left.function * right.function
+        elif operation == '/':
+            auxiliary_fun = left.function / right.function
+        elif operation == '**':
+            auxiliary_fun = left.function ** right.function  # Operazione di potenza
+        elif operation == 'o':   # Composition symbol
+            auxiliary_fun = left.function.compose(right.function)
+        
+        return auxiliary_fun
 
     cpdef fitness_tree(self,  y, parameters):
         self.set_fitness(y, parameters)
