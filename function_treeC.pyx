@@ -83,8 +83,7 @@ cdef class Node:
 
     cdef fetch_fun(self, Node left = None, Node right = None, str operation = None):
         '''Fetches function if none is provided'''
-        if left is None and right is None and operation is None:
-            return None
+        
         cdef real_functionC.RealFunctionC auxiliary_fun  
         if left is None:
             left = self.left
@@ -92,6 +91,9 @@ cdef class Node:
             right = self.right     
         if operation is None:
             operation = self.op_symbol
+        
+        if left is None and right is None and operation is None:
+            return None
         
         if operation == '+':
             auxiliary_fun = left.function + right.function
@@ -105,7 +107,7 @@ cdef class Node:
             auxiliary_fun = left.function ** right.function  # Operazione di potenza
         elif operation == 'o':   # Composition symbol
             auxiliary_fun = left.function.compose(right.function)
-        
+        print('fetched function: ', auxiliary_fun.get_description())
         return auxiliary_fun
 
     cpdef fitness_tree(self,  y, parameters):

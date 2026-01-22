@@ -496,7 +496,8 @@ cdef class Grove:
                         function=real_functionC.RealFunctionC.from_string(right_str, self.domain, compute_grad = False),
                     )
                 print('right child built')
-                
+                print(root_left.function.get_description())
+                print(root_right.function.get_description())
                 root_tree = function_treeC.Node(
                     function=None,
                     left=root_left,
