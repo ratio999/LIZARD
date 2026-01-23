@@ -1,3 +1,4 @@
+import tqdm
 from real_functionC import RealFunctionC
 #from fitnessC import calculate_likelihood
 #from posteriorC import calculate_posterior

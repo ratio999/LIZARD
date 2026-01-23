@@ -156,18 +156,18 @@ cdef class RealFunctionC:
                 #print('yhat: ', yhat)
             except Exception:
                 return False
-        print('1-passed')
+        #print('1-passed')
         yhat = np.asarray(yhat)
         if yhat.size == 0:
             return False
-        print('2-passed')
+        #print('2-passed')
         if not np.all(np.isfinite(yhat)):
-            print(yhat)
+            #print(yhat)
             return False
-        print('3-passed')
+        #print('3-passed')
         if np.any(np.abs(yhat) > max_abs):
             return False
-        print('is_valid passed for expression:', self.get_description())
+        #print('is_valid passed for expression:', self.get_description())
         return True
 
 
@@ -454,7 +454,7 @@ cdef class RealFunctionC:
 
         try:
             self.params = sorted(self.params, key=lambda n: pars.index(n))
-            print('sorting went fine')
+            #print('sorting went fine')
             self.params_strs = self.get_par_string()         
         except:
             print('Issues: ', self.params, pars)
