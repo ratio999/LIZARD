@@ -14,10 +14,10 @@ import re
 cdef class Node:
     '''Node of a Tree: either a leaf, or an operation on two other nodes'''    
     def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=None, double alpha = 0.01, object sigma = 1.00):
-        self.function = function if function is not None else self.fetch_fun()
         self.left = left
         self.right = right
         self.op_symbol = symbol
+        self.function = function if function is not None else self.fetch_fun()
         self.node_depth = self.depth()
         self.domain = self.function.domain
         self.bis_param = self.is_param()
@@ -87,14 +87,18 @@ cdef class Node:
         cdef real_functionC.RealFunctionC auxiliary_fun  
         if left is None:
             left = self.left
+            print('left is none')   
         if right is None:
             right = self.right     
+            print('right is none')
         if operation is None:
             operation = self.op_symbol
-        
+            print('operation is none')
         if left is None and right is None and operation is None:
+            print('returning none')
             return None
-        
+        print('fetching from', left.function.get_description(),
+         operation, right.function.get_description())
         if operation == '+':
             auxiliary_fun = left.function + right.function
         elif operation == '-':

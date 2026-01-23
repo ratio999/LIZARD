@@ -181,7 +181,7 @@ cdef class RealFunctionC:
         if self.is_param():
             return np.full_like(x, self.constant_value, dtype=np.float64).ravel()
         cdef object out = self.func(x, params=params)
-        print('out: ', out, '\n', 'x: ', x  )
+        
         try:
             vector_safe_convert = np.vectorize(safe_convert)
             out_safe = vector_safe_convert(out)
