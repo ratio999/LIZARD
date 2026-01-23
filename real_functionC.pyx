@@ -27,7 +27,7 @@ cdef class RealFunctionC:
         self.description = str(expr)  # Needed for printing 
         self.regular = False  # 100% useless 
         self.params = params
-        self.domain = domain 
+        self.domain = self._domain_fixer(domain) 
         self.symbols = self.expr.free_symbols
         self.params, self.variables = self.classify_symbols()      
         self.params_strs = self.get_par_string()         
@@ -52,6 +52,17 @@ cdef class RealFunctionC:
         self.regular = True
         self.cfit = None
         self.cfit_expr = None
+    
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer(self, 
+                    cnp.ndarray[cnp.float64_t, ndim=1] domain):
+        """Ensure domain is a 1D numpy array of float64."""
+        #cdef double[:] arrview = np.ascontiguousarray(domain, dtype=np.float64).ravel()
+        cdef Py_ssize_t i, N = domain.shape[0]
+        for i in range(N):
+            if domain[i] == 0.0:
+                domain[i] = 1e-10     
+        return domain
+        
     
     def __copy__(self):
         cdef object copy_func = lambda input_x, params: self.func(input_x, params)
@@ -242,7 +253,7 @@ cdef class RealFunctionC:
             grad_expr = sp.diff(self.expr, param_sym)
             # Include all params + x as arguments
             diff_obj = RealFunctionC.from_string(str(grad_expr), self.domain, compute_grad=False)
-            print('Gradient expression for param', str(param_sym), ':', grad_expr, ' in ', self.expr)
+            #print('Gradient expression for param', str(param_sym), ':', grad_expr, ' in ', self.expr)
             if diff_obj.is_valid(self.domain):    
                 all_syms = [x_sym] + list(self.params)
                 grad_func = sp.lambdify(all_syms, grad_expr, "numpy")
@@ -409,7 +420,7 @@ cdef class RealFunctionC:
                 return self.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
         
         cdef cnp.ndarray[cnp.float64_t, ndim=1] test_grad = self.symb_grad(initial_params, x_data, y_data, lambda_reg)
-        print('Done computing gradients')
+        #print('Done computing gradients')
         use_gradients=False
         
         if len(self.grad_funcs) != initial_params.shape[0] or np.any(~np.isfinite(test_grad)) or np.allclose(test_grad, 0.0):    
@@ -425,10 +436,10 @@ cdef class RealFunctionC:
             method=method_str if use_gradients else 'Powell',
             options={'disp': False}
         )
-        if use_gradients:
-            print('Optimization with gradients succeeded.')
-        else:
-            print('Optimization without gradients (Powell) succeeded.')
+        #if use_gradients:
+            #print('Optimization with gradients succeeded.')
+        #else:
+            #print('Optimization without gradients (Powell) succeeded.')
         
         return result
     
@@ -444,7 +455,7 @@ cdef class RealFunctionC:
                 jac=self.grad,
                 args=(x_data, y_data, lambda_reg),
                 method=method_str,
-                options={'disp': True}
+                options={'disp': False}
                 )
         #self.params = dict(zip(self.param_str, result.x))
         

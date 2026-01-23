@@ -43,11 +43,11 @@ import matplotlib.pyplot as plt
 
 def grove_smoke_test():
     # Domain and target
-    x = np.linspace(0, 10, 200).astype(np.float64)
+    x = np.linspace(0.001, 10, 200).astype(np.float64)
     y = 2.0 + np.sin(x)
-
+    
     # Primitive set
-    functions = ["sin(x)", "cos(x)", "exp(x)", "x**2", "x**3", "x", "log(x)"]
+    functions = ["sin(x)", "cos(x)", "exp(x)", "x", "log(x)"]
     operations = ["+", "-", "*", "/", "o", "**"]
 
     # Grove config

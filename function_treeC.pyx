@@ -245,7 +245,6 @@ cdef class Node:
                 self.function = self.left.get_fun().compose(self.right.get_fun())
 
     cdef bint is_valid(self,object x=None, double max_abs=1e12):
-        print('function: ', self.function.get_description())
         return self.function.is_valid(x, max_abs)
                 
     cpdef get_leaves(self, leaves_list = None):
@@ -513,7 +512,7 @@ cdef class Tree:
     cpdef get_superficial_posterior(self, y):
         if self.root.posterior is None:
             self.compute_superficial_posterior(y)
-        print('computed posterior', self.root.posterior)
+        
         return self.root.posterior
             
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
@@ -540,7 +539,7 @@ cdef class Tree:
         
         self.param_values, self.name_values = self.get_param_values()
         self.tree_update(self.root)
-        print('Updated parameters to: ', self.name_values) #comment out in production
+        #print('Updated parameters to: ', self.name_values) #comment out in production
         
     cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 

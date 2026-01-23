@@ -565,7 +565,7 @@ cdef class Grove:
         print(f"  Estimated RAM occupancy of the grove: ~{n_top * (len(all_primitives) + n_top) * len(self.operations) * 160 / 1000000} MegaBytes")
         
         cdef str prim_str, op
-        cdef function_treeC.Tree tree, d1_tree
+        cdef function_treeC.Tree tree, d1_tree, d1_tree_2
         cdef double post
         cdef int i, j, idx
         cdef function_treeC.Node prim_node
@@ -609,7 +609,9 @@ cdef class Grove:
         for i in range(n_top):
             for j in range(n_top):
                 for op in self.operations:
-                    tree = self._combine_depth1(depth1_candidates[i][0], depth1_candidates[j][0], op)
+                    d1_tree = depth1_candidates[i][0]
+                    d1_tree_2 = depth1_candidates[j][0]
+                    tree = self._combine_depth1(d1_tree.root, d1_tree_2.root, op)
                     expression = tree.tree_get_description()
                     
                     if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
