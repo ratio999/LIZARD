@@ -796,22 +796,30 @@ cdef class Grove:
         # ============================================================
         # GATHER ALL CANDIDATES TO RANK 0
         # ============================================================
-        cdef object all_candidates_list = comm.gather(local_candidates, root=0)
-        cdef object all_cache_list = comm.gather(local_cache, root=0)
+        #cdef object all_candidates_list = comm.gather(local_candidates, root=0)
+        cdef list all_cache_list = comm.gather(local_cache, root=0)
         
+        print(all_cache_list)
+        #cdef list all_candidates_list = [function_treeC._expr_to_tree(ex, self.domain, self.funcs) for ex in all_cache_list]
         if rank == 0:
             # Flatten the list of lists
             candidates = []
-            for cand_list in all_candidates_list:
-                candidates.extend(cand_list)
-            
-            # Merge caches
             for cache_dict in all_cache_list:
-                tree_cache.update(cache_dict)
+                for expr_str, post in cache_dict.items():
+                    tree = function_treeC._expr_to_tree(
+                        real_functionC.RealFunctionC.from_string(
+                            expr_str, self.domain, compute_grad=False).get_expr(), 
+                        self.domain, self.funcs)
+                    candidates.append((tree, post))
+            # Merge caches
+            ''' 
+            for cache_dict in all_cache_list:
+            tree_cache.update(cache_dict)
             
             # Add depth-1 candidates
             for c in up2depth1_candidates:
                 candidates.append(c)
+            '''
             
             # Sort and assign to grove
             candidates.sort(key=_bis2_parallel_helper, reverse=True)
