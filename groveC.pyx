@@ -88,8 +88,16 @@ cdef class Grove:
             depth1_candidates = self._get_depth1_candidates(y if 'y' in locals() else self.data, tree_cache=self.cache, optimize_params=True)
             
             # Stage 2: Combine top depth-1 trees to create depth-2 trees
-            if len(depth1_candidates) > 0:
+            if len(depth1_candidates) > 0 and not self.use_mpi:
                 self._burn_in_stage2(
+                    y if 'y' in locals() else self.data,
+                    depth1_candidates,
+                    self.cache,
+                    replace_all=True,  # Will replace after trees are initialized
+                    optimize_params=True
+                )
+            elif len(depth1_candidates) > 0 and self.use_mpi:
+                self._burn_in_stage2_parallel(
                     y if 'y' in locals() else self.data,
                     depth1_candidates,
                     self.cache,
@@ -691,7 +699,7 @@ cdef class Grove:
         cdef object comm = MPI.COMM_WORLD
         cdef rank = int(comm.Get_rank())
         cdef n_procs = int(comm.Get_size())
-        
+        print('number of processes: ', n_procs)
         # Filter depth-1 candidates
         cdef list depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
         cdef list all_primitives = self.funcs.copy()
@@ -742,7 +750,7 @@ cdef class Grove:
             pbar = tqdm(total=total_work, desc="Stage 2 (MPI)", unit=" combos")
         cdef function_treeC.Node prim_node
         cdef function_treeC.Tree tree, d1_tree, d1_tree_2
-        cdef int local_count, all_counts
+        #cdef int local_count, all_counts
 
         for idx, item in enumerate(my_work):
             if item[0] == 'd1_prim':
