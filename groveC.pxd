@@ -64,7 +64,12 @@ cdef class Grove:
                           dict tree_cache,
                           bint replace_all=?,
                           bint optimize_params=?)
-
+    cpdef _burn_in_stage2_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, list up2depth1_candidates,
+                            dict tree_cache, bint replace_all=?, bint optimize_params=?)
+    
+    cdef _process_candidate(self, function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                    bint optimize_params, dict local_cache, list local_candidates)
+    
     cdef  _combine_depth1(self, function_treeC.Node left, function_treeC.Node right, object op)
 
     cpdef  acceptance_rate(self)
@@ -79,3 +84,5 @@ cdef class Forest:
     cdef bint _attempt_swap_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef int attempt_swaps(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef function_treeC.Tree best_tree(self)
+
+cdef _bis2_parallel_helper(object x)

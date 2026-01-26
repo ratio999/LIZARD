@@ -11,6 +11,9 @@ import time
 import sys
 from copy import deepcopy
 from libc.math cimport exp, fmax
+from mpi4py import MPI
+#from mpi4py cimport MPI as cMPI
+#from mpi4py.libmpi cimport *
 
 cdef inline double _safe_exp(double x) nogil:
     # mild guard for very negative x
@@ -679,8 +682,164 @@ cdef class Grove:
                                     x=self.domain, node = root_node,
                                     Npars=len(root_node.function.params), value=1.0, T=self.T)
         return tree
+    
+    cpdef _burn_in_stage2_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, list up2depth1_candidates,
+                            dict tree_cache, bint replace_all=True, bint optimize_params=True):
+        """
+        MPI-parallel version of _burn_in_stage2.
+        """
+        cdef object comm = MPI.COMM_WORLD
+        cdef rank = int(comm.Get_rank())
+        cdef n_procs = int(comm.Get_size())
         
+        # Filter depth-1 candidates
+        cdef list depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
+        cdef list all_primitives = self.funcs.copy()
+        all_primitives.append("a0")
+        
+        cdef int n_top = len(depth1_candidates)
+        
+        # ============================================================
+        # BUILD ALL WORK ITEMS (list of tasks)
+        # ============================================================
+        cdef list work_items = []
+        
+        # Type 1: depth-1 op primitive (both directions)
+        for i in range(n_top):
+            for prim_str in all_primitives:
+                for op in self.operations:
+                    work_items.append(('d1_prim', i, prim_str, op))
+        
+        # Type 2: depth-1 op depth-1
+        for i in range(n_top):
+            for j in range(n_top):
+                for op in self.operations:
+                    work_items.append(('d1_d1', i, j, op))
+        
+        cdef int total_work = len(work_items)
+        
+        # ============================================================
+        # DIVIDE WORK AMONG RANKS
+        # ============================================================
+        # Each rank gets a slice of work_items
+        cdef int chunk_size = (total_work + n_procs - 1) // n_procs
+        cdef int start_idx = rank * chunk_size
+        cdef int end_idx = min(start_idx + chunk_size, total_work)
+        cdef object my_work = work_items[start_idx:end_idx]
+        
+        if rank == 0:
+            print(f"Stage 2: {n_top} depth-1 trees, {total_work} total combinations")
+            print(f"  Distributed across {n_procs} MPI processes")
+        
+        # ============================================================
+        # LOCAL PROGRESS BAR (only rank 0 shows it)
+        # ============================================================
+        cdef list local_candidates = []
+        cdef dict local_cache = {}
+        
+        # Only rank 0 shows progress bar
+        if rank == 0:
+            pbar = tqdm(total=total_work, desc="Stage 2 (MPI)", unit=" combos")
+        cdef function_treeC.Node prim_node
+        cdef function_treeC.Tree tree, d1_tree, d1_tree_2
+        cdef int local_count, all_counts
 
+        for idx, item in enumerate(my_work):
+            if item[0] == 'd1_prim':
+                _, i, prim_str, op = item
+                prim_node = function_treeC.Node(
+                    function=real_functionC.RealFunctionC.from_string(
+                        prim_str, self.domain, compute_grad=False))
+                d1_tree = depth1_candidates[i][0]
+                
+                # Left = depth-1, Right = primitive
+                tree = self._combine_depth1(d1_tree.root, prim_node, op)
+                self._process_candidate(tree, y, optimize_params, local_cache, local_candidates)
+                
+                # Right = depth-1, Left = primitive
+                tree = self._combine_depth1(prim_node, d1_tree.root, op)
+                self._process_candidate(tree, y, optimize_params, local_cache, local_candidates)
+                
+            elif item[0] == 'd1_d1':
+                _, i, j, op = item
+                d1_tree = depth1_candidates[i][0]
+                d1_tree_2 = depth1_candidates[j][0]
+                tree = self._combine_depth1(d1_tree.root, d1_tree_2.root, op)
+                self._process_candidate(tree, y, optimize_params, local_cache, local_candidates)
+            
+            # ============================================================
+            # UPDATE PROGRESS BAR (aggregate from all ranks)
+            # ============================================================
+            # Every N iterations, sync progress counts
+            
+            if (idx + 1) % 100 == 0 or idx == len(my_work) - 1:
+                # Gather counts from all ranks to rank 0
+                local_count = idx + 1
+                all_counts = comm.gather(local_count, root=0)
+                
+                if rank == 0:
+                    total_done = sum(all_counts)
+                    pbar.n = total_done
+                    pbar.refresh()
+        
+        if rank == 0:
+            pbar.close()
+        
+        # ============================================================
+        # GATHER ALL CANDIDATES TO RANK 0
+        # ============================================================
+        cdef object all_candidates_list = comm.gather(local_candidates, root=0)
+        cdef object all_cache_list = comm.gather(local_cache, root=0)
+        
+        if rank == 0:
+            # Flatten the list of lists
+            candidates = []
+            for cand_list in all_candidates_list:
+                candidates.extend(cand_list)
+            
+            # Merge caches
+            for cache_dict in all_cache_list:
+                tree_cache.update(cache_dict)
+            
+            # Add depth-1 candidates
+            for c in up2depth1_candidates:
+                candidates.append(c)
+            
+            # Sort and assign to grove
+            candidates.sort(key=_bis2_parallel_helper, reverse=True)
+            
+            # ... rest of the assignment logic (same as original)
+            if replace_all:
+                self.trees = [c[0] for c in candidates[:self.size]]
+                self.root_posteriors = np.array([c[1] for c in candidates[:self.size]])
+            
+            print(f"Burn-in complete. Best: {self.root_posteriors[0]:.4f}")
+        
+        # Broadcast final trees to all ranks if needed
+        self.trees = comm.bcast(self.trees if rank == 0 else None, root=0)
+        self.root_posteriors = comm.bcast(self.root_posteriors if rank == 0 else None, root=0)
+
+
+    cdef _process_candidate(self, function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                        bint optimize_params, dict local_cache, list local_candidates):
+        """Helper to process a single candidate tree."""
+        if tree is None:
+            return
+        cdef str expression = tree.tree_get_description()
+        if expression in local_cache:
+            return
+        if not tree.is_valid(self.domain):
+            return
+        
+        if optimize_params and len(tree.params) > 0:
+            tree.update_parameters(self.domain, y, self.lambda_reg,
+                                self.method_str, self.use_gradients)
+        
+        cdef double post = tree.get_superficial_posterior(y)
+        local_cache[expression] = post
+        
+        if np.isfinite(post):
+            local_candidates.append((tree, post))
 
 cdef class Forest:
     """
@@ -797,3 +956,7 @@ cdef class Forest:
                 best_val = gr.root_posteriors[idx]
                 best = gr.trees[idx]
         return best
+
+
+cdef _bis2_parallel_helper(object x):
+        return x[1]
