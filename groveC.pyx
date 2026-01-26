@@ -58,7 +58,7 @@ cdef class Grove:
             operations = ["+", "-", "*", "/", "**", "o"]
         self.operations = operations
         self.funcs = funcs
-        self.domain = x
+        self.domain = real_functionC._domain_fixer(x)
         self.use_gradients = use_gradients
         self.method_str = 'L-BFGS-B' if self.use_gradients else 'Powell'
         self.depth = depth

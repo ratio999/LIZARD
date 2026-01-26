@@ -311,7 +311,7 @@ cdef class Tree:
             double T=0, double alpha=0.01, object sigma = 1.0):
         '''Tree class initialization'''
         self.T = T
-        self.domain = x
+        self.domain = real_functionC._domain_fixer(x)
         self.depth = depth
         self.functions = functions
         self.Npars=Npars

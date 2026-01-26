@@ -18,8 +18,7 @@ cdef class RealFunctionC:
     cdef object cfit_expr
     cdef dict grad_funcs
     cdef object constant_value
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer(self, 
-                    cnp.ndarray[cnp.float64_t, ndim=1] domain)
+    
     cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = ?)   
     cdef set_prior(self)
     cdef classify_symbols(self)
@@ -79,3 +78,6 @@ cdef class RealFunctionC:
 
 
 cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept
+
+cdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer( 
+                    cnp.ndarray[cnp.float64_t, ndim=1] domain)

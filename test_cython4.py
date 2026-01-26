@@ -59,7 +59,7 @@ def grove_smoke_test():
     
     print("=" * 60)
     print("Initial random trees:")
-    for i, tree in enumerate(grove.trees):
+    for i, tree in enumerate(grove.trees[-10:]):
         print(f"  Tree {i}: {tree.tree_get_description()}")
     print("=" * 60)
     

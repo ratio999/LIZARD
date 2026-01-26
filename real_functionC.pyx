@@ -27,7 +27,7 @@ cdef class RealFunctionC:
         self.description = str(expr)  # Needed for printing 
         self.regular = False  # 100% useless 
         self.params = params
-        self.domain = self._domain_fixer(domain) 
+        self.domain = _domain_fixer(domain) 
         self.symbols = self.expr.free_symbols
         self.params, self.variables = self.classify_symbols()      
         self.params_strs = self.get_par_string()         
@@ -53,15 +53,7 @@ cdef class RealFunctionC:
         self.cfit = None
         self.cfit_expr = None
     
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer(self, 
-                    cnp.ndarray[cnp.float64_t, ndim=1] domain):
-        """Ensure domain is a 1D numpy array of float64."""
-        #cdef double[:] arrview = np.ascontiguousarray(domain, dtype=np.float64).ravel()
-        cdef Py_ssize_t i, N = domain.shape[0]
-        for i in range(N):
-            if domain[i] == 0.0:
-                domain[i] = 1e-10     
-        return domain
+    
         
     
     def __copy__(self):
@@ -635,3 +627,12 @@ cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept:
     return realf._cfunc(x, w, ndim)
     
 
+cdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer( 
+                    cnp.ndarray[cnp.float64_t, ndim=1] domain):
+        """Ensure domain is a 1D numpy array of float64."""
+        #cdef double[:] arrview = np.ascontiguousarray(domain, dtype=np.float64).ravel()
+        cdef Py_ssize_t i, N = domain.shape[0]
+        for i in range(N):
+            if domain[i] == 0.0:
+                domain[i] = 1e-10     
+        return domain
