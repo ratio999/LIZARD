@@ -9,6 +9,7 @@ import itertools
 from tqdm import tqdm
 import time
 import sys
+import os
 from copy import deepcopy
 from libc.math cimport exp, fmax
 from mpi4py import MPI
@@ -846,7 +847,165 @@ cdef class Grove:
         #self.root_posteriors = comm.bcast(self.root_posteriors if rank == 0 else None, root=0)
 
        
-            
+    cpdef _burn_in_stage2_parallel_spawn(self, 
+                                    cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                    list up2depth1_candidates,
+                                    dict tree_cache,
+                                    bint replace_all=True,
+                                    bint optimize_params=True,
+                                    int n_workers=4):
+        """
+        Spawn MPI workers for parallel burn-in, then collect results.
+        
+        This function runs in a SINGLE process. It spawns workers,
+        distributes work, collects results, and workers exit.
+        No need to run with mpirun/mpiexec.
+        
+        Parameters
+        ----------
+        n_workers : int
+            Number of worker processes to spawn (default: 4)
+        """
+        from mpi4py import MPI
+        from operator import itemgetter
+        
+        # =========================================================
+        # PREPARE DATA
+        # =========================================================
+        depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
+        all_primitives = self.funcs.copy()
+        all_primitives.append("a0")
+        n_top = len(depth1_candidates)
+        
+        if n_top == 0:
+            print("No depth-1 candidates to combine")
+            return
+        
+        # Serialize depth-1 trees for workers
+        depth1_data = []
+        for tree, post, depth in depth1_candidates:
+            expr = tree.tree_get_description()
+            params = list(tree.params) if tree.params else []
+            depth1_data.append((expr, params, post))
+        
+        # Build ALL work items
+        work_items = []
+        for i in range(n_top):
+            for prim_str in all_primitives:
+                for op in self.operations:
+                    work_items.append(('d1_prim', i, prim_str, op))
+        
+        for i in range(n_top):
+            for j in range(n_top):
+                for op in self.operations:
+                    work_items.append(('d1_d1', i, j, op))
+        
+        total_work = len(work_items)
+        print(f"Stage 2: {n_top} depth-1 trees × {len(all_primitives)} primitives × {len(self.operations)} ops")
+        print(f"  Total combinations: {total_work}")
+        print(f"  Spawning {n_workers} worker processes...")
+        
+        # =========================================================
+        # SPAWN WORKERS
+        # =========================================================
+        # Path to worker script (same directory as this module)
+        worker_script = os.path.join(os.path.dirname(__file__), 'mpi_worker.py')
+        
+        # Spawn worker processes
+        # MPI.COMM_SELF is the communicator for just this process
+        intercomm = MPI.COMM_SELF.Spawn(
+            sys.executable,  # Python interpreter
+            args=[worker_script],
+            maxprocs=n_workers
+        )
+        
+        # =========================================================
+        # BROADCAST CONFIG TO WORKERS
+        # =========================================================
+        config = {
+            'domain': self.domain,
+            'funcs': self.funcs,
+            'operations': self.operations,
+            'y': np.asarray(y),
+            'lambda_reg': self.lambda_reg,
+            'method_str': self.method_str,
+            'use_gradients': self.use_gradients,
+            'depth1_data': depth1_data,
+            'all_primitives': all_primitives,
+        }
+        
+        intercomm.bcast(config, root=MPI.ROOT)
+        
+        # =========================================================
+        # SCATTER WORK ITEMS TO WORKERS
+        # =========================================================
+        # Divide work items into n_workers chunks
+        chunk_size = (total_work + n_workers - 1) // n_workers
+        work_chunks = []
+        for w in range(n_workers):
+            start = w * chunk_size
+            end = min(start + chunk_size, total_work)
+            work_chunks.append(work_items[start:end])
+        
+        # Scatter chunks to workers
+        intercomm.scatter(work_chunks, root=MPI.ROOT)
+        
+        print(f"  Work distributed. Waiting for workers...")
+        
+        # =========================================================
+        # GATHER RESULTS FROM WORKERS
+        # =========================================================
+        # Gather returns a list of lists (one per worker)
+        all_results = intercomm.gather(None, root=MPI.ROOT)
+        
+        # =========================================================
+        # DISCONNECT WORKERS
+        # =========================================================
+        intercomm.Disconnect()
+        print(f"  Workers finished and disconnected.")
+        
+        # =========================================================
+        # PROCESS RESULTS
+        # =========================================================
+        candidates = []
+        
+        # Flatten results from all workers
+        for worker_results in all_results:
+            for expr, params, post in worker_results:
+                # Rebuild tree from expression
+                tree = function_treeC._expr_to_tree(expr, self.domain, self.funcs)
+                if tree is not None:
+                    if params:
+                        tree.params = list(params)
+                    candidates.append((tree, post))
+                    tree_cache[expr] = post
+        
+        print(f"  Received {len(candidates)} valid candidates from workers")
+        
+        # Add depth-1 candidates
+        for c in up2depth1_candidates:
+            candidates.append((c[0], c[1]))
+        
+        # Sort by posterior (best first)
+        candidates.sort(key=itemgetter(1), reverse=True)
+        
+        # =========================================================
+        # ASSIGN TO GROVE
+        # =========================================================
+        if replace_all:
+            self.size = len(candidates)
+            self.trees = [c[0] for c in candidates]
+            self.root_posteriors = np.array([c[1] for c in candidates], dtype=np.float64)
+        else:
+            for i in range(min(self.size, len(candidates))):
+                if np.isnan(self.root_posteriors[i]) or candidates[i][1] > self.root_posteriors[i]:
+                    self.trees[i] = candidates[i][0]
+                    self.root_posteriors[i] = candidates[i][1]
+        
+        print(f"Burn-in complete. Best posterior: {self.root_posteriors[0]:.4f}")
+        print(f"  Best expression: {self.trees[0].tree_get_description()}")
+
+
 
     cdef _process_candidate(self, function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, ndim=1] y,
                         bint optimize_params, dict local_cache, list local_candidates):
