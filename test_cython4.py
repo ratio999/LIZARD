@@ -68,7 +68,7 @@ def grove_smoke_test():
     #print("\n--- Two-Stage Burn-in ---")
     #grove.burn_in_depth2(y, replace_all=True, optimize_params=True )
     
-    print(f"\nAfter burn-in, grove contains {grove.size} depth-2 trees")
+    print(f"\nAfter burn-in, grove contains some depth-2 trees")
     for i, tree in enumerate(grove.trees):
         print(f"  Tree {i}: {tree.tree_get_description()} | posterior: {grove.root_posteriors[i]:.4f}")
     

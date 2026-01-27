@@ -798,19 +798,27 @@ cdef class Grove:
         # ============================================================
         #cdef object all_candidates_list = comm.gather(local_candidates, root=0)
         cdef list all_cache_list = comm.gather(local_cache, root=0)
+        cdef dict all_cache_dict = comm.gather(local_cache, root=0)[0]
         
-        print(all_cache_list)
+        if rank==0:
+            print(len(all_cache_dict))
+            tree_cache.update(all_cache_dict)
+        
         #cdef list all_candidates_list = [function_treeC._expr_to_tree(ex, self.domain, self.funcs) for ex in all_cache_list]
         if rank == 0:
+            all_cache_list_of_tuples = [(k, v) for k, v in all_cache_dict.items()]
+            #all_cache_list_of_tuples.sort(key=_bis2_parallel_helper, reverse=True)
+            
             # Flatten the list of lists
             candidates = []
-            for cache_dict in all_cache_list:
-                for expr_str, post in cache_dict.items():
-                    tree = function_treeC._expr_to_tree(
-                        real_functionC.RealFunctionC.from_string(
-                            expr_str, self.domain, compute_grad=False).get_expr(), 
-                        self.domain, self.funcs)
-                    candidates.append((tree, post))
+            for cache_tuple in all_cache_list_of_tuples:
+                expr_str, post = cache_tuple[0], cache_tuple[1]
+                
+                tree = function_treeC._expr_to_tree(
+                    real_functionC.RealFunctionC.from_string(
+                        expr_str, self.domain, compute_grad=False).get_expr(), 
+                    self.domain, self.funcs)
+                candidates.append((tree, post))
             # Merge caches
             ''' 
             for cache_dict in all_cache_list:
@@ -826,15 +834,19 @@ cdef class Grove:
             
             # ... rest of the assignment logic (same as original)
             if replace_all:
-                self.trees = [c[0] for c in candidates[:self.size]]
-                self.root_posteriors = np.array([c[1] for c in candidates[:self.size]])
+                self.trees = [c[0] for c in candidates]
+                self.root_posteriors = np.array([c[1] for c in candidates])
             
             print(f"Burn-in complete. Best: {self.root_posteriors[0]:.4f}")
+            print(self.trees[0])
+            print(self.trees[0].get_param_dicts()[1])
         
         # Broadcast final trees to all ranks if needed
-        self.trees = comm.bcast(self.trees if rank == 0 else None, root=0)
-        self.root_posteriors = comm.bcast(self.root_posteriors if rank == 0 else None, root=0)
+        #self.trees = comm.bcast(self.trees if rank == 0 else None, root=0)
+        #self.root_posteriors = comm.bcast(self.root_posteriors if rank == 0 else None, root=0)
 
+       
+            
 
     cdef _process_candidate(self, function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, ndim=1] y,
                         bint optimize_params, dict local_cache, list local_candidates):
