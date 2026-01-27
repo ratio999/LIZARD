@@ -67,6 +67,14 @@ cdef class Grove:
     cpdef _burn_in_stage2_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, list up2depth1_candidates,
                             dict tree_cache, bint replace_all=?, bint optimize_params=?)
     
+    cpdef _burn_in_stage2_parallel_spawn(self, 
+                                    cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                    list up2depth1_candidates,
+                                    dict tree_cache,
+                                    bint replace_all=?,
+                                    bint optimize_params=?,
+                                    int n_workers=?)
+
     cdef _process_candidate(self, function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, ndim=1] y,
                     bint optimize_params, dict local_cache, list local_candidates)
     
