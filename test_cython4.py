@@ -56,7 +56,7 @@ def grove_smoke_test():
     depth = 2
     grove = Grove(x,y, T, size, depth, functions, Npars=4, init_value=1.0, 
                   operations=operations, base_temp=1.0, use_gradients=False, 
-                  burn_in=True, use_mpi=4)
+                  burn_in=True, use_mpi=4, use_spawn=True)
     
     print("=" * 60)
     print("Initial random trees:")

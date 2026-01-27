@@ -51,7 +51,8 @@ cdef class Grove:
                  double lambda_reg=0.00,
                  bint use_gradients=True,
                  bint burn_in=False,
-                 int use_mpi=0):
+                 int use_mpi=0,
+                 bint use_spawn=False):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -69,6 +70,7 @@ cdef class Grove:
         self.size = size
         self.use_mpi = use_mpi >= 2
         self.n_procs = use_mpi
+        self.use_spawn = use_spawn
         self.T = float(T)
         self.base_temp = base_temp if base_temp > 0.0 else 1.0
         #self.trees = self._init_trees(node_list, Npars, init_value)
@@ -97,13 +99,23 @@ cdef class Grove:
                     replace_all=True,  # Will replace after trees are initialized
                     optimize_params=True
                 )
-            elif len(depth1_candidates) > 0 and self.use_mpi:
+            elif len(depth1_candidates) > 0 and self.use_mpi and not self.use_spawn:
                 self._burn_in_stage2_parallel(
                     y if 'y' in locals() else self.data,
                     depth1_candidates,
                     self.cache,
                     replace_all=True,  # Will replace after trees are initialized
                     optimize_params=True
+                )
+            
+            elif len(depth1_candidates) > 0 and self.use_mpi and self.use_spawn:
+                self._burn_in_stage2_parallel_spawn(
+                    y if 'y' in locals() else self.data,
+                    depth1_candidates,
+                    self.cache,
+                    replace_all=True,  # Will replace after trees are initialized
+                    optimize_params=True,
+                    n_workers = self.n_procs
                 )
             
             # Initialize trees list if not already done
@@ -872,24 +884,30 @@ cdef class Grove:
         # =========================================================
         # PREPARE DATA
         # =========================================================
-        depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
-        all_primitives = self.funcs.copy()
+        cdef list depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
+        cdef list all_primitives = self.funcs.copy()
         all_primitives.append("a0")
-        n_top = len(depth1_candidates)
+        cdef int n_top = len(depth1_candidates)
         
         if n_top == 0:
             print("No depth-1 candidates to combine")
             return
         
         # Serialize depth-1 trees for workers
-        depth1_data = []
+        cdef list  depth1_data = []
+        cdef function_treeC.Tree tree
+        cdef object post
+        cdef int depth, i
+        cdef object expr
+        cdef dict names_params
         for tree, post, depth in depth1_candidates:
-            expr = tree.tree_get_description()
-            params = list(tree.params) if tree.params else []
-            depth1_data.append((expr, params, post))
+            expr = tree.root.function.expr
+            names_params = tree.name_values if tree.name_values else {}
+            depth1_data.append((expr, names_params, post))
         
         # Build ALL work items
-        work_items = []
+        cdef list work_items = []
+        cdef str prim_str, op
         for i in range(n_top):
             for prim_str in all_primitives:
                 for op in self.operations:
@@ -900,7 +918,7 @@ cdef class Grove:
                 for op in self.operations:
                     work_items.append(('d1_d1', i, j, op))
         
-        total_work = len(work_items)
+        cdef int total_work = len(work_items)
         print(f"Stage 2: {n_top} depth-1 trees × {len(all_primitives)} primitives × {len(self.operations)} ops")
         print(f"  Total combinations: {total_work}")
         print(f"  Spawning {n_workers} worker processes...")
@@ -909,13 +927,13 @@ cdef class Grove:
         # SPAWN WORKERS
         # =========================================================
         # Path to worker script (same directory as this module)
-        worker_script = os.path.join(os.path.dirname(__file__), 'mpi_worker.py')
+        #cdef object worker_script = os.path.join(os.path.dirname(__file__), 'mpi_worker.py')
         
         # Spawn worker processes
         # MPI.COMM_SELF is the communicator for just this process
         intercomm = MPI.COMM_SELF.Spawn(
             sys.executable,  # Python interpreter
-            args=[worker_script],
+            args=["-c", "from mpi_worker import worker_main; worker_main()"],
             maxprocs=n_workers
         )
         
@@ -932,6 +950,7 @@ cdef class Grove:
             'use_gradients': self.use_gradients,
             'depth1_data': depth1_data,
             'all_primitives': all_primitives,
+            'T': self.T
         }
         
         intercomm.bcast(config, root=MPI.ROOT)

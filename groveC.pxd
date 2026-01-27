@@ -22,6 +22,7 @@ cdef class Grove:
     cdef bint burn_in
     cdef bint use_mpi
     cdef int n_procs
+    cdef bint use_spawn
     cdef bint use_gradients
     cdef object method_str
     cdef dict cache

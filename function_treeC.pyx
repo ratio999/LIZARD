@@ -48,6 +48,8 @@ cdef class Node:
     def get_domain(self):
         '''Obtain domain from Python.'''
         return self.domain
+    def get_description(self):
+        return self.function.get_description()    
     # def?
     cpdef is_param(self):
         '''Is Node a constant function?'''

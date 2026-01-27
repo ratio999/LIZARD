@@ -16,6 +16,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 cimport function_treeC
 cimport real_functionC
 
+cdef function_treeC.Tree _helper(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, 
+            list funcs, dict names_params):
+    
+    cdef function_treeC.Tree tree
+    cdef function_treeC.Node param
+
+    tree = function_treeC._expr_to_tree(expr, domain, funcs)
+    print(tree.name_values, names_params)
+    print(tree)
+    if tree is not None and names_params and len(names_params) > 0:
+        for param in tree.params:
+            param.set_value(names_params[param.get_description()])
+    return tree
+
+
 
 def worker_main():
     """
@@ -60,12 +75,13 @@ def worker_main():
     # REBUILD DEPTH-1 TREES FROM SERIALIZED DATA
     # =========================================================
     depth1_trees = []
-    for expr, params, post in depth1_data:
-        tree = function_treeC._expr_to_tree(expr, domain, funcs)
-        if tree is not None and params:
-            tree.params = list(params)
+    i=0
+    for expr, names_params, post in depth1_data:
+        
+        print(i)
+        tree = _helper(expr, domain, funcs, names_params)    
         depth1_trees.append((tree, post))
-    
+        i+=1
     # =========================================================
     # PROCESS MY WORK ITEMS
     # =========================================================
