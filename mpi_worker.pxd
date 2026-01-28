@@ -5,6 +5,8 @@ cimport real_functionC
 cdef function_treeC.Tree _helper(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, 
             list funcs, dict names_params)
 
+cdef void _worker_main()
+
 cdef function_treeC.Tree _combine_nodes(function_treeC.Node left_node, function_treeC.Node right_node, object op,
                     cnp.ndarray[cnp.float64_t, ndim=1] domain, list funcs, double T)
 

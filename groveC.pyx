@@ -518,13 +518,14 @@ cdef class Grove:
                     root_right = function_treeC.Node(
                         function=real_functionC.RealFunctionC.from_string(right_str, self.domain, compute_grad = False),
                     )
+                print(op, root_left.function.get_description(), root_right.function.get_description())
                 root_tree = function_treeC.Node(
                     function=None,
                     left=root_left,
                     right=root_right,
                     symbol=op
                 )
-                print('root built')                
+                print('root built', root_tree.function.get_description())                
                 tree = function_treeC.Tree(
                     depth=root_tree.depth(), functions=self.funcs, x=self.domain, node=root_tree,
                     Npars=len(root_tree.function.params), T=self.T
@@ -859,7 +860,7 @@ cdef class Grove:
         #self.root_posteriors = comm.bcast(self.root_posteriors if rank == 0 else None, root=0)
 
        
-    cpdef _burn_in_stage2_parallel_spawn(self, 
+    cdef _burn_in_stage2_parallel_spawn(self, 
                                     cnp.ndarray[cnp.float64_t, ndim=1] y,
                                     list up2depth1_candidates,
                                     dict tree_cache,
@@ -878,6 +879,7 @@ cdef class Grove:
         n_workers : int
             Number of worker processes to spawn (default: 4)
         """
+        import subprocess
         from mpi4py import MPI
         from operator import itemgetter
         
@@ -971,6 +973,40 @@ cdef class Grove:
         
         print(f"  Work distributed. Waiting for workers...")
         
+        cdef object pbar=tqdm(total=total_work, desc="Stage 2 (Spawned)", unit=" combos", 
+                dynamic_ncols=True)
+        
+        cdef dict progress_received={w: 0 for w in range(n_workers)}
+        cdef object last_update_time = time.time()
+        cdef double timeout = 5.0  # seconds - if no updates for 5s, assume workers done
+
+        while True:
+            got_update = False
+            
+            # Non-blocking check for incoming messages
+            for source in range(n_workers):
+                status = MPI.Status()
+                if intercomm.Iprobe(source=source, tag=99, status=status):
+                    # Progress update from worker
+                    count = intercomm.recv(source=source, tag=99)
+                    delta = count - progress_received[source]
+                    progress_received[source] = count
+                    pbar.update(delta)
+                    pbar.refresh()
+                    sys.stdout.flush()
+                    last_update_time = time.time()
+                    got_update = True
+            
+            # Check for timeout - if no updates for X seconds, workers likely done
+            elapsed_since_update = time.time() - last_update_time
+            if elapsed_since_update > timeout and sum(progress_received.values()) > 0:
+                # No updates for a while and we've received some progress = done
+                break
+            
+            time.sleep(0.05)  # Short sleep to avoid busy-waiting
+        
+        pbar.close()
+        sys.stdout.flush()  # Final flush after closing
         # =========================================================
         # GATHER RESULTS FROM WORKERS
         # =========================================================

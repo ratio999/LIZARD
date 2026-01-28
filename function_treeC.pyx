@@ -94,7 +94,7 @@ cdef class Node:
             operation = self.op_symbol
         if left is None and right is None and operation is None:
             return None
-        
+        #print(operation, left.function.get_description(), right.function.get_description())
         if operation == '+':
             auxiliary_fun = left.function + right.function
         elif operation == '-':
@@ -771,6 +771,7 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
     Returns:
         Tree
     """
+    print(str(expr))
     cdef Tree left_tree, right_tree, arg_tree
     cdef Node root_node
     cdef real_functionC.RealFunctionC func, root_func, composed_func
@@ -805,18 +806,66 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
 
         return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
 
-    if isinstance(expr, sp.Add):
+    '''if isinstance(expr, sp.Add):
         left_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
         right_tree = _expr_to_tree(expr.args[1], domain, function_list, params_used)
         root_func = left_tree.root.get_fun() + right_tree.root.get_fun()
         root_node = Node(root_func, left_tree.root, right_tree.root, "+")
         return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
+    '''
+    if isinstance(expr, sp.Add):
+        if len(expr.args) >= 2:
+            # Get the second argument
+            first_arg = expr.args[0]
+            second_arg = expr.args[1]
+            
+            is_negative_first = False
+            if isinstance(first_arg, sp.Mul) and len(first_arg.args) > 0:
+                if first_arg.args[0] == -1:  # First arg is the coefficient
+                    is_negative_first = True
+            
+            # Check if it's negative: Mul(-1, something)
+            is_negative_second = False
+            if isinstance(second_arg, sp.Mul) and len(second_arg.args) > 0:
+                if second_arg.args[0] == -1:  # First arg is the coefficient
+                    is_negative_second = True
+            
+            if is_negative_first and not is_negative_second:
+                positive_first = -first_arg
+                right_tree = _expr_to_tree(positive_first, domain, function_list, params_used)
+                left_tree = _expr_to_tree(expr.args[1], domain, function_list, params_used)
+                op_symbol = '-'
+                root_func = left_tree.root.get_fun() - right_tree.root.get_fun()
+            elif is_negative_second and not is_negative_first:
+                left_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
+                positive_second = -second_arg
+                right_tree = _expr_to_tree(positive_second, domain, function_list, params_used)
+                root_func = left_tree.root.get_fun() - right_tree.root.get_fun()
+                op_symbol = '-'
+            else:
+                # This was addition: a + b
+                left_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
+                right_tree = _expr_to_tree(expr.args[1], domain, function_list, params_used)
+                root_func = left_tree.root.get_fun() + right_tree.root.get_fun()
+                op_symbol = '+'
+            
+            root_node = Node(root_func, left_tree.root, right_tree.root, op_symbol)
+            return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
+
 
     if isinstance(expr, sp.Mul):
-        left_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
-        right_tree = _expr_to_tree(expr.args[1], domain, function_list, params_used)
-        root_func = left_tree.root.get_fun() * right_tree.root.get_fun()
-        root_node = Node(root_func, left_tree.root, right_tree.root, "*")
+        numer, denom = expr.as_numer_denom()
+        if denom != 1:
+            left_tree = _expr_to_tree(numer, domain, function_list, params_used)
+            right_tree = _expr_to_tree(denom, domain, function_list, params_used)
+            op_symbol = '/'
+            root_func = left_tree.root.get_fun() / right_tree.root.get_fun() 
+        else:
+            left_tree = _expr_to_tree(expr.args[0], domain, function_list, params_used)
+            right_tree = _expr_to_tree(expr.args[1], domain, function_list, params_used)
+            root_func = left_tree.root.get_fun() * right_tree.root.get_fun()
+            op_symbol = '*'
+        root_node = Node(root_func, left_tree.root, right_tree.root, op_symbol)
         return Tree(root_node.node_depth, function_list, root_node.domain, root_node)
 
     if isinstance(expr, sp.Pow):

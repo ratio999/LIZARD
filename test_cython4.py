@@ -47,8 +47,8 @@ def grove_smoke_test():
     y = 2.0 + np.sin(x)
     
     # Primitive set
-    functions = ["sin(x)", "cos(x)", "exp(x)", "x", "log(x)"]
-    operations = ["+", "-"]# "*", "/", "o", "**"]
+    functions = ["sin(x)", "cos(x)", "x"]
+    operations = ["+", "-", "*", "/", "o", "**"]
 
     # Grove config
     T = 1.0

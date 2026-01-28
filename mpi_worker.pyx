@@ -23,72 +23,86 @@ cdef function_treeC.Tree _helper(object expr, cnp.ndarray[cnp.float64_t, ndim=1]
     cdef function_treeC.Node param
 
     tree = function_treeC._expr_to_tree(expr, domain, funcs)
+    #tree.
     print(tree.name_values, names_params)
     print(tree)
     if tree is not None and names_params and len(names_params) > 0:
         for param in tree.params:
-            param.set_value(names_params[param.get_description()])
+            if not param.function.expr.is_Number:
+                param.set_value(names_params[param.get_description()])
     return tree
 
 
 
-def worker_main():
+cdef void _worker_main():
     """
     Worker entry point. Communicates with parent (spawner) process.
     """
     # Get the intercommunicator to the parent
-    parent_comm = MPI.Comm.Get_parent()
+    cdef object parent_comm = MPI.Comm.Get_parent()
     
     if parent_comm == MPI.COMM_NULL:
         print("Error: This script must be spawned by MPI, not run directly.")
         sys.exit(1)
     
     # Get my rank among workers
-    worker_comm = MPI.COMM_WORLD
-    rank = worker_comm.Get_rank()
-    n_workers = worker_comm.Get_size()
+    cdef object worker_comm = MPI.COMM_WORLD
+    cdef int rank = worker_comm.Get_rank()
+    cdef int n_workers = worker_comm.Get_size()
     
     # =========================================================
     # RECEIVE SHARED DATA FROM PARENT
     # =========================================================
     # Parent broadcasts the configuration to all workers
-    config = parent_comm.bcast(None, root=0)
+    cdef dict config = parent_comm.bcast(None, root=0)
     
-    domain = config['domain']
-    funcs = config['funcs']
-    operations = config['operations']
-    y = config['y']
-    lambda_reg = config['lambda_reg']
-    method_str = config['method_str']
-    use_gradients = config['use_gradients']
-    depth1_data = config['depth1_data']  # List of (expression, params, posterior)
-    all_primitives = config['all_primitives']
-    T = config['T']
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] domain = config['domain']
+    cdef list funcs = config['funcs']
+    cdef list operations = config['operations']
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] y = config['y']
+    cdef double lambda_reg = config['lambda_reg']
+    cdef str method_str = config['method_str']
+    cdef bint use_gradients = config['use_gradients']
+    cdef list depth1_data = config['depth1_data']  # List of (expression, params, posterior)
+    cdef list all_primitives = config['all_primitives']
+    cdef double T = config['T']
     
     # =========================================================
     # RECEIVE MY WORK ITEMS
     # =========================================================
     # Parent scatters work items to each worker
-    my_work = parent_comm.scatter(None, root=0)
+    cdef object my_work = parent_comm.scatter(None, root=0)
     
     # =========================================================
     # REBUILD DEPTH-1 TREES FROM SERIALIZED DATA
     # =========================================================
-    depth1_trees = []
-    i=0
-    for expr, names_params, post in depth1_data:
-        
-        print(i)
+    cdef list depth1_trees = []
+    cdef int i=0
+    cdef object expr
+    cdef dict names_params
+    cdef object post
+    cdef function_treeC.Tree tree, d1_tree, d1_tree_2
+
+    for expr, names_params, post in depth1_data:    
+        print(i, expr, names_params)
         tree = _helper(expr, domain, funcs, names_params)    
         depth1_trees.append((tree, post))
         i+=1
     # =========================================================
     # PROCESS MY WORK ITEMS
     # =========================================================
-    local_results = []  # (expression, params_list, posterior)
+    cdef list local_results = []  # (expression, params_list, posterior)
     
-    for item in my_work:
+    cdef object item
+    cdef object item_type
+    cdef function_treeC.Node prim_node
+    cdef str prim_str, op
+    cdef tuple result
+    cdef int idx
+
+    for idx, item in enumerate(my_work):
         item_type = item[0]
+        
         
         if item_type == 'd1_prim':
             _, i, prim_str, op = item
@@ -127,12 +141,21 @@ def worker_main():
             result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
             if result is not None:
                 local_results.append(result)
-    
+        if (idx +1) % 50 == 0:
+            parent_comm.isend(idx+1, dest=0, tag=99)
+        #print(idx, rank)
+        #sys.stdout.flush()
     # =========================================================
     # SEND RESULTS BACK TO PARENT
     # =========================================================
+    '''cdef list return_list 
+    for res in local_results:
+        ret_expr = res.root.function.expr
+        names_pars = res.name_values if res.name_values else {}
+
+        return_list.append(())
     parent_comm.gather(local_results, root=0)
-    
+    '''
     # =========================================================
     # DISCONNECT AND EXIT
     # =========================================================
@@ -190,6 +213,8 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     # Return serializable tuple
     return (expression, list(tree.params) if tree.params else [], post)
 
+def worker_main():
+    _worker_main()
 
 if __name__ == "__main__":
     worker_main()
