@@ -216,6 +216,25 @@ cdef class RealFunctionC:
             return -np.inf
 
     cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double lambda_reg=0.0): 
+        if x is None:
+            x = self.domain
+        
+        cdef double mse = np.nanmean((y - self.evaluate(x, params))**2)
+        
+        # Fast path: skip regularization when lambda is 0
+        if lambda_reg == 0.0:
+            return mse
+        
+        # Typed loop - pure C speed, no Python objects
+        cdef double reg_term = 0.0
+        cdef double v
+        for v in params.values():
+            reg_term += v * v
+        
+        return mse + lambda_reg * reg_term
+        
+    '''
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double lambda_reg=0.0): 
         #print(x)
         if x is None:
             x = self.domain
@@ -226,6 +245,7 @@ cdef class RealFunctionC:
             return np.nanmean((y - self.evaluate(x,  params))**2) + lambda_reg * np.sum(np.array(list(params.values()))**2)
         except:
             return np.inf
+    '''
 
 
     cdef dict _build_gradient_functions(self):
