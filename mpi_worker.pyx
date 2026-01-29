@@ -147,6 +147,7 @@ cdef void _worker_main():
     # =========================================================
     # SEND RESULTS BACK TO PARENT
     # =========================================================
+    worker_comm.Barrier()
     print(f'[Worker {rank}] About to gather {len(local_results)} results...')
     sys.stdout.flush()
     

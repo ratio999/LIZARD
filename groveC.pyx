@@ -1009,49 +1009,19 @@ cdef class Grove:
         pbar.close()
         sys.stdout.flush()  
 
-                # Add diagnostic before gather
-        print('Spawner: All progress bars closed')
-        sys.stdout.flush()
-        time.sleep(1)  # Give workers time to print their status
-        
-        print('Spawner: About to call gather...')
-        print(f'Spawner: Expecting {n_workers} workers to participate')
-        sys.stdout.flush()
-        
-        import threading
-        gathered = [None]
-        error_msg = [None]
-        
-        def gather_with_timeout():
-            try:
-                print('Spawner: Inside gather call...')
-                sys.stdout.flush()
-                gathered[0] = intercomm.gather(None, root=MPI.ROOT)
-                print('Spawner: Gather returned!')
-                sys.stdout.flush()
-            except Exception as e:
-                error_msg[0] = str(e)
-                import traceback
-                traceback.print_exc()
-        
-        # Run gather in a thread with timeout monitoring
-        gather_thread = threading.Thread(target=gather_with_timeout, daemon=False)
-        gather_thread.start()
-        gather_thread.join(timeout=10)  # 10 second timeout
-        
-        if gather_thread.is_alive():
-            print('ERROR: Gather operation timed out after 10 seconds!')
-            print('This means workers did not reach the gather call.')
-            print('Check worker output above for where they got stuck.')
+        # Gather returns a list of lists (one per worker)
+        cdef list all_return_list
+        print('Gathering trees')
+        try:
+            all_return_list = intercomm.gather(None, root=MPI.ROOT)
+            print(f'Spawner: gather succeeded, got {len(all_return_list)} result lists')
+        except Exception as e:
+            print(f'Spawner: gather failed with error: {e}')
+            import traceback
+            traceback.print_exc()
             all_return_list = [[] for _ in range(n_workers)]
-        elif error_msg[0]:
-            print(f'Spawner: Gather failed: {error_msg[0]}')
-            all_return_list = [[] for _ in range(n_workers)]
-        else:
-            all_return_list = gathered[0]
-            print(f'Spawner: Gather succeeded, got {len(all_return_list) if all_return_list else 0} result lists')
+        sys.stdout.flush()
         
-        sys.stdout.flush()       
         # =========================================================
         # DISCONNECT WORKERS
         # =========================================================
