@@ -24,8 +24,7 @@ cdef function_treeC.Tree _helper(object expr, cnp.ndarray[cnp.float64_t, ndim=1]
 
     tree = function_treeC._expr_to_tree(expr, domain, funcs)
     #tree.
-    print(tree.name_values, names_params)
-    print(tree)
+    
     if tree is not None and names_params and len(names_params) > 0:
         for param in tree.params:
             if not param.function.expr.is_Number:
@@ -84,10 +83,10 @@ cdef void _worker_main():
     cdef function_treeC.Tree tree, d1_tree, d1_tree_2
 
     for expr, names_params, post in depth1_data:    
-        print(i, expr, names_params)
+        #print(i, expr, names_params)
         tree = _helper(expr, domain, funcs, names_params)    
         depth1_trees.append((tree, post))
-        i+=1
+        
     # =========================================================
     # PROCESS MY WORK ITEMS
     # =========================================================
@@ -148,19 +147,24 @@ cdef void _worker_main():
     # =========================================================
     # SEND RESULTS BACK TO PARENT
     # =========================================================
-    '''cdef list return_list 
-    for res in local_results:
-        ret_expr = res.root.function.expr
-        names_pars = res.name_values if res.name_values else {}
-
-        return_list.append(())
-    parent_comm.gather(local_results, root=0)
-    '''
+    print(f'[Worker {rank}] About to gather {len(local_results)} results...')
+    sys.stdout.flush()
+    
+    try:
+        parent_comm.gather(local_results, root=MPI.ROOT)
+        print(f'[Worker {rank}] Gather completed successfully!')
+    except Exception as e:
+        print(f'[Worker {rank}] Gather failed: {e}')
+        import traceback
+        traceback.print_exc()
+    finally:
+        sys.stdout.flush()
+    
     # =========================================================
     # DISCONNECT AND EXIT
     # =========================================================
     parent_comm.Disconnect()
-
+    print(f'[Worker {rank}] disconnected.')
 
 cdef function_treeC.Tree _combine_nodes(function_treeC.Node left_node, function_treeC.Node right_node, object op,
                     cnp.ndarray[cnp.float64_t, ndim=1] domain, list funcs, double T):
@@ -211,7 +215,7 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
         return None
     
     # Return serializable tuple
-    return (expression, list(tree.params) if tree.params else [], post)
+    return (expression, list(tree.name_values) if tree.name_values else [], post)
 
 def worker_main():
     _worker_main()

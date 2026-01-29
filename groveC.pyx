@@ -999,6 +999,7 @@ cdef class Grove:
             
             # Check for timeout - if no updates for X seconds, workers likely done
             elapsed_since_update = time.time() - last_update_time
+            
             if elapsed_since_update > timeout and sum(progress_received.values()) > 0:
                 # No updates for a while and we've received some progress = done
                 break
@@ -1006,13 +1007,51 @@ cdef class Grove:
             time.sleep(0.05)  # Short sleep to avoid busy-waiting
         
         pbar.close()
-        sys.stdout.flush()  # Final flush after closing
-        # =========================================================
-        # GATHER RESULTS FROM WORKERS
-        # =========================================================
-        # Gather returns a list of lists (one per worker)
-        all_results = intercomm.gather(None, root=MPI.ROOT)
+        sys.stdout.flush()  
+
+                # Add diagnostic before gather
+        print('Spawner: All progress bars closed')
+        sys.stdout.flush()
+        time.sleep(1)  # Give workers time to print their status
         
+        print('Spawner: About to call gather...')
+        print(f'Spawner: Expecting {n_workers} workers to participate')
+        sys.stdout.flush()
+        
+        import threading
+        gathered = [None]
+        error_msg = [None]
+        
+        def gather_with_timeout():
+            try:
+                print('Spawner: Inside gather call...')
+                sys.stdout.flush()
+                gathered[0] = intercomm.gather(None, root=MPI.ROOT)
+                print('Spawner: Gather returned!')
+                sys.stdout.flush()
+            except Exception as e:
+                error_msg[0] = str(e)
+                import traceback
+                traceback.print_exc()
+        
+        # Run gather in a thread with timeout monitoring
+        gather_thread = threading.Thread(target=gather_with_timeout, daemon=False)
+        gather_thread.start()
+        gather_thread.join(timeout=10)  # 10 second timeout
+        
+        if gather_thread.is_alive():
+            print('ERROR: Gather operation timed out after 10 seconds!')
+            print('This means workers did not reach the gather call.')
+            print('Check worker output above for where they got stuck.')
+            all_return_list = [[] for _ in range(n_workers)]
+        elif error_msg[0]:
+            print(f'Spawner: Gather failed: {error_msg[0]}')
+            all_return_list = [[] for _ in range(n_workers)]
+        else:
+            all_return_list = gathered[0]
+            print(f'Spawner: Gather succeeded, got {len(all_return_list) if all_return_list else 0} result lists')
+        
+        sys.stdout.flush()       
         # =========================================================
         # DISCONNECT WORKERS
         # =========================================================
@@ -1022,16 +1061,18 @@ cdef class Grove:
         # =========================================================
         # PROCESS RESULTS
         # =========================================================
-        candidates = []
-        
+        cdef list candidates = []
+        cdef list worker_results
         # Flatten results from all workers
-        for worker_results in all_results:
-            for expr, params, post in worker_results:
+        for worker_results in all_return_list:
+            for expr, names_params, post in worker_results:
                 # Rebuild tree from expression
                 tree = function_treeC._expr_to_tree(expr, self.domain, self.funcs)
-                if tree is not None:
-                    if params:
-                        tree.params = list(params)
+                if tree is not None and names_params and len(names_params) > 0:
+                    for param in tree.params:
+                        if not param.function.expr.is_Number:
+                            param.set_value(names_params[param.get_desctiption()])
+                    
                     candidates.append((tree, post))
                     tree_cache[expr] = post
         

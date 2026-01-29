@@ -48,7 +48,7 @@ def grove_smoke_test():
     
     # Primitive set
     functions = ["sin(x)", "cos(x)", "x"]
-    operations = ["+", "-", "*", "/", "o", "**"]
+    operations = ["+", "-", "*", "/"]
 
     # Grove config
     T = 1.0
