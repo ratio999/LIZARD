@@ -1009,9 +1009,10 @@ cdef class Grove:
         pbar.close()
         sys.stdout.flush()  
 
-        # Gather returns a list of lists (one per worker)
+       
+
         cdef list all_return_list
-        print('Gathering trees')
+        #print('Gathering trees')
         try:
             all_return_list = intercomm.gather(None, root=MPI.ROOT)
             print(f'Spawner: gather succeeded, got {len(all_return_list)} result lists')
@@ -1025,7 +1026,7 @@ cdef class Grove:
         # =========================================================
         # DISCONNECT WORKERS
         # =========================================================
-        intercomm.Disconnect()
+        #intercomm.Disconnect()
         print(f"  Workers finished and disconnected.")
         
         # =========================================================
@@ -1033,19 +1034,30 @@ cdef class Grove:
         # =========================================================
         cdef list candidates = []
         cdef list worker_results
+        cdef function_treeC.Node param
         # Flatten results from all workers
+        #cdef int jj=0
+        cdef object pbar1=tqdm(total=len(all_return_list), desc="Growing Grove", unit=" trees", 
+                dynamic_ncols=True)
         for worker_results in all_return_list:
             for expr, names_params, post in worker_results:
                 # Rebuild tree from expression
+                #print(jj, ' expr is: ', str(expr))
                 tree = function_treeC._expr_to_tree(expr, self.domain, self.funcs)
+                #print(tree)
+                #print(tree.name_values)
                 if tree is not None and names_params and len(names_params) > 0:
                     for param in tree.params:
-                        if not param.function.expr.is_Number:
-                            param.set_value(names_params[param.get_desctiption()])
-                    
+                        #print(param.function.expr.is_Number)
+                        if not param.function.expr.is_Number and param.get_description() in names_params.keys():
+                            param.set_value(names_params[param.get_description()])
+                
                     candidates.append((tree, post))
                     tree_cache[expr] = post
-        
+                    pbar1.update(1)
+                    pbar1.refresh()
+                #jj += 1
+        pbar.close()
         print(f"  Received {len(candidates)} valid candidates from workers")
         
         # Add depth-1 candidates
@@ -1069,7 +1081,7 @@ cdef class Grove:
                     self.root_posteriors[i] = candidates[i][1]
         
         print(f"Burn-in complete. Best posterior: {self.root_posteriors[0]:.4f}")
-        print(f"  Best expression: {self.trees[0].tree_get_description()}")
+        print(f"  Best expression: {self.trees[0].tree_get_description()} with params {self.trees[0].get_param_dicts()[1]}")
 
 
 

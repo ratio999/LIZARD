@@ -152,7 +152,7 @@ cdef void _worker_main():
     sys.stdout.flush()
     
     try:
-        parent_comm.gather(local_results, root=MPI.ROOT)
+        parent_comm.gather(local_results, root=0)
         print(f'[Worker {rank}] Gather completed successfully!')
     except Exception as e:
         print(f'[Worker {rank}] Gather failed: {e}')
@@ -164,6 +164,7 @@ cdef void _worker_main():
     # =========================================================
     # DISCONNECT AND EXIT
     # =========================================================
+    #worker_comm.Disconnect()
     parent_comm.Disconnect()
     print(f'[Worker {rank}] disconnected.')
 
@@ -201,7 +202,7 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     if tree is None:
         return None
     
-    cdef str expression = tree.tree_get_description()
+    cdef object expression = tree.root.function.expr
     
     if not tree.is_valid(domain):
         return None
@@ -216,7 +217,7 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
         return None
     
     # Return serializable tuple
-    return (expression, list(tree.name_values) if tree.name_values else [], post)
+    return (expression, tree.name_values if tree.name_values else {}, post)
 
 def worker_main():
     _worker_main()

@@ -771,7 +771,7 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
     Returns:
         Tree
     """
-    #print(str(expr))
+    
     cdef Tree left_tree, right_tree, arg_tree
     cdef Node root_node
     cdef real_functionC.RealFunctionC func, root_func, composed_func
