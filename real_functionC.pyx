@@ -198,13 +198,13 @@ cdef class RealFunctionC:
 
     cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
                    dict params=None, object fitness=None, object prior=None, 
-                   object sigma=1.00, object x = None, double lambda_reg = 0.0):
+                   object sigma=1.00, object x = None,  double penalty=0.0):
         if fitness is None:
             #print('FITNESS IS NONE')
             
             if x is None:
                 x = self.domain
-            fitness = self.fitness(y, params, x, lambda_reg)
+            fitness = self.posterior_fitness(y, params, x, penalty)
         
         
         if prior is None:
@@ -215,26 +215,20 @@ cdef class RealFunctionC:
         except:
             return -np.inf
 
-    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double lambda_reg=0.0): 
+    cdef posterior_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double penalty=0.0): 
         if x is None:
             x = self.domain
         
         cdef double mse = np.nanmean((y - self.evaluate(x, params))**2)
         
         # Fast path: skip regularization when lambda is 0
-        if lambda_reg == 0.0:
-            return mse
         
-        # Typed loop - pure C speed, no Python objects
-        cdef double reg_term = 0.0
-        cdef double v
-        for v in params.values():
-            reg_term += v * v
         
-        return mse + lambda_reg * reg_term
         
-    '''
-    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double lambda_reg=0.0): 
+        return mse + penalty
+        
+    
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None): 
         #print(x)
         if x is None:
             x = self.domain
@@ -242,10 +236,10 @@ cdef class RealFunctionC:
             #if self.is_param():
             #print('params in fitness', params, self.evaluate(x,params))
                 #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
-            return np.nanmean((y - self.evaluate(x,  params))**2) + lambda_reg * np.sum(np.array(list(params.values()))**2)
+            return np.nanmean((y - self.evaluate(x,  params))**2) #+ lambda_reg * np.sum(np.array(list(params.values()))**2)
         except:
             return np.inf
-    '''
+    
 
 
     cdef dict _build_gradient_functions(self):
@@ -275,7 +269,7 @@ cdef class RealFunctionC:
         return grad_dict
 
     cdef _symbolic_gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
-                  object x=None, dict params=None, double lambda_reg=0.0):
+                  object x=None, dict params=None):
         """
         Compute analytical gradient of MSE loss w.r.t. parameters.
         Uses chain rule: dLoss/dParam = dLoss/dPred * dPred/dParam
@@ -300,7 +294,7 @@ cdef class RealFunctionC:
         for param_name in self.params_strs:
             if param_name not in self.grad_funcs:
                 # Fallback: finite differences if symbolic gradient not available
-                grad[i] = self._finite_diff_gradient(param_name, params, x, y, lambda_reg)
+                grad[i] = self._finite_diff_gradient(param_name, params, x, y)
             else:
                 grad_func = self.grad_funcs[param_name]
                 
@@ -315,18 +309,18 @@ cdef class RealFunctionC:
                     grad[i] = (2.0 / n) * np.nansum(residuals * dpred_dparam)
                     
                     # Add regularization term: d(lambda*param^2)/d(param) = 2*lambda*param
-                    grad[i] += 2.0 * lambda_reg * params[param_name]
+                    #grad[i] += 2.0 * lambda_reg * params[param_name]
                     
                 except Exception as e:
                     # If evaluation fails, use finite differences
-                    grad[i] = self._finite_diff_gradient(param_name, params, x, y, lambda_reg)
+                    grad[i] = self._finite_diff_gradient(param_name, params, x, y)
             
             i += 1
         
         return grad
 
     cdef _symbolic_gradient_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=None, 
-              dict params=None, double lambda_reg=0.0):
+              dict params=None):
         if x is None:
             x = self.domain
         if params is None or len(params) == 0:
@@ -358,7 +352,7 @@ cdef class RealFunctionC:
                 grad[i] = (2.0 / n) * np.nansum(residuals * dpred_dparam)
                 
                 # Add L2 regularization term
-                grad[i] += 2.0 * lambda_reg * params[self.params_strs[i]]
+                #grad[i] += 2.0 * lambda_reg * params[self.params_strs[i]]
             else:
                 # Fallback: finite differences
                 grad[i] = 0.0  # or implement finite diff
@@ -368,7 +362,7 @@ cdef class RealFunctionC:
     cdef double _finite_diff_gradient(self, str param_name, dict params, 
                                        cnp.ndarray[cnp.float64_t, ndim=1] x,
                                        cnp.ndarray[cnp.float64_t, ndim=1] y,
-                                       double lambda_reg, double h=1e-7):
+                                       double h=1e-7):
         """Finite difference fallback for gradient computation."""
         cdef dict params_plus = params.copy()
         cdef dict params_minus = params.copy()
@@ -376,13 +370,13 @@ cdef class RealFunctionC:
         params_plus[param_name] = params[param_name] + h
         params_minus[param_name] = params[param_name] - h
         
-        cdef double f_plus = self.fitness(y, params_plus, x, lambda_reg)
-        cdef double f_minus = self.fitness(y, params_minus, x, lambda_reg)
+        cdef double f_plus = self.fitness(y, params_plus, x)
+        cdef double f_minus = self.fitness(y, params_minus, x)
         
         return (f_plus - f_minus) / (2.0 * h)
     
     #deprecated
-    cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x = None, dict params=None, double lambda_reg = 0.0):
+    cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x = None, dict params=None):
         if x is None:
             x=self.domain
         if params is None or len(params)==0:
@@ -397,24 +391,24 @@ cdef class RealFunctionC:
         
 
         cdef cnp.ndarray[cnp.float64_t, ndim=1] par_values = np.ascontiguousarray(list(params.values()), dtype=np.float64)
-        return 2*par_values + 2*lambda_reg*par_values
+        return 2*par_values 
 
-    def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):
+    def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
-        return self.fitness( y_data,  params_dict, x_data, lambda_reg)
+        return self.fitness( y_data,  params_dict, x_data)
     
 
-    def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
+    def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
-        return self.gradient( y_data, x_data, params_dict, lambda_reg)
+        return self.gradient( y_data, x_data, params_dict)
     
-    def symb_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg):   
+    def symb_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):   
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
-        return self._symbolic_gradient( y_data, x_data, params_dict, lambda_reg)
+        return self._symbolic_gradient( y_data, x_data, params_dict)
     
     cdef _optimize_with_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
               cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
-              dict input_pars, double lambda_reg, str method_str='L-BFGS-B'):
+              dict input_pars,  str method_str='L-BFGS-B'):
     
         if len(input_pars) == 0:
             return None  # No parameters to optimize
@@ -429,14 +423,14 @@ cdef class RealFunctionC:
                 self.grad_funcs = self._build_gradient_functions()
                 
             except:
-                return self.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
+                return self.optimize(x_data, y_data, input_pars, method_str='Powell')
         
-        cdef cnp.ndarray[cnp.float64_t, ndim=1] test_grad = self.symb_grad(initial_params, x_data, y_data, lambda_reg)
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] test_grad = self.symb_grad(initial_params, x_data, y_data)
         #print('Done computing gradients')
         use_gradients=False
         
         if len(self.grad_funcs) != initial_params.shape[0] or np.any(~np.isfinite(test_grad)) or np.allclose(test_grad, 0.0):    
-            return self.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
+            return self.optimize(x_data, y_data, input_pars, method_str='Powell')
         else:
             use_gradients=True
 
@@ -444,7 +438,7 @@ cdef class RealFunctionC:
             fun=self.objective,
             x0=initial_params,
             jac=self.symb_grad if use_gradients else None,
-            args=(x_data, y_data, lambda_reg),
+            args=(x_data, y_data),
             method=method_str if use_gradients else 'Powell',
             options={'disp': False}
         )
@@ -458,14 +452,14 @@ cdef class RealFunctionC:
     
     
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
-        dict input_pars, double lambda_reg, str method_str='Powell'):
+        dict input_pars, str method_str='Powell'):
         cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
         #cdef double[:] initial_params = np.array(list(input_pars.values()))
         cdef object result = minimize(
                 fun=self.objective,
                 x0=initial_params,
                 jac=self.grad,
-                args=(x_data, y_data, lambda_reg),
+                args=(x_data, y_data),
                 method=method_str,
                 options={'disp': False}
                 )

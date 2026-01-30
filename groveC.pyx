@@ -264,7 +264,7 @@ cdef class Grove:
         #print(cand.name_values)
         
         if len(cand.param_values)>0:
-            cand.update_parameters(self.domain, y, self.lambda_reg,
+            cand.update_parameters(self.domain, y,
                  self.method_str, self.use_gradients)
         
         cdef double new_post = float(cand.get_superficial_posterior(y))
@@ -383,7 +383,7 @@ cdef class Grove:
                 print(tree)
                 # Optimize parameters if any exist
                 if optimize_params and len(tree.params) > 0:
-                    tree.update_parameters(self.domain, y, self.lambda_reg, 
+                    tree.update_parameters(self.domain, y,
                         self.method_str, self.use_gradients)
                     
                 
@@ -483,7 +483,7 @@ cdef class Grove:
             if primitive_tree.is_valid(self.domain) and primitive_expression not in tree_cache:
                 
                 if optimize_params and len(primitive_tree.params) > 0:
-                    primitive_tree.update_parameters(self.domain, y, self.lambda_reg, 
+                    primitive_tree.update_parameters(self.domain, y, 
                     self.method_str, self.use_gradients)
                 
                 post = primitive_tree.get_superficial_posterior(y)
@@ -543,7 +543,7 @@ cdef class Grove:
                 print(tree)
                 if optimize_params and len(tree.params) > 0:
                     print('computing params for ', expression)
-                    tree.update_parameters(self.domain, y, self.lambda_reg,
+                    tree.update_parameters(self.domain, y, 
                         self.method_str, self.use_gradients)
                 
                 post = tree.get_superficial_posterior(y)
@@ -609,7 +609,7 @@ cdef class Grove:
                     if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
             
                         if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y, self.lambda_reg, 
+                            tree.update_parameters(self.domain, y, 
                                 self.method_str, self.use_gradients)
                         post = tree.get_superficial_posterior(y)
                         tree_cache[expression] = post
@@ -622,7 +622,7 @@ cdef class Grove:
                     
                     if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
                         if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y, self.lambda_reg,
+                            tree.update_parameters(self.domain, y, 
                                 self.method_str, self.use_gradients)
                         post = tree.get_superficial_posterior(y)
                         tree_cache[expression] = post
@@ -641,7 +641,7 @@ cdef class Grove:
                     
                     if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
                         if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y, self.lambda_reg,
+                            tree.update_parameters(self.domain, y,
                                 self.method_str, self.use_gradients)
                         post = tree.get_superficial_posterior(y)
                         tree_cache[expression] = post
@@ -1097,7 +1097,7 @@ cdef class Grove:
             return
         
         if optimize_params and len(tree.params) > 0:
-            tree.update_parameters(self.domain, y, self.lambda_reg,
+            tree.update_parameters(self.domain, y,
                                 self.method_str, self.use_gradients)
         
         cdef double post = tree.get_superficial_posterior(y)

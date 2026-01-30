@@ -21,7 +21,7 @@ cdef class Node:
     cdef object sigma
     cdef fetch_fun(self, Node left = ?, Node right = ?, str operation = ?)
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
-        dict input_pars, double lambda_reg, str method_str=?, bint use_gradients=?)
+        dict input_pars, str method_str=?, bint use_gradients=?)
     
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
     
@@ -36,9 +36,9 @@ cdef class Node:
 
     cdef set_sigma(self, object newsigma)
 
-    cdef set_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+    cdef set_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters, double penalty=?)
 
-    cdef evaluate_node_posterior(self,cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
+    cdef evaluate_node_posterior(self,cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters, double penalty=?)
  
     cpdef posterior_tree(self, y, parameters) 
     cpdef fitness_tree(self,  y, parameters)
@@ -73,6 +73,7 @@ cdef class Tree:
     cdef list leaves
     cdef list params
     cdef dict param_values, name_values
+    cdef double penalty
     cdef object fitness_tree
     cdef double alpha
     cdef object sigma
@@ -80,13 +81,13 @@ cdef class Tree:
     cpdef get_domain(self)
     cdef get_param_values(self)
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,  
         str method_str=?, bint use_gradients=?)
     cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         str method_str=?, bint use_gradients=?)
     cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         str method_str=?, bint use_gradients=?)
     
     cdef build_fitness_tree(self, Node node, str prefix=?, bint is_left=?)
@@ -94,9 +95,9 @@ cdef class Tree:
     cdef compute_posterior_tree(self, y)
     cdef build_posterior_tree(self, Node node, str prefix=?, bint is_left=?)
 
-    cdef compute_superficial_posterior(self, y)
+    cdef compute_superficial_posterior(self, y, double lambda_reg = ?)
 
-    cpdef get_superficial_posterior(self, y)
+    cpdef get_superficial_posterior(self, y, double lambda_reg=?)
 
 
     cpdef is_defined(self, x=?)

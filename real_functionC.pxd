@@ -23,32 +23,35 @@ cdef class RealFunctionC:
     cdef set_prior(self)
     cdef classify_symbols(self)
     cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, 
-    object x=?, double lambda_reg=?)
+    object x=?)
     cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
             dict params=?, object fitness=?, object prior=?,
-            object sigma=?, object x=?, double lambda_reg=?)
+            object sigma=?, object x=?, double penalty=?)
     
+    cdef posterior_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?,
+            object x=?, double penalty=?)
+
     cdef dict _build_gradient_functions(self)
 
     cdef _symbolic_gradient(self,cnp.ndarray[cnp.float64_t, ndim=1] y, 
-                  object x=?, dict params=?, double lambda_reg=? )
+                  object x=?, dict params=? )
     
     cdef _symbolic_gradient_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, 
-              dict params=?, double lambda_reg=?)
+              dict params=?)
 
     cdef double _finite_diff_gradient(self, str param_name, dict params, 
                                        cnp.ndarray[cnp.float64_t, ndim=1] x,
-                                       cnp.ndarray[cnp.float64_t, ndim=1] y,
-                                       double lambda_reg, double h=?)
+                                       cnp.ndarray[cnp.float64_t, ndim=1] y, 
+                                       double h=?)
     cdef _optimize_with_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
               cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
-              dict input_pars, double lambda_reg, str method_str=?)
+              dict input_pars, str method_str=?)
     
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
-        dict input_pars, double lambda_reg, str method_str=?)
+        dict input_pars, str method_str=?)
     cdef sort_params_list(self, list pars)
     cdef get_par_string(self)
-    cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?, double lambda_reg=?) 
+    cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?) 
     cdef time_to_frequency(self, double[:] x, object data)
 
     cdef bint is_valid(self, object x=?, double max_abs=?)

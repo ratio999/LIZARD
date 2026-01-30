@@ -68,8 +68,8 @@ cdef class Node:
     cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         self.fitness = self.evaluate_node_fitness(y, parameters)
     
-    cdef set_posterior(self,cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
-        self.posterior = self.evaluate_node_posterior(y, parameters)
+    cdef set_posterior(self,cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters, double penalty=0.0):
+        self.posterior = self.evaluate_node_posterior(y, parameters, penalty)
     
  
     cpdef set_value(self, cnp.float64_t value = 1):
@@ -124,11 +124,11 @@ cdef class Node:
             self.right.posterior_tree(y, parameters)
          
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
-        dict input_pars, double lambda_reg, str method_str='L-BFGS-B', bint use_gradients=False):
+        dict input_pars, str method_str='L-BFGS-B', bint use_gradients=False):
         if use_gradients:
-            return self.function._optimize_with_grad(x_data, y_data, input_pars, lambda_reg, method_str)
+            return self.function._optimize_with_grad(x_data, y_data, input_pars, method_str)
         else:
-            return self.function.optimize(x_data, y_data, input_pars, lambda_reg, method_str='Powell')
+            return self.function.optimize(x_data, y_data, input_pars, method_str='Powell')
         
         
     cdef set_prior(self):
@@ -145,10 +145,10 @@ cdef class Node:
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         return self.function.fitness(y, parameters)
 
-    cdef evaluate_node_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
+    cdef evaluate_node_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters, double penalty=0.0):
         
         return self.function.posterior(y, parameters, self.fitness, self.prior, 
-                                       self.sigma)
+                                       self.sigma, None, penalty)
 
     cpdef assign_operation(self, operation):
         '''Assigns an operation between self.left and self.right'''
@@ -328,7 +328,7 @@ cdef class Tree:
         self.current_description = self.root.function.get_description()
         self.leaves = self.get_leaves()
         self.params = self.get_params()
-        self.param_values, self.name_values = self.get_param_values()
+        self.param_values, self.name_values, self.penalty = self.get_param_values()
         self.fitness_tree = None
     def __copy__(self):
         return Tree(self.depth, self.functions, self.domain, self.root,
@@ -354,11 +354,14 @@ cdef class Tree:
         cdef dict params_values = {}
         cdef Node par
         cdef dict names_values = {}
+        cdef double par_value, penalty = 0.0
         for par in self.params:
             #print(par.value)
-            params_values[par] = par.value
-            names_values[par.function.get_description()] = par.value
-        return params_values, names_values
+            par_value = par.value
+            params_values[par] = par_value
+            names_values[par.function.get_description()] = par_value
+            penalty += par_value
+        return params_values, names_values, penalty
 
     def get_param_dicts(self):
         return self.param_values, self.name_values
@@ -466,7 +469,7 @@ cdef class Tree:
         #print('before', self.name_values)
         self.params = self.get_params()
         
-        self.param_values, self.name_values = self.get_param_values()
+        self.param_values, self.name_values, self.penalty = self.get_param_values()
         #print('after', self.name_values)
         #self.update_tree_description()
         #for j in range (0, len(self.get_params())):
@@ -508,23 +511,23 @@ cdef class Tree:
     def print_posterior_tree(self):
         print(self.build_posterior_tree(self.root))
 
-    cdef compute_superficial_posterior(self, y):
-        self.root.set_posterior(y, self.name_values)
+    cdef compute_superficial_posterior(self, y, double lambda_reg = 0.0):
+        self.root.set_posterior(y, self.name_values, self.penalty*lambda_reg)
 
-    cpdef get_superficial_posterior(self, y):
+    cpdef get_superficial_posterior(self, y, double lambda_reg = 0.0):
         if self.root.posterior is None:
-            self.compute_superficial_posterior(y)
+            self.compute_superficial_posterior(y, lambda_reg)
         
         return self.root.posterior
             
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str='L-BFGS-B', bint use_gradients=False):
         cdef dict input_pars = self.name_values
-        return self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str, use_gradients)
+        return self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
     
     cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         str method_str='L-BFGS-B', bint use_gradients=False):
         '''Finds optimal parameters and sets them in the tree'''
         
@@ -533,20 +536,20 @@ cdef class Tree:
         cdef dict optimized_params
         cdef Node par
         
-        result = self.root.optimize(x_data, y_data, input_pars, lambda_reg, method_str, use_gradients)
+        result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         optimized_params = dict(zip(input_pars.keys(), result.x))
         
         for par in self.params:
             par.set_value(optimized_params[par.function.get_description()])
         
-        self.param_values, self.name_values = self.get_param_values()
+        self.param_values, self.name_values, self.penalty = self.get_param_values()
         self.tree_update(self.root)
         #print('Updated parameters to: ', self.name_values) #comment out in production
         
     cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, double lambda_reg, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         str method_str='L-BFGS-B', bint use_gradients=False):
-        self._update_parameters(x_data, y_data, lambda_reg, method_str, use_gradients)
+        self._update_parameters(x_data, y_data, method_str, use_gradients)
     cpdef bint is_valid(self, object x=None, double max_abs=1e12):
         """
         Strict validity: evaluation must succeed, be finite, and not explode.
