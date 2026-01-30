@@ -11,7 +11,7 @@ cdef class Node:
     cdef int node_depth
     cdef bint is_valid(self, object x=?, double max_abs=?)
     cdef cnp.float64_t value    
-    cdef reinit_to_par(self, list existent_pars, str user_prefix=?) 
+    cdef reinit_to_par(self, list existent_pars, str user_prefix=?, double value=?) 
     cpdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
     cdef object fitness
@@ -33,6 +33,7 @@ cdef class Node:
 
     cdef set_prior(self)
     
+    cpdef is_constant(self)
 
     cdef set_sigma(self, object newsigma)
 
@@ -54,12 +55,15 @@ cdef class Node:
     cpdef compute_subtree_size(self)
     cpdef get_fun(self)
     cpdef is_leaf(self)
+    cpdef is_constant(self)
     cpdef get_left(self)
     cpdef get_right(self)
     cpdef get_op(self)
     cpdef get_depth(self)
     cpdef depth(self)
     cpdef update_func(self, list params_list=?, str user_prefix=?)
+    cpdef flag_constants(self, list constants=?)
+    cdef replace_constants_with_pars(self, dict name_values=?)
 
 cdef class Tree:
     cdef double T
@@ -92,6 +96,8 @@ cdef class Tree:
     
     cdef build_fitness_tree(self, Node node, str prefix=?, bint is_left=?)
     #cpdef build_tree(self, depth, functions, x )
+    cdef replace_constants_with_pars(self)
+
     cdef compute_posterior_tree(self, y)
     cdef build_posterior_tree(self, Node node, str prefix=?, bint is_left=?)
 
@@ -138,3 +144,6 @@ cdef new_par(list existing_params, str user_choice=?)
 
 cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list, dict params_used=?)
 
+cdef list _symbol_values(dict name_values)
+
+cdef _parameter_simplifier(object expr, list used_params)

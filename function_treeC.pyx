@@ -59,6 +59,9 @@ cdef class Node:
         
         return False
     
+    cpdef is_constant(self):
+        return (len(self.function.variables)==0) and not self.is_leaf()
+
     cdef set_alpha(self, double newalpha):
         self.alpha = newalpha
 
@@ -135,12 +138,12 @@ cdef class Node:
         self.prior = self.function.prior
    
     # DANGEROUS!!! Use cases need be minimized!
-    cdef reinit_to_par(self, list existing_pars, str user_prefix=None):
+    cdef reinit_to_par(self, list existing_pars, str user_prefix=None, double value=1.0):
         '''Re-initializes a node to a constant.'''
         cdef object new_param = new_par(existing_pars, user_prefix) 
         self.function = real_functionC.RealFunctionC.from_string(str(new_param), self.domain)
-        print('REINITIALIZATION OF NODE ', self, ' TO PARAMETER!')
-        self.left, self.right, self.op_symbol, self.node_depth, self.value = None, None, None, 0, self.set_value()
+        #print('REINITIALIZATION OF NODE ', self, ' TO PARAMETER!')
+        self.left, self.right, self.op_symbol, self.node_depth, self.value = None, None, None, 0, value
     
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         return self.function.fitness(y, parameters)
@@ -272,7 +275,57 @@ cdef class Node:
             count += self.right.node_count()
         return count
         
-    
+    cpdef flag_constants(self, list constants=None):
+        if constants is None:
+            constants = []
+        
+        #cdef list my_symbols
+
+        if self.is_constant():
+           
+            constants.append((self, self.function.symbols))
+        else:
+            
+            if self.left is not None:
+                self.left.flag_constants(constants)
+            
+            if self.right is not None:    
+                self.right.flag_constants(constants)
+        
+        return constants
+
+    cdef replace_constants_with_pars(self, dict name_values=None):
+        
+        cdef tuple constant
+        cdef double value
+        cdef Node constant_node
+        cdef list symbols_values = _symbol_values(name_values) if name_values else None
+        cdef list existing_params = list(name_values.keys())
+        cdef set constant_pars
+
+        for constant in self.flag_constants():
+            
+            constant_node = constant[0]
+            constant_pars = constant[1]
+
+            for sy in constant_pars:
+                sy_str = str(sy)
+                if sy_str in existing_params:  # May need str() depending on types
+                    existing_params.remove(sy_str)
+            
+            if symbols_values:
+                
+                subs_dict = [(sy, val) for sy, val in symbols_values if sy in constant_pars]
+                value = np.float64(constant_node.function.expr.subs(subs_dict))
+            else:
+                
+                value = 1.0
+
+            constant_node.reinit_to_par(existing_params, user_prefix=None, value=value)
+            
+
+
+
     
     #def?
     cpdef get_left(self):
@@ -495,7 +548,12 @@ cdef class Tree:
 
     cdef compute_posterior_tree(self, y):
         self.root.posterior_tree(y, self.name_values)     
-        
+    
+
+    cdef replace_constants_with_pars(self):
+        self.root.replace_constants_with_pars(self.name_values)
+        self.tree_update(self.root)
+
     cdef build_posterior_tree(self, Node node, str prefix='', bint is_left=True):
         if node.is_leaf():
             return f"{prefix}{'└── ' if is_left else '├── '}{str(node.posterior)}\n"
@@ -683,7 +741,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
                 'node', Npars, leaves_count, arr_indices, params_used, value=value,
                 alpha = alpha, sigma = sigma)
        
-       
+        
         cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
         cdef real_functionC.RealFunctionC func  
         cdef str op_symbol
@@ -763,7 +821,7 @@ cdef new_par(list existing_params, str user_choice=None):
     user_choice = user_choice if user_choice else 'a'
     return f"{user_choice}0"
 
-cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list, dict params_used = None):
+cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list, dict params_used = None ):
     """
     Sympy expr to Tree
 
@@ -782,6 +840,7 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
     if params_used is None:
         params_used = {}
     #print(params_used.values()) 
+    
     if expr.is_Number:
         param_name = new_par(list(params_used.values()))
         #print(param_name)
@@ -797,7 +856,7 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
     if isinstance(expr, sp.Symbol):
         symbol_str = str(expr)
         if symbol_str == 'x':
-            func = real_functionC.RealFunctionC.from_string(str(expr), domain)
+            func = real_functionC.RealFunctionC.from_string('x', domain)
             root_node = Node(function = func)
         else:
             if symbol_str not in params_used:
@@ -901,3 +960,15 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
 def expr_to_tree(expr, domain, function_list):
     return _expr_to_tree(expr, domain, function_list)
 
+
+cdef list _symbol_values(dict names_values):
+    cdef list return_list = []
+    for key in names_values:
+        return_list.append((sp.symbols(key), names_values[key]))
+    return return_list
+
+
+cdef _parameter_simplifier(object expr, list used_params):
+    cdef str expr_str
+    expr_str = new_par(used_params)
+    expr = sp.sympify(expr_str)

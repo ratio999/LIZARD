@@ -525,13 +525,15 @@ cdef class Grove:
                     right=root_right,
                     symbol=op
                 )
-                print('root built', root_tree.function.get_description())                
+                #print('root built', root_tree.function.get_description())                
                 tree = function_treeC.Tree(
                     depth=root_tree.depth(), functions=self.funcs, x=self.domain, node=root_tree,
                     Npars=len(root_tree.function.params), T=self.T
                 )
                 if len(root_tree.function.params) > 1:
                     print('# parameters > 1')
+
+                    tree.replace_constants_with_pars()
                 
                 #tree.tree_update(tree.root)
                 expression = tree.tree_get_description()
@@ -1051,7 +1053,9 @@ cdef class Grove:
                         #print(param.function.expr.is_Number)
                         if not param.function.expr.is_Number and param.get_description() in names_params.keys():
                             param.set_value(names_params[param.get_description()])
-                
+                    
+                    tree.replace_constants_with_pars()
+                    
                     candidates.append((tree, post))
                     tree_cache[expr] = post
                     pbar1.update(1)
