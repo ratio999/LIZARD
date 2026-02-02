@@ -480,8 +480,11 @@ cdef class RealFunctionC:
                 self.params_strs = self.get_par_string()
             except:
                 self._update_symbols()         
+                self.params = sorted(self.params, key=lambda n: pars.index(n))
+                #print('sorting went fine')
+                self.params_strs = self.get_par_string()
         except:
-            print('Issues: ', self.params, pars)
+            print('Issues: ', self.params, pars, self.description)
         
 
     #cdef?

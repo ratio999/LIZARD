@@ -145,6 +145,13 @@ cdef class Node:
         #print('REINITIALIZATION OF NODE ', self, ' TO PARAMETER!')
         self.left, self.right, self.op_symbol, self.node_depth, self.value = None, None, None, 0, value
     
+    cdef _rebuild_ancestor_functions(self, Node node):
+        cdef Node parent = self.find_parent(node)
+        while parent is not None:
+            parent.function = parent.fetch_fun()  # Rebuild from children
+            parent.function._update_symbols()     # Refresh params/variables
+            parent = self.find_parent(parent)
+
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         return self.function.fitness(y, parameters)
 
@@ -322,7 +329,7 @@ cdef class Node:
                 value = 1.0
 
             constant_node.reinit_to_par(existing_params, user_prefix=None, value=value)
-            
+            self._rebuild_ancestor_functions(constant_node)  
 
 
 
@@ -613,7 +620,7 @@ cdef class Tree:
         Strict validity: evaluation must succeed, be finite, and not explode.
         """
         return self.root.is_valid(x, max_abs)
-        
+
 
 
     cdef _root_replacement(self, object replacement=None, int replace_all = 0, dict kwargs= None,

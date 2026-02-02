@@ -12,6 +12,8 @@ cdef class Node:
     cdef bint is_valid(self, object x=?, double max_abs=?)
     cdef cnp.float64_t value    
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?, double value=?) 
+    cdef _rebuild_ancestor_functions(self, Node node)
+    
     cpdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
     cdef object fitness
@@ -96,6 +98,8 @@ cdef class Tree:
     
     cdef build_fitness_tree(self, Node node, str prefix=?, bint is_left=?)
     #cpdef build_tree(self, depth, functions, x )
+
+    
     cdef replace_constants_with_pars(self)
 
     cdef compute_posterior_tree(self, y)
