@@ -68,6 +68,10 @@ cdef class RealFunctionC:
                 )
         memo2[id(self)] = copy_rf
         return copy_rf
+
+    cdef _update_symbols(self):
+        self.symbols = self.expr.free_symbols
+        self.params, self.variables = self.classify_symbols()
     
     cdef _arr_param_expr(self, double[:] x, object x_sym):
         
@@ -470,9 +474,12 @@ cdef class RealFunctionC:
     cdef sort_params_list(self, list pars):
 
         try:
-            self.params = sorted(self.params, key=lambda n: pars.index(n))
-            #print('sorting went fine')
-            self.params_strs = self.get_par_string()         
+            try:
+                self.params = sorted(self.params, key=lambda n: pars.index(n))
+                #print('sorting went fine')
+                self.params_strs = self.get_par_string()
+            except:
+                self._update_symbols()         
         except:
             print('Issues: ', self.params, pars)
         

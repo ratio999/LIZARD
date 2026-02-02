@@ -19,6 +19,7 @@ cdef class RealFunctionC:
     cdef dict grad_funcs
     cdef object constant_value
     
+    cdef _update_symbols(self)
     cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = ?)   
     cdef set_prior(self)
     cdef classify_symbols(self)
