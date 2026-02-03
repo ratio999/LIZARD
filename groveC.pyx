@@ -518,7 +518,7 @@ cdef class Grove:
                     root_right = function_treeC.Node(
                         function=real_functionC.RealFunctionC.from_string(right_str, self.domain, compute_grad = False),
                     )
-                print(op, root_left.function.get_description(), root_right.function.get_description())
+                #print(op, root_left.function.get_description(), root_right.function.get_description())
                 root_tree = function_treeC.Node(
                     function=None,
                     left=root_left,
@@ -542,12 +542,12 @@ cdef class Grove:
                     continue
                 if not tree.is_valid(self.domain):
                     continue
-                print(tree)
+                #print(tree)
                 if optimize_params and len(tree.params) > 0:
-                    print('computing params for ', expression)
+                    #print('computing params for ', expression)
                     tree.update_parameters(self.domain, y, 
                         self.method_str, self.use_gradients)
-                
+                #print(tree.name_values)
                 post = tree.get_superficial_posterior(y)
                 tree_cache[expression] = post
                 if np.isfinite(post):
@@ -691,7 +691,7 @@ cdef class Grove:
         print(f"Burn-in depth-2 complete. Best: {self.root_posteriors[self.best_index()]:.4f}")
     
 
-    cdef  _combine_depth1(self, function_treeC.Node left, function_treeC.Node right, object op):
+    cdef _combine_depth1(self, function_treeC.Node left, function_treeC.Node right, object op):
         """
         Combine depth-1 tree with a primitive (or vice versa).
         
@@ -963,13 +963,16 @@ cdef class Grove:
         # SCATTER WORK ITEMS TO WORKERS
         # =========================================================
         # Divide work items into n_workers chunks
-        chunk_size = (total_work + n_workers - 1) // n_workers
-        work_chunks = []
-        for w in range(n_workers):
+        cdef int n_participants = n_workers + 1
+        cdef int chunk_size = (total_work + n_participants - 1) // n_participants
+        cdef list work_chunks = []
+        
+        for w in range(1, n_participants):
             start = w * chunk_size
             end = min(start + chunk_size, total_work)
             work_chunks.append(work_items[start:end])
         
+        cdef list my_work_chunk = work_items[0:chunk_size]
         # Scatter chunks to workers
         intercomm.scatter(work_chunks, root=MPI.ROOT)
         
@@ -981,7 +984,60 @@ cdef class Grove:
         cdef dict progress_received={w: 0 for w in range(n_workers)}
         cdef object last_update_time = time.time()
         cdef double timeout = 5.0  # seconds - if no updates for 5s, assume workers done
+        
+        cdef str itm_type
+        cdef int indx
+        cdef function_treeC.Node prim_node
+        cdef function_treeC.Tree d1_tree, d1_tree_2
+        cdef list candidates=[]
+        
+        for indx, itm in enumerate(my_work_chunk):
+            
+            itm_type = itm[0]
+            if itm_type == 'd1_prim':
+                
+                _, i, prim_str, op = itm
+                prim_node = function_treeC.Node(
+                    function = real_functionC.RealFunctionC.from_string(
+                        prim_str, self.domain, compute_grad=False
+                    ))
+                
+                d1_tree = depth1_candidates[i][0]
+                if d1_tree is None:
+                    continue
+                
+                tree = self._combine_depth1(d1_tree.root, prim_node, op)
+                self._process_candidate(tree, y,
+                        True, tree_cache, candidates)
+            
+            elif itm_type == 'd1_d1':
+                _, i, j, op = itm
 
+                d1_tree = depth1_candidates[i][0]
+                d1_tree_2 = depth1_candidates[j][0]
+
+                if d1_tree is None or d1_tree_2 is None:
+                    continue
+                
+                tree = self._combine_depth1(d1_tree.root, d1_tree_2.root, op)
+                self._process_candidate(tree, y, True, tree_cache, candidates)
+
+            if indx % 50 ==0:
+                pbar.update(50)
+                pbar.refresh()
+                
+                for source in range(n_workers):
+                    status = MPI.Status()
+                    if intercomm.Iprobe(source=source, tag=99, status = status):
+                        count=intercomm.recv(source=source, tag=99, status=status)
+                        delta = count - progress_received[source]
+                        progress_received[source] = count
+                        pbar.update(delta)
+                        pbar.refresh()
+                        sys.stdout.flush()
+                        last_update_time = time.time()
+                        got_update = True
+        
         while True:
             got_update = False
             
@@ -1034,7 +1090,7 @@ cdef class Grove:
         # =========================================================
         # PROCESS RESULTS
         # =========================================================
-        cdef list candidates = []
+        #cdef list candidates = []
         cdef list worker_results
         cdef function_treeC.Node param
         # Flatten results from all workers
@@ -1054,7 +1110,7 @@ cdef class Grove:
                         if not param.function.expr.is_Number and param.get_description() in names_params.keys():
                             param.set_value(names_params[param.get_description()])
                     
-                    tree.replace_constants_with_pars()
+                    #tree.replace_constants_with_pars(names_params)
                     
                     candidates.append((tree, post))
                     tree_cache[expr] = post
@@ -1104,6 +1160,8 @@ cdef class Grove:
             tree.update_parameters(self.domain, y,
                                 self.method_str, self.use_gradients)
         
+        cdef dict names_values = tree.name_values
+        tree.replace_constants_with_pars()
         cdef double post = tree.get_superficial_posterior(y)
         local_cache[expression] = post
         

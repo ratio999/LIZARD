@@ -45,7 +45,7 @@ extensions = [
     Extension("gp_movesC", sources=["gp_movesC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("groveC", sources=["groveC.pyx"], include_dirs=grove_includes),
     #Extension("samplerC", sources=["samplerC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    Extension("num_wrapC", sources=["num_wrapC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
+    #Extension("num_wrapC", sources=["num_wrapC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("mpi_worker", sources=["mpi_worker.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     
     Extension("utils.pointer_utils", 

@@ -1,7 +1,7 @@
 import numpy as np
 cimport numpy as cnp
 import sympy as sp
-from wrapperC cimport a_vegas
+
 from cpython.ref cimport Py_INCREF, Py_DECREF
 #cimport sympy as csp
 from utils.pointer_utils cimport python_object_to_void_ptr, void_ptr_to_python_object, void_ptr_to_rf
@@ -101,19 +101,7 @@ cdef class RealFunctionC:
         return self.cfit(*args)
     
 
-    cpdef vegas_call(self, double[:] params_domain, int init, int n_samples,
-                     int n_steps, int nprn):
-        cdef void* ptr = python_object_to_void_ptr(self)
-        cdef double[:] tgral = np.array([0.0])
-        cdef double[:] sd =  np.array([0.0])
-        cdef double[:] chi2a = np.array([0.0])
-        
-        cdef int ndim = int(np.shape(params_domain)[0] / 2)
-        cdef long idum = -12345
-        a_vegas(ptr, &params_domain[0], ndim, _wrapper, init, n_samples, n_steps, 
-              nprn, &tgral[0], &sd[0], &chi2a[0], idum)
-
-        return (*tgral, *sd, *chi2a)
+    
 
     
 
@@ -186,6 +174,10 @@ cdef class RealFunctionC:
         #print('params in eval ', params)
         #print('in evaluate: ', self.func(x, params=params))
         if self.is_param():
+        # Use params dict if available, otherwise fall back to constant_value
+            param_name = self.get_description()  # e.g., "a0"
+            if param_name in params:
+                return np.full_like(x, params[param_name], dtype=np.float64).ravel()
             return np.full_like(x, self.constant_value, dtype=np.float64).ravel()
         cdef object out = self.func(x, params=params)
         
@@ -397,9 +389,16 @@ cdef class RealFunctionC:
         cdef cnp.ndarray[cnp.float64_t, ndim=1] par_values = np.ascontiguousarray(list(params.values()), dtype=np.float64)
         return 2*par_values 
 
-    def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):
+    def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, 
+            cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
-        return self.fitness( y_data,  params_dict, x_data)
+        #print(x_data, y_data)
+        cdef double fit = self.fitness( y_data,  params_dict, x_data)
+        #print(self.expr)
+        #if flat_params[0] < 2.0 or flat_params[0] > 5.0:  # log only at different param values
+        #print(f'  objective called: params={flat_params}, params_dict={params_dict}, fitness={fit}')
+        
+        return fit
     
 
     def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):   
@@ -453,24 +452,38 @@ cdef class RealFunctionC:
         
         return result
     
-    
-    
+    '''
+    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+            cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+            dict input_pars, str method_str='Powell'):
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
+        cdef object result = minimize(
+            lambda x: self.objective(x, x_data, y_data),
+            initial_params,
+            method=method_str,
+            options={'disp': False}
+
+        )
+        
+        return result
+    '''
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, str method_str='Powell'):
         cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
         #cdef double[:] initial_params = np.array(list(input_pars.values()))
+        #print(initial_params)
+        
         cdef object result = minimize(
                 fun=self.objective,
                 x0=initial_params,
-                jac=self.grad,
                 args=(x_data, y_data),
                 method=method_str,
                 options={'disp': False}
                 )
         #self.params = dict(zip(self.param_str, result.x))
-        
+        #print(result)
         return result
-
+    
     cdef sort_params_list(self, list pars):
 
         try:
@@ -492,7 +505,7 @@ cdef class RealFunctionC:
         """Is function a constant?"""
         if len(self.variables)==0:
             return True
-        ''''
+        '''
         cdf cnp.ndarray[cnp.float64_t, ndim=1] y
         
     

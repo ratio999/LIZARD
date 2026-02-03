@@ -48,7 +48,8 @@ cdef class RealFunctionC:
               cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
               dict input_pars, str method_str=?)
     
-    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, str method_str=?)
     cdef sort_params_list(self, list pars)
     cdef get_par_string(self)
@@ -77,9 +78,7 @@ cdef class RealFunctionC:
 
     cdef double _cfunc(self, double *x, double w, int ndim) noexcept
                     
-    cpdef vegas_call(self, double[:] params_domain, int init, int n_samples,
-                     int n_steps, int nprn)
-
+   
 
 cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept
 

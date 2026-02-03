@@ -212,7 +212,7 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
         tree.update_parameters(domain, y, method_str, use_gradients)
     
     #tree.replace_constants_with_pars()
-    
+    tree.replace_constants_with_pars()
     cdef object post = tree.get_superficial_posterior(y, lambda_reg)
     
     if not np.isfinite(post):

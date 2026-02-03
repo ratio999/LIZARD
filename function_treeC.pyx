@@ -600,10 +600,12 @@ cdef class Tree:
         cdef object result
         cdef dict optimized_params
         cdef Node par
-        
+        #print(f'EXPR: {self.tree_get_description()}')
+        #print(f'input_pars id: {id(input_pars)}, value: {input_pars}')
+        #print(f'self.name_values id: {id(self.name_values)}')
         result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         optimized_params = dict(zip(input_pars.keys(), result.x))
-        
+        #print(self.tree_get_description(), result)
         for par in self.params:
             par.set_value(optimized_params[par.function.get_description()])
         
