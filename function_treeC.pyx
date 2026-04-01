@@ -414,13 +414,14 @@ cdef class Tree:
         cdef dict params_values = {}
         cdef Node par
         cdef dict names_values = {}
-        cdef double par_value, penalty = 0.0
+        cdef double par_value = 0.0
+        cdef double penalty = 0.0
         for par in self.params:
             #print(par.value)
             par_value = par.value
             params_values[par] = par_value
             names_values[par.function.get_description()] = par_value
-            penalty += par_value
+            penalty += np.abs(par_value)
         return params_values, names_values, penalty
 
     def get_param_dicts(self):

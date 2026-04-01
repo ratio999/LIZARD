@@ -202,9 +202,10 @@ cdef class RealFunctionC:
                 x = self.domain
             fitness = self.posterior_fitness(y, params, x, penalty)
         
-        
+        if fitness <0:
+            print('invalid fitness ', self.description, penalty)
         if prior is None:
-            prior = 0.0
+            prior = 0.0 #to be worked on
         #print('fitness is: ', fitness, ' and prior is: ', prior)
         try:
             return -fitness/(2 * sigma**2) - prior  
@@ -214,9 +215,9 @@ cdef class RealFunctionC:
     cdef posterior_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double penalty=0.0): 
         if x is None:
             x = self.domain
-        
         cdef double mse = np.nanmean((y - self.evaluate(x, params))**2)
-        
+        if mse <0:
+            print('invalid mse ', self.description)
         # Fast path: skip regularization when lambda is 0
         
         
