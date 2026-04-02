@@ -12,7 +12,7 @@ cdef class Grove:
     cdef list nodes
     cdef int n_pars
     cdef double T
-    cdef object root_posteriors
+    cdef public object root_posteriors
     cdef public list trees
     cdef double lambda_reg
     cdef double base_temp
