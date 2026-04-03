@@ -65,6 +65,7 @@ cdef void _worker_main():
     cdef list depth1_data = config['depth1_data']  # List of (expression, params, posterior)
     cdef list all_primitives = config['all_primitives']
     cdef double T = config['T']
+    cdef dict local_cache = config['tree_cache']
     
     # =========================================================
     # RECEIVE MY WORK ITEMS
@@ -86,7 +87,9 @@ cdef void _worker_main():
         #print(i, expr, names_params)
         tree = _helper(expr, domain, funcs, names_params)    
         depth1_trees.append((tree, post))
-        
+        if tree.tree_get_description() not in local_cache:
+            print(f'[Worker {rank}] Cache miss for depth-1 tree: {tree.tree_get_description()}')
+            local_cache[tree.tree_get_description()] = post
     # =========================================================
     # PROCESS MY WORK ITEMS
     # =========================================================
@@ -118,15 +121,17 @@ cdef void _worker_main():
             # Direction 1: depth-1 op primitive
             tree = _combine_nodes(d1_tree.root, prim_node, op, domain, funcs, T)
             result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
+            expr_string = tree.tree_get_description()
             if result is not None:
                 local_results.append(result)
-            
+                local_cache[expr_string] = result[2]  # Cache the posterior 
             # Direction 2: primitive op depth-1
             tree = _combine_nodes(prim_node, d1_tree.root, op, domain, funcs, T)
             result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
+            expr_string = tree.tree_get_description()
             if result is not None:
                 local_results.append(result)
-        
+                local_cache[expr_string] = result[2]  # Cache the posterior        
         elif item_type == 'd1_d1':
             _, i, j, op = item
             
@@ -138,8 +143,10 @@ cdef void _worker_main():
             
             tree = _combine_nodes(d1_tree.root, d1_tree_2.root, op, domain, funcs, T)
             result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
+            expr_string = tree.tree_get_description()
             if result is not None:
                 local_results.append(result)
+                local_cache[expr_string] = result[2]  # Cache the posterior
         if (idx +1) % 50 == 0:
             parent_comm.isend(idx+1, dest=0, tag=99)
         #print(idx, rank)

@@ -146,6 +146,8 @@ cdef class RealFunctionC:
                 #print('checking validity...')
         cdef object yhat
         with np.errstate(all='ignore'):
+            if "zoo" in self.description:
+                return False
             try:
                 yhat = self.evaluate(self.domain if x is None else x)
                 #print('yhat: ', yhat)

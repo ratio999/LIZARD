@@ -903,12 +903,17 @@ cdef class Grove:
         cdef object post
         cdef int depth, i
         cdef object expr
+        cdef int sum_of_misses = 0
         cdef dict names_params
         for tree, post, depth in depth1_candidates:
             expr = tree.root.function.expr
             names_params = tree.name_values if tree.name_values else {}
             depth1_data.append((expr, names_params, post))
-        
+            if str(expr) not in tree_cache:
+                print('bug: depth-1 expression not in cache')
+                tree_cache[expr] = post
+                sum_of_misses += 1
+        print(f"Depth-1 cache misses: {sum_of_misses} out of {len(depth1_candidates)}")
         # Build ALL work items
         cdef list work_items = []
         cdef str prim_str, op
@@ -954,7 +959,8 @@ cdef class Grove:
             'use_gradients': self.use_gradients,
             'depth1_data': depth1_data,
             'all_primitives': all_primitives,
-            'T': self.T
+            'T': self.T,
+            'tree_cache': tree_cache
         }
         
         intercomm.bcast(config, root=MPI.ROOT)
@@ -1009,6 +1015,13 @@ cdef class Grove:
                 tree = self._combine_depth1(d1_tree.root, prim_node, op)
                 self._process_candidate(tree, y,
                         True, tree_cache, candidates)
+                
+                if op not in ['+', '*'] and not (op=='o' and prim_node.bis_param):  # if not commutative, also do primitive op depth-1
+                    tree = self._combine_depth1(prim_node, d1_tree.root, op)
+                    
+                    self._process_candidate(tree, y,
+                        True, tree_cache, candidates)
+                    
             
             elif itm_type == 'd1_d1':
                 _, i, j, op = itm
