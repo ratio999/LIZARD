@@ -453,7 +453,7 @@ cdef class Grove:
         cdef list candidates = []
         cdef list all_primitives = self.funcs.copy()
         all_primitives.append("a0")
-        cdef str left_str, right_str, op
+        cdef str left_str, right_str, op, primitive_expression
         cdef function_treeC.Tree tree, primitive_tree
         cdef function_treeC.Node root_node
         cdef double post
@@ -478,7 +478,7 @@ cdef class Grove:
             
             
             #primitive_tree.tree_update(primitive_tree.root)
-            primitive_expression = primitive_tree.tree_get_description()
+            primitive_expression = str(primitive_tree.root.function.expr)
             
             if primitive_tree.is_valid(self.domain) and primitive_expression not in tree_cache:
                 
@@ -488,8 +488,9 @@ cdef class Grove:
                 
                 post = primitive_tree.get_superficial_posterior(y)
                 
-                tree_cache[primitive_expression] = post
-                if np.isfinite(post):
+                if np.isfinite(post) and primitive_expression not in tree_cache:
+                    tree_cache[primitive_expression] = post
+                
                     candidates.append((primitive_tree, post, 0))  # depth 0
                 
         cdef function_treeC.Node root_left, root_right, root_tree
@@ -536,25 +537,27 @@ cdef class Grove:
                     tree.replace_constants_with_pars()
                 
                 #tree.tree_update(tree.root)
-                expression = tree.tree_get_description()
+                expression = str(tree.root.function.expr)
                 
-                if expression in tree_cache:
-                    continue
-                if not tree.is_valid(self.domain):
+                if expression in tree_cache or not tree.is_valid(self.domain):
                     continue
                 #print(tree)
+                
                 if optimize_params and len(tree.params) > 0:
                     #print('computing params for ', expression)
                     tree.update_parameters(self.domain, y, 
                         self.method_str, self.use_gradients)
+                
                 #print(tree.name_values)
                 post = tree.get_superficial_posterior(y)
                 tree_cache[expression] = post
+                
                 if np.isfinite(post):
                     candidates.append((tree, post, 1)) # depth 1
         
         candidates.sort(key=lambda x: x[1], reverse=True)
         print(f"Stage 1: {len(candidates)} valid depth-1 candidates")
+        
         if len(candidates) > 0:
             print(f"  Top-3: {[(c[0].tree_get_description(), f'{c[1]:.3f}') for c in candidates[:3]]}")
         
@@ -909,11 +912,6 @@ cdef class Grove:
             expr = tree.root.function.expr
             names_params = tree.name_values if tree.name_values else {}
             depth1_data.append((expr, names_params, post))
-            if str(expr) not in tree_cache:
-                print('bug: depth-1 expression not in cache')
-                tree_cache[expr] = post
-                sum_of_misses += 1
-        print(f"Depth-1 cache misses: {sum_of_misses} out of {len(depth1_candidates)}")
         # Build ALL work items
         cdef list work_items = []
         cdef str prim_str, op
@@ -1115,21 +1113,28 @@ cdef class Grove:
                 # Rebuild tree from expression
                 #print(jj, ' expr is: ', str(expr))
                 tree = function_treeC._expr_to_tree(expr, self.domain, self.funcs)
+                descr = tree.tree_get_description()
                 #print(tree)
                 #print(tree.name_values)
-                if tree is not None and names_params and len(names_params) > 0:
-                    for param in tree.params:
-                        #print(param.function.expr.is_Number)
-                        if not param.function.expr.is_Number and param.get_description() in names_params.keys():
-                            param.set_value(names_params[param.get_description()])
+                if str(expr) not in tree_cache:
                     
-                    #tree.replace_constants_with_pars(names_params)
-                    
-                    candidates.append((tree, post))
-                    tree_cache[expr] = post
-                    pbar1.update(1)
-                    pbar1.refresh()
-                #jj += 1
+                    if tree is not None and names_params and len(names_params) > 0:
+                        for param in tree.params:
+                            #print(param.function.expr.is_Number)
+                            if not param.function.expr.is_Number and param.get_description() in names_params.keys():
+                                param.set_value(names_params[param.get_description()])
+                        
+                        #tree.replace_constants_with_pars(names_params)
+                        if descr != str(expr):
+                            print('Warning: expression mismatch after rebuilding tree')
+                            print('Original expr: ', str(expr))
+                            print('Rebuilt expr: ', tree.tree_get_description())
+                            continue
+                        candidates.append((tree, post))
+                        tree_cache[str(expr)] = post
+                        pbar1.update(1)
+                        pbar1.refresh()
+                    #jj += 1
         pbar.close()
         print(f"  Received {len(candidates)} valid candidates from workers")
         

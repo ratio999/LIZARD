@@ -69,7 +69,7 @@ def grove_smoke_test():
     #grove.burn_in_depth2(y, replace_all=True, optimize_params=True )
     
     print(f"\nAfter burn-in, grove contains some depth-2 trees")
-    for i, tree in enumerate(grove.trees):
+    for i, tree in enumerate(grove.trees)[:10]:
         print(f"  Tree {i}: {tree.tree_get_description()} | posterior: {grove.root_posteriors[i]:.4f}")
     
     # Now run MCMC on the initialized grove
@@ -195,7 +195,7 @@ def main():
     x, a1 = sp.Symbol('x'), sp.Symbol('a1')
     expr = sp.exp(sp.sin(x+2)) + a1*x**2
     tree = expr_to_tree(expr, domain,functions)
-
+    print(str(expr), tree.tree_get_description())
     print('AFTER EXPR2TREE', tree, tree.get_param_dicts())
     grove_smoke_test()
 

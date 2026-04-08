@@ -90,6 +90,8 @@ cdef void _worker_main():
         if tree.tree_get_description() not in local_cache:
             print(f'[Worker {rank}] Cache miss for depth-1 tree: {tree.tree_get_description()}')
             local_cache[tree.tree_get_description()] = post
+        if tree.tree_get_description() != str(expr):
+            print(f'[Worker {rank}] Warning: Reconstructed tree description "{tree.tree_get_description()}" does not match original expression string "{expr}".')
     # =========================================================
     # PROCESS MY WORK ITEMS
     # =========================================================
