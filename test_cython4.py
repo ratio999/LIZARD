@@ -192,12 +192,12 @@ def main():
     '''
 
     domain = np.linspace(-1,1, 100)
-    x, a1 = sp.Symbol('x'), sp.Symbol('a1')
-    expr = sp.exp(sp.sin(x+2)) + a1*x**2
+    x, a1, a0 = sp.Symbol('x'), sp.Symbol('a1'), sp.Symbol('a0')
+    expr = sp.exp(sp.sin(x+2)) ** a1**x**(2 * a0)/sp.cos(x)
     tree = expr_to_tree(expr, domain,functions)
     print(str(expr), tree.tree_get_description())
     print('AFTER EXPR2TREE', tree, tree.get_param_dicts())
-    grove_smoke_test()
+    #grove_smoke_test()
 
 
 

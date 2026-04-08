@@ -909,9 +909,13 @@ cdef class Grove:
         cdef int sum_of_misses = 0
         cdef dict names_params
         for tree, post, depth in depth1_candidates:
+
             expr = tree.root.function.expr
             names_params = tree.name_values if tree.name_values else {}
             depth1_data.append((expr, names_params, post))
+            if str(expr) not in tree_cache:
+                print(f"Adding to cache: {expr} with post {post}. Bug in line 917 if this is missing.")
+                tree_cache[str(expr)] = post
         # Build ALL work items
         cdef list work_items = []
         cdef str prim_str, op
@@ -1113,9 +1117,11 @@ cdef class Grove:
                 # Rebuild tree from expression
                 #print(jj, ' expr is: ', str(expr))
                 tree = function_treeC._expr_to_tree(expr, self.domain, self.funcs)
-                descr = tree.tree_get_description()
+                
                 #print(tree)
                 #print(tree.name_values)
+                descr = tree.tree_get_description()
+                print(descr, str(expr))
                 if str(expr) not in tree_cache:
                     
                     if tree is not None and names_params and len(names_params) > 0:
@@ -1125,10 +1131,12 @@ cdef class Grove:
                                 param.set_value(names_params[param.get_description()])
                         
                         #tree.replace_constants_with_pars(names_params)
+                        descr = str(tree.root.function.expr)
                         if descr != str(expr):
                             print('Warning: expression mismatch after rebuilding tree')
                             print('Original expr: ', str(expr))
                             print('Rebuilt expr: ', tree.tree_get_description())
+                            print(tree)
                             continue
                         candidates.append((tree, post))
                         tree_cache[str(expr)] = post
