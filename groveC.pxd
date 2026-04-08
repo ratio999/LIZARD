@@ -80,6 +80,7 @@ cdef class Grove:
                     bint optimize_params, dict local_cache, list local_candidates)
     
     cdef  _combine_depth1(self, function_treeC.Node left, function_treeC.Node right, object op)
+    cdef  _combine_depth1_trees(self, function_treeC.Tree left, function_treeC.Tree right, object op)
 
     cpdef  acceptance_rate(self)
 

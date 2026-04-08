@@ -548,7 +548,7 @@ cdef class Grove:
                     tree.update_parameters(self.domain, y, 
                         self.method_str, self.use_gradients)
                 
-                #print(tree.name_values)
+                print(tree.name_values)
                 post = tree.get_superficial_posterior(y)
                 tree_cache[expression] = post
                 
@@ -692,7 +692,33 @@ cdef class Grove:
                     self.root_posteriors[i] = candidates[i][1]
         
         print(f"Burn-in depth-2 complete. Best: {self.root_posteriors[self.best_index()]:.4f}")
-    
+    cdef _combine_depth1_trees(self, function_treeC.Tree left, function_treeC.Tree right, object op):
+        """
+        Combine depth-1 tree with a primitive (or vice versa).
+        
+        """
+        
+        # Left side
+        cdef function_treeC.Tree left_tree = deepcopy(left)
+        #cdef function_treeC.Node right_node = deepcopy(right)
+        
+        cdef function_treeC.Tree preliminary_tree = deepcopy(right)
+        gp_movesC.rename_prefix(preliminary_tree)
+        print('preliminary trees', left_tree.name_values, preliminary_tree.name_values)
+        #cdef function_treeC.Node right_node = deepcopy(preliminary_tree.root)
+        cdef function_treeC.Node root_node = function_treeC.Node(function=None,
+                                            left=left_tree.root, right=preliminary_tree.root, 
+                                            symbol=op )
+        cdef function_treeC.Tree tree = function_treeC.Tree(depth=root_node.node_depth, functions=self.funcs,
+                                    x=self.domain, node = root_node,
+                                    Npars=len(root_node.function.params), T=self.T)
+        print('final tree', tree.name_values)
+        gp_movesC.refresh_params(tree)
+        print('refreshed tree', tree.name_values)
+        #print(tree.name_values)
+        del preliminary_tree
+        return tree
+
 
     cdef _combine_depth1(self, function_treeC.Node left, function_treeC.Node right, object op):
         """
@@ -1041,9 +1067,9 @@ cdef class Grove:
 
                 if d1_tree is None or d1_tree_2 is None:
                     continue
-                print(d1_tree.name_values, d1_tree_2.name_values)
-                tree = self._combine_depth1(d1_tree.root, d1_tree_2.root, op)
-                print('combined tree: ', tree.name_values)
+                #print(d1_tree.name_values, d1_tree_2.name_values)
+                tree = self._combine_depth1_trees(d1_tree, d1_tree_2, op)
+                #print('combined tree: ', tree.name_values)
                 self._process_candidate(tree, y, True, tree_cache, candidates)
 
             if indx % 50 ==0:
