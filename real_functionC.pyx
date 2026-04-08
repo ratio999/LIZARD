@@ -500,8 +500,8 @@ cdef class RealFunctionC:
                 #print('sorting went fine')
                 self.params_strs = self.get_par_string()
         except:
-            print('Issues: ', self.params, pars, self.description)
-        
+            #print('Issues: ', self.params, pars, self.description)
+            pass
 
     #cdef?
     cpdef is_param(self):

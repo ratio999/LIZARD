@@ -100,6 +100,14 @@ def main():
     tree1.compute_fitness_tree(y)
     tree1.print_fitness_tree()
     tree2 = Tree(depth=5, functions=functions, x=x, Npars =24, value=np.array([545, 546, 547, 548]))
+    n=0
+    for param in tree2.get_params():
+        param.set_value(n)
+        print(param.get_fun().get_description())
+        n+=1
+    tree2.tree_update()
+    for param in tree2.get_params():
+        print(param.value)
     #print(tree1.node_count(), calculate_likelihood(tree1, y), calculate_posterior(tree1, y))
     print("Tree 1:")
     print(tree1)
@@ -125,21 +133,23 @@ def main():
     #    pass
     print(tree1.is_defined(x), tree1.evaluate(x))
     # Eseguire le mosse di genetic programming
+    
     subtree_mutation(tree1, functions, random_depth=True)
-    print(tree1.optimize(x, y).x)
+    
+    #print(tree1.optimize(x, y).x)
     print("Subtree mutation:")
     print(tree1)
     print(tree1.get_root().get_fun().get_description())
     print(tree1.is_valid())
     #print(tree1.get_param_dicts()[1], tree2.get_param_dicts()[1])
-   
+    print('other tree for crossover')
+    print(tree2)
+    print('prima', tree1.get_param_dicts()[1], tree2.get_param_dicts()[1])
     subtree_crossover(tree1, tree2)
     print("Crossover:")
     print(tree1)
     print(tree1.tree_get_description())
-    
-    print(tree1.evaluate())#print(tree1.get_root().get_fun().get_params())
-    print(tree1.is_valid())
+    print('dopo', tree1.get_param_dicts()[1])
     #for i in tree1.get_params():
     #    print(i.get_fun().get_description())
     #print(tree1.get_param_dicts()[1])
@@ -148,8 +158,6 @@ def main():
     print("Point mutation:")
     print(tree1)
     print(tree1.tree_get_description())
-    print(tree1.evaluate())
-    print(tree1.is_valid())
     #print(tree1.get_root().get_fun().get_params())
     #for i in tree1.get_params():
     #    print(i.get_fun().get_description())
@@ -159,8 +167,6 @@ def main():
     print("Hoist mutation:")
     print(tree1)
     print(tree1.tree_get_description())
-    print(tree1.evaluate())
-    print(tree1.is_valid())
     #print(tree1.get_root().get_fun().get_params())
     
     #for i in tree1.get_params():
@@ -177,8 +183,6 @@ def main():
     print("Node addition:")
     print(tree1)
     print(tree1.tree_get_description())
-    print(tree1.evaluate())
-    print(tree1.is_valid())
     #print(tree1.get_root().get_fun().get_params())
     
     #for i in tree1.get_params():
@@ -197,7 +201,7 @@ def main():
     tree = expr_to_tree(expr, domain,functions)
     print(str(expr), tree.tree_get_description())
     print('AFTER EXPR2TREE', tree, tree.get_param_dicts())
-    #grove_smoke_test()
+    grove_smoke_test()
 
 
 

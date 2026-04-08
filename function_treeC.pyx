@@ -517,9 +517,10 @@ cdef class Tree:
 
         self.current_description = self.root.function.get_description()
     #cdef?
-    cpdef tree_update(self, node):
+    cpdef tree_update(self, Node node = None):
         """Update the whole tree nodes' functions"""
-       
+        if node is None:
+            node = self.root
         current_node = node
         while current_node is not None:
             current_node.update_func()

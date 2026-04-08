@@ -10,7 +10,7 @@ cdef class Node:
     cdef object domain
     cdef int node_depth
     cdef bint is_valid(self, object x=?, double max_abs=?)
-    cdef cnp.float64_t value    
+    cdef public cnp.float64_t value    
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?, double value=?) 
     cdef _rebuild_ancestor_functions(self, Node node)
     
@@ -128,7 +128,7 @@ cdef class Tree:
 
     cpdef update_tree_description(self)
 
-    cpdef tree_update(self, node)
+    cpdef tree_update(self, Node node=?)
 
     cpdef node_count(self)
 

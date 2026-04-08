@@ -10,6 +10,7 @@ import sys
 import os
 from copy import deepcopy
 # Add the module path
+from sympy import sympify, symbols
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import after path setup
@@ -211,7 +212,7 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     if tree is None:
         return None
     
-    cdef object expression = tree.root.function.expr
+    #cdef object expression = tree.root.function.expr
     
     if not tree.is_valid(domain):
         return None
@@ -226,7 +227,14 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     
     if not np.isfinite(post):
         return None
-    
+    cdef object expression = tree.tree_get_description()
+    try:
+        
+        # Let sympify auto-detect and create symbols
+        expression = sympify(expression)
+    except:
+        expression = tree.root.function.expr
+        pass
     # Return serializable tuple
     return (expression, tree.name_values if tree.name_values else {}, post)
 

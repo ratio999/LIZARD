@@ -702,12 +702,20 @@ cdef class Grove:
         
         # Left side
         cdef function_treeC.Node left_node = deepcopy(left)
-        cdef function_treeC.Node right_node = deepcopy(right)
+        #cdef function_treeC.Node right_node = deepcopy(right)
+        
+        cdef function_treeC.Tree preliminary_tree = function_treeC.Tree(depth = right.node_depth, functions = self.funcs,
+                x = self.domain, node = right)
+        gp_movesC.rename_prefix(preliminary_tree)
+        cdef function_treeC.Node right_node = deepcopy(preliminary_tree.root)
         cdef function_treeC.Node root_node = function_treeC.Node(function=None,
                                             left=left_node, right=right_node, symbol=op )
         cdef function_treeC.Tree tree = function_treeC.Tree(depth=root_node.node_depth, functions=self.funcs,
                                     x=self.domain, node = root_node,
                                     Npars=len(root_node.function.params), value=1.0, T=self.T)
+        gp_movesC.refresh_params(tree)
+        #print(tree.name_values)
+        del preliminary_tree
         return tree
     
     cpdef _burn_in_stage2_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, list up2depth1_candidates,
@@ -1033,8 +1041,9 @@ cdef class Grove:
 
                 if d1_tree is None or d1_tree_2 is None:
                     continue
-                
+                print(d1_tree.name_values, d1_tree_2.name_values)
                 tree = self._combine_depth1(d1_tree.root, d1_tree_2.root, op)
+                print('combined tree: ', tree.name_values)
                 self._process_candidate(tree, y, True, tree_cache, candidates)
 
             if indx % 50 ==0:
