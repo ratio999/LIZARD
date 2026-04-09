@@ -454,7 +454,7 @@ cdef class Grove:
         cdef list all_primitives = self.funcs.copy()
         all_primitives.append("a0")
         cdef str left_str, right_str, op, primitive_expression
-        cdef function_treeC.Tree tree, primitive_tree
+        cdef function_treeC.Tree tree, primitive_tree, cand
         cdef function_treeC.Node root_node
         cdef double post
         print(f"Stage 1: building {len(all_primitives)**2 * len(self.operations)} depth-1 trees")
@@ -475,7 +475,7 @@ cdef class Grove:
                 depth=root_node.node_depth, functions=self.funcs, x=self.domain, node=root_node,
                 Npars=len(root_node.function.params), value=1.0, T=self.T
             )
-            
+            primitive_tree.name_values = deepcopy(primitive_tree.name_values)
             
             #primitive_tree.tree_update(primitive_tree.root)
             primitive_expression = str(primitive_tree.root.function.expr)
@@ -522,8 +522,8 @@ cdef class Grove:
                 #print(op, root_left.function.get_description(), root_right.function.get_description())
                 root_tree = function_treeC.Node(
                     function=None,
-                    left=root_left,
-                    right=root_right,
+                    left=deepcopy(root_left),
+                    right=deepcopy(root_right),
                     symbol=op
                 )
                 #print('root built', root_tree.function.get_description())                
@@ -531,12 +531,17 @@ cdef class Grove:
                     depth=root_tree.depth(), functions=self.funcs, x=self.domain, node=root_tree,
                     Npars=len(root_tree.function.params), T=self.T
                 )
+                tree.name_values = deepcopy(tree.name_values)
+                print(f"  Just created tree: id(name_values)={id(tree.name_values.keys())}, content={tree.name_values}")
+
                 if len(root_tree.function.params) > 1:
                     print('# parameters > 1')
 
                     tree.replace_constants_with_pars()
                 
+                print(f"  Before update params: id(name_values)={id(tree.name_values.keys())}, content={tree.name_values}")
                 #tree.tree_update(tree.root)
+                print(tree)
                 expression = str(tree.root.function.expr)
                 
                 if expression in tree_cache or not tree.is_valid(self.domain):
@@ -548,19 +553,22 @@ cdef class Grove:
                     tree.update_parameters(self.domain, y, 
                         self.method_str, self.use_gradients)
                 
-                print(tree.name_values)
+                #print(id(tree.name_values.keys()))
                 post = tree.get_superficial_posterior(y)
                 tree_cache[expression] = post
                 
                 if np.isfinite(post):
+                    tree.name_values = deepcopy(tree.name_values)  
                     candidates.append((tree, post, 1)) # depth 1
-        
+                    print(f"  After append: id(name_values)={id(tree.name_values.keys())}, content={tree.name_values}")
         candidates.sort(key=lambda x: x[1], reverse=True)
         print(f"Stage 1: {len(candidates)} valid depth-1 candidates")
         
         if len(candidates) > 0:
             print(f"  Top-3: {[(c[0].tree_get_description(), f'{c[1]:.3f}') for c in candidates[:3]]}")
-        
+        for can in candidates:
+            cand = can[0]
+            print('in get_depth1_candidates: ', id(cand.name_values.keys()))
         return candidates
 
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -703,18 +711,31 @@ cdef class Grove:
         #cdef function_treeC.Node right_node = deepcopy(right)
         
         cdef function_treeC.Tree preliminary_tree = deepcopy(right)
+        preliminary_tree.tree_update()
+        
+        print(f"Before rename_prefix: preliminary_tree.params ids = {[id(n) for n in preliminary_tree.name_values.keys()]}")
+        print(f"Before rename_prefix: left_tree.params ids = {[id(n) for n in left_tree.name_values.keys()]}")
+
         gp_movesC.rename_prefix(preliminary_tree)
+
+        print(f"After rename_prefix: preliminary_tree.params ids = {[id(n) for n in preliminary_tree.params]}")
+        print(f"After rename_prefix: left_tree.params ids = {[id(n) for n in left_tree.params]}")
         print('preliminary trees', left_tree.name_values, preliminary_tree.name_values)
         #cdef function_treeC.Node right_node = deepcopy(preliminary_tree.root)
+        print(left_tree)
+        print(preliminary_tree)
         cdef function_treeC.Node root_node = function_treeC.Node(function=None,
                                             left=left_tree.root, right=preliminary_tree.root, 
                                             symbol=op )
         cdef function_treeC.Tree tree = function_treeC.Tree(depth=root_node.node_depth, functions=self.funcs,
                                     x=self.domain, node = root_node,
                                     Npars=len(root_node.function.params), T=self.T)
+        tree.name_values = deepcopy(tree.name_values)
         print('final tree', tree.name_values)
+        print(tree)
         gp_movesC.refresh_params(tree)
         print('refreshed tree', tree.name_values)
+        print(tree)
         #print(tree.name_values)
         del preliminary_tree
         return tree
@@ -945,6 +966,7 @@ cdef class Grove:
         for tree, post, depth in depth1_candidates:
 
             expr = tree.root.function.expr
+            print('caching depth-1 tree: ', id(tree.name_values.keys()))
             names_params = tree.name_values if tree.name_values else {}
             depth1_data.append((expr, names_params, post))
             if str(expr) not in tree_cache:
@@ -1061,13 +1083,13 @@ cdef class Grove:
             
             elif itm_type == 'd1_d1':
                 _, i, j, op = itm
-
+                print('prior to assignment: ', id(depth1_candidates[i][0].name_values.keys()), id(depth1_candidates[j][0].name_values.keys()))
                 d1_tree = depth1_candidates[i][0]
                 d1_tree_2 = depth1_candidates[j][0]
 
                 if d1_tree is None or d1_tree_2 is None:
                     continue
-                #print(d1_tree.name_values, d1_tree_2.name_values)
+                print('prior to call: ', id(d1_tree.name_values.keys()), id(d1_tree_2.name_values.keys()))
                 tree = self._combine_depth1_trees(d1_tree, d1_tree_2, op)
                 #print('combined tree: ', tree.name_values)
                 self._process_candidate(tree, y, True, tree_cache, candidates)

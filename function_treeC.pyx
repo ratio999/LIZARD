@@ -13,7 +13,8 @@ import re
 
 cdef class Node:
     '''Node of a Tree: either a leaf, or an operation on two other nodes'''    
-    def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, str symbol=None, double alpha = 0.01, object sigma = 1.00):
+    def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, 
+            str symbol=None, double alpha = 0.01, object sigma = 1.00, object value = None):
         self.left = left
         self.right = right
         self.op_symbol = symbol
@@ -21,8 +22,10 @@ cdef class Node:
         self.node_depth = self.depth()
         self.domain = self.function.domain
         self.bis_param = self.is_param()
-        if self.bis_param:
+        if self.bis_param and value==None:
             self.value = 1
+        elif self.bis_param and value is not None:
+            self.value = value
         else:
             self.value = np.nan
         self.fitness = None
@@ -38,7 +41,8 @@ cdef class Node:
     def __deepcopy__(self, memo1):
         cdef Node node_copy = Node(deepcopy(self.function, memo1),
                 deepcopy(self.left, memo1), deepcopy(self.right, memo1),
-                self.op_symbol, alpha=self.alpha, sigma=self.sigma
+                self.op_symbol, alpha=self.alpha, sigma=self.sigma, 
+                value=self.value
                 )
         memo1[id(self)] = node_copy
         return node_copy
@@ -402,6 +406,8 @@ cdef class Tree:
                 deepcopy(self.root, memo),
                 self.Npars, self.value, self.T, self.alpha, self.sigma
                 )
+        #copy_tree.tree_update(copy_tree.root)  # Ensure descriptions and params are updated
+        #copy_tree.name_values = deepcopy(self.name_values, memo)
         memo[id(self)] = copy_tree
         return copy_tree
     
