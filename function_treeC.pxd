@@ -137,6 +137,8 @@ cdef class Tree:
     cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?,
                             int new_depth=?, bint ensure_valid=?)
 
+cdef _post_order_update(Node node)
+
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
     int Npars=?, object leaves_count=?, object arr_indices=?,

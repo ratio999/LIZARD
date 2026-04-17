@@ -109,6 +109,52 @@ cdef refresh_params(function_treeC.Tree tree):
             
             tree.tree_update(parent_node)
 
+cpdef rename_prefix_downwards(function_treeC.Tree tree, str new_prefix = 'b'):
+    '''Renames parameters of a tree using a new prefix'''
+    cdef function_treeC.Node node
+    
+    for node in tree.params:
+        old_rep = node.function.get_description()
+        param_suffix = old_rep[1:]
+        node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain, compute_grad = False)
+    # Bottom-up rebuild all intermediate functions, then refresh metadata
+    function_treeC._post_order_update(tree.root)
+    tree.update_tree_description()
+    tree.leaves = tree.get_leaves()
+    tree.params = tree.get_params()
+    tree.param_values, tree.name_values, tree.penalty = tree.get_param_values()
+
+cdef refresh_params_downwards(function_treeC.Tree tree):
+    '''Conforms all parameters to one prefix'''
+    
+    cdef list params = [tree.params[j].get_fun().get_description() for j in range (0, len(tree.params))]
+    cdef dict rename_map = {}
+    cdef int max_index = -1
+    for param in params:
+        if param[0] == 'a' and param[1:].isdigit():  
+            max_index = max(max_index, int(param[1:]))
+    cdef int counter = max_index + 1    
+    for param in params:
+        if param[0] =='b' :
+            rename_map[param] = f"a{counter}"
+            counter += 1
+    
+    if not rename_map:
+        return
+    
+    cdef function_treeC.Node node
+    for node in tree.params:
+        param_name = node.function.get_description()
+        if param_name in rename_map:
+            node.function = real_functionC.RealFunctionC.from_string(rename_map[param_name], tree.domain, compute_grad = False)
+    
+    # Bottom-up rebuild all intermediate functions, then refresh metadata
+    function_treeC._post_order_update(tree.root)
+    tree.update_tree_description()
+    tree.leaves = tree.get_leaves()
+    tree.params = tree.get_params()
+    tree.param_values, tree.name_values, tree.penalty = tree.get_param_values()
+
 
 @cython.boundscheck(True)
 cpdef point_mutation(function_treeC.Tree tree, functions, operations=None, function_treeC.Node node_to_mutate=None):

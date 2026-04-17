@@ -671,7 +671,15 @@ cdef class Tree:
             self.tree_update(self.root)
             return False
         return True
- 
+
+cdef _post_order_update(Node node):
+    if node is None or node.is_leaf():
+        return
+    if node.left is not None:
+        _post_order_update(node.left)
+    if node.right is not None:
+        _post_order_update(node.right)
+    node.update_func()
 
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 

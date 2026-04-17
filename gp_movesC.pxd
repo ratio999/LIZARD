@@ -18,3 +18,7 @@ cpdef root_replacement(function_treeC.Tree tree)
 cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune=?)
 cpdef rename_prefix(function_treeC.Tree tree, str new_prefix=?)
 cdef refresh_params(function_treeC.Tree tree)
+
+cpdef rename_prefix_downwards(function_treeC.Tree tree, str new_prefix = ?)
+
+cdef refresh_params_downwards(function_treeC.Tree tree)
