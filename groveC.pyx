@@ -568,7 +568,7 @@ cdef class Grove:
             print(f"  Top-3: {[(c[0].tree_get_description(), f'{c[1]:.3f}') for c in candidates[:3]]}")
         for can in candidates:
             cand = can[0]
-            print('in get_depth1_candidates: ', id(cand.name_values.keys()))
+            print(f'in get_depth1_candidates: id(dict)={id(cand.name_values)}, content={cand.name_values}')
         return candidates
 
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -711,10 +711,12 @@ cdef class Grove:
         #cdef function_treeC.Node right_node = deepcopy(right)
         
         cdef function_treeC.Tree preliminary_tree = deepcopy(right)
-        preliminary_tree.tree_update()
-        
-        print(f"Before rename_prefix: preliminary_tree.params ids = {[id(n) for n in preliminary_tree.name_values.keys()]}")
-        print(f"Before rename_prefix: left_tree.params ids = {[id(n) for n in left_tree.name_values.keys()]}")
+        #preliminary_tree.tree_update()
+        left_tree.tree_update(left_tree.root)
+        preliminary_tree.tree_update(preliminary_tree.root)
+    
+        print(f"Before rename_prefix: preliminary_tree.params ids = {[id(n) for n in preliminary_tree.name_values]}")
+        print(f"Before rename_prefix: left_tree.params ids = {[id(n) for n in left_tree.name_values]}")
 
         gp_movesC.rename_prefix(preliminary_tree)
 
@@ -1083,7 +1085,7 @@ cdef class Grove:
             
             elif itm_type == 'd1_d1':
                 _, i, j, op = itm
-                print('prior to assignment: ', id(depth1_candidates[i][0].name_values.keys()), id(depth1_candidates[j][0].name_values.keys()))
+                #print('prior to assignment: ', id(depth1_candidates[i][0].name_values.keys()), id(depth1_candidates[j][0].name_values.keys()))
                 d1_tree = depth1_candidates[i][0]
                 d1_tree_2 = depth1_candidates[j][0]
 
