@@ -16,5 +16,5 @@ cpdef add_node(function_treeC.Tree tree, functions, operations=?, random_depth=?
 #cpdef generate_subtree_with_size(size, functions, x)
 cpdef root_replacement(function_treeC.Tree tree)
 cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune=?)
-cdef rename_prefix(function_treeC.Tree tree, str new_prefix=?)
+cpdef rename_prefix(function_treeC.Tree tree, str new_prefix=?)
 cdef refresh_params(function_treeC.Tree tree)

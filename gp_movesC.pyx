@@ -64,7 +64,7 @@ cpdef subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent
     
     refresh_params(parent1)
 
-cdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
+cpdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
     '''Renames parameters of a tree using a new prefix'''
     cdef function_treeC.Node node
     
@@ -73,7 +73,8 @@ cdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
         old_rep = node.function.get_description()
         param_suffix = old_rep[1:]
         node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain, compute_grad = False)
-
+    tree.tree_update(tree.root)
+    
 cdef refresh_params(function_treeC.Tree tree):
     '''Conforms all parameters to one prefix'''
     

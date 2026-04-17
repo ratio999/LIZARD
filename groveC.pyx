@@ -568,7 +568,7 @@ cdef class Grove:
             print(f"  Top-3: {[(c[0].tree_get_description(), f'{c[1]:.3f}') for c in candidates[:3]]}")
         for can in candidates:
             cand = can[0]
-            print(f'in get_depth1_candidates: id(dict)={id(cand.name_values)}, content={cand.name_values}')
+            print(f'in get_depth1_candidates: id(dict)={id(cand.name_values)} {id(cand.name_values.keys())}, content={cand.name_values}')
         return candidates
 
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -710,8 +710,11 @@ cdef class Grove:
         cdef function_treeC.Tree left_tree = deepcopy(left)
         #cdef function_treeC.Node right_node = deepcopy(right)
         
-        cdef function_treeC.Tree preliminary_tree = deepcopy(right)
-        #preliminary_tree.tree_update()
+        cdef function_treeC.Node right_copy = deepcopy(right.root)   # <-- FIX: deepcopy right too
+
+        cdef function_treeC.Tree preliminary_tree = function_treeC.Tree(
+            depth=right_copy.node_depth, functions=self.funcs,
+            x=self.domain, node=right_copy)
         left_tree.tree_update(left_tree.root)
         preliminary_tree.tree_update(preliminary_tree.root)
     
@@ -752,9 +755,9 @@ cdef class Grove:
         # Left side
         cdef function_treeC.Node left_node = deepcopy(left)
         #cdef function_treeC.Node right_node = deepcopy(right)
-        
-        cdef function_treeC.Tree preliminary_tree = function_treeC.Tree(depth = right.node_depth, functions = self.funcs,
-                x = self.domain, node = right)
+        cdef function_treeC.Node right_copy = deepcopy(right)   # <-- FIX: deepcopy right too
+        cdef function_treeC.Tree preliminary_tree = function_treeC.Tree(depth = right_copy.node_depth, functions = self.funcs,
+                x = self.domain, node = right_copy)
         gp_movesC.rename_prefix(preliminary_tree)
         cdef function_treeC.Node right_node = deepcopy(preliminary_tree.root)
         cdef function_treeC.Node root_node = function_treeC.Node(function=None,
