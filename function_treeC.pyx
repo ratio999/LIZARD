@@ -427,7 +427,7 @@ cdef class Tree:
             par_value = par.value
             params_values[par] = par_value
             names_values[par.function.get_description()] = par_value
-            penalty += np.abs(par_value)
+            penalty += 1 #np.abs(par_value)
         return params_values, names_values, penalty
 
     def get_param_dicts(self):

@@ -155,7 +155,7 @@ cdef class Grove:
         else:
             for i in range(self.size):
                 #print('FITNESS', self.trees[i])
-                self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y)
+                self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y, self.lambda_reg)
 
     cpdef best_index(self):
         return int(np.nanargmax(self.root_posteriors))
@@ -251,7 +251,7 @@ cdef class Grove:
 
         # ensure current posterior is available
         if np.isnan(self.root_posteriors[i]):
-            self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y)
+            self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y, self.lambda_reg)
 
         cdef double old_post = float(self.root_posteriors[i])
 
@@ -262,7 +262,7 @@ cdef class Grove:
             cand.update_parameters(self.domain, y,
                  self.method_str, self.use_gradients)
         
-        cdef double new_post = float(cand.get_superficial_posterior(y))
+        cdef double new_post = float(cand.get_superficial_posterior(y, self.lambda_reg))
         cdef double dlogpost = new_post - old_post
 
         cdef double acc_p = _accept_prob(dlogpost, self.T)
@@ -381,7 +381,7 @@ cdef class Grove:
                     
                 
                 # Compute posterior
-                post = tree.get_superficial_posterior(y)
+                post = tree.get_superficial_posterior(y, self.lambda_reg)
                 if np.isfinite(post):
                     candidates.append((tree, post))
             
@@ -479,7 +479,7 @@ cdef class Grove:
                     primitive_tree.update_parameters(self.domain, y, 
                     self.method_str, self.use_gradients)
                 
-                post = primitive_tree.get_superficial_posterior(y)
+                post = primitive_tree.get_superficial_posterior(y, self.lambda_reg)
                 
                 if np.isfinite(post) and primitive_expression not in tree_cache:
                     tree_cache[primitive_expression] = post
@@ -547,7 +547,7 @@ cdef class Grove:
                         self.method_str, self.use_gradients)
                 
                 #print(id(tree.name_values.keys()))
-                post = tree.get_superficial_posterior(y)
+                post = tree.get_superficial_posterior(y, self.lambda_reg)
                 tree_cache[expression] = post
                 
                 if np.isfinite(post):
@@ -617,7 +617,7 @@ cdef class Grove:
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, 
                                 self.method_str, self.use_gradients)
-                        post = tree.get_superficial_posterior(y)
+                        post = tree.get_superficial_posterior(y, self.lambda_reg)
                         tree_cache[expression] = post
                         if np.isfinite(post):
                             candidates.append((tree, post))
@@ -630,7 +630,7 @@ cdef class Grove:
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y, 
                                 self.method_str, self.use_gradients)
-                        post = tree.get_superficial_posterior(y)
+                        post = tree.get_superficial_posterior(y, self.lambda_reg)
                         tree_cache[expression] = post
                         if np.isfinite(post):
                             candidates.append((tree, post)) # depth 2
@@ -649,7 +649,7 @@ cdef class Grove:
                         if optimize_params and len(tree.params) > 0:
                             tree.update_parameters(self.domain, y,
                                 self.method_str, self.use_gradients)
-                        post = tree.get_superficial_posterior(y)
+                        post = tree.get_superficial_posterior(y, self.lambda_reg)
                         tree_cache[expression] = post
                         if np.isfinite(post):
                             candidates.append((tree, post)) # depth 2
@@ -1230,7 +1230,7 @@ cdef class Grove:
         
         cdef dict names_values = tree.name_values
         tree.replace_constants_with_pars()
-        cdef double post = tree.get_superficial_posterior(y)
+        cdef double post = tree.get_superficial_posterior(y, self.lambda_reg)
         local_cache[expression] = post
         
         if np.isfinite(post):
