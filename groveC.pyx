@@ -206,7 +206,6 @@ cdef class Grove:
         while attempts < max_attempts:
             cand = deepcopy(self.trees[i])
             move_name, kwargs = self._choose_move()
-            print(move_name)
             if move_name == "point_mutation":
                 gp_movesC.point_mutation(cand, self.funcs, kwargs.get("operations", None))
             elif move_name == "hoist_mutation":
@@ -226,8 +225,6 @@ cdef class Grove:
                     while donor_idx == i:
                         donor_idx = random.randrange(self.size)
                     donor = deepcopy(self.trees[donor_idx])
-                    print('DONOR:')
-                    print(donor)
                     gp_movesC.subtree_crossover(cand, donor)
                 else:
                     # fallback to a local move if only one tree
@@ -237,8 +234,6 @@ cdef class Grove:
                 gp_movesC.point_mutation(cand, self.funcs, self.operations)
             
             if cand.is_valid(self.domain):
-                print('VALID:')
-                print(cand)
                 
                 return cand
             attempts += 1
@@ -273,7 +268,6 @@ cdef class Grove:
         cdef double acc_p = _accept_prob(dlogpost, self.T)
         self.proposal_count += 1.0
         if random.random() < acc_p:
-            print('ACCEPTED')
             self.trees[i] = cand
             self.root_posteriors[i] = new_post
             self.acceptance_count += 1.0
@@ -380,7 +374,6 @@ cdef class Grove:
                 # Validate
                 if not tree.is_valid(self.domain):
                     continue
-                print(tree)
                 # Optimize parameters if any exist
                 if optimize_params and len(tree.params) > 0:
                     tree.update_parameters(self.domain, y,
@@ -440,7 +433,7 @@ cdef class Grove:
         if len(depth1_candidates) == 0:
             print("Warning: No depth-1 candidates; cannot build depth-2")
             return
-        print(tree_cache)
+        #print(tree_cache)
         # Now combine them
         self._burn_in_stage2(y, depth1_candidates, tree_cache, replace_all, optimize_params)
     
@@ -535,13 +528,13 @@ cdef class Grove:
                 print(f"  Just created tree: id(name_values)={id(tree.name_values.keys())}, content={tree.name_values}")
 
                 if len(root_tree.function.params) > 1:
-                    print('# parameters > 1')
+                    #print('# parameters > 1')
 
                     tree.replace_constants_with_pars()
                 
                 print(f"  Before update params: id(name_values)={id(tree.name_values.keys())}, content={tree.name_values}")
                 #tree.tree_update(tree.root)
-                print(tree)
+                #print(tree)
                 expression = str(tree.root.function.expr)
                 
                 if expression in tree_cache or not tree.is_valid(self.domain):
@@ -718,17 +711,9 @@ cdef class Grove:
         left_tree.tree_update(left_tree.root)
         preliminary_tree.tree_update(preliminary_tree.root)
     
-        print(f"Before rename_prefix: preliminary_tree.params ids = {[id(n) for n in preliminary_tree.name_values]}")
-        print(f"Before rename_prefix: left_tree.params ids = {[id(n) for n in left_tree.name_values]}")
 
         gp_movesC.rename_prefix(preliminary_tree)
 
-        print(f"After rename_prefix: preliminary_tree.params ids = {[id(n) for n in preliminary_tree.params]}")
-        print(f"After rename_prefix: left_tree.params ids = {[id(n) for n in left_tree.params]}")
-        print('preliminary trees', left_tree.name_values, preliminary_tree.name_values)
-        #cdef function_treeC.Node right_node = deepcopy(preliminary_tree.root)
-        print(left_tree)
-        print(preliminary_tree)
         cdef function_treeC.Node root_node = function_treeC.Node(function=None,
                                             left=left_tree.root, right=preliminary_tree.root, 
                                             symbol=op )
@@ -736,11 +721,7 @@ cdef class Grove:
                                     x=self.domain, node = root_node,
                                     Npars=len(root_node.function.params), T=self.T)
         tree.name_values = deepcopy(tree.name_values)
-        print('final tree', tree.name_values)
-        print(tree)
         gp_movesC.refresh_params(tree)
-        print('refreshed tree', tree.name_values)
-        print(tree)
         #print(tree.name_values)
         del preliminary_tree
         return tree
@@ -971,7 +952,6 @@ cdef class Grove:
         for tree, post, depth in depth1_candidates:
 
             expr = tree.root.function.expr
-            print('caching depth-1 tree: ', id(tree.name_values.keys()))
             names_params = tree.name_values if tree.name_values else {}
             depth1_data.append((expr, names_params, post))
             if str(expr) not in tree_cache:
@@ -1094,7 +1074,7 @@ cdef class Grove:
 
                 if d1_tree is None or d1_tree_2 is None:
                     continue
-                print('prior to call: ', id(d1_tree.name_values.keys()), id(d1_tree_2.name_values.keys()))
+                #print('prior to call: ', id(d1_tree.name_values.keys()), id(d1_tree_2.name_values.keys()))
                 tree = self._combine_depth1_trees(d1_tree, d1_tree_2, op)
                 #print('combined tree: ', tree.name_values)
                 self._process_candidate(tree, y, True, tree_cache, candidates)

@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Import after path setup
 cimport function_treeC
 cimport real_functionC
-
+cimport gp_movesC
 cdef function_treeC.Tree _helper(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, 
             list funcs, dict names_params):
     
@@ -185,7 +185,12 @@ cdef function_treeC.Tree _combine_nodes(function_treeC.Node left_node, function_
     
     cdef function_treeC.Node left_copy = deepcopy(left_node)
     cdef function_treeC.Node right_copy = deepcopy(right_node)
+    #cdef function_treeC.Tree preliminary_tree = function_treeC.Tree(
+	#depth = right_copy.node_depth, functions = funcs,
+	#x = domain, node = right_copy)
     
+    #gp_movesC.rename_prefix(preliminary_tree)
+  
     cdef function_treeC.Node root_node = function_treeC.Node(
         function=None,
         left=left_copy,
@@ -202,6 +207,8 @@ cdef function_treeC.Tree _combine_nodes(function_treeC.Node left_node, function_
         value=1.0,
         T=T
     )
+    gp_movesC.refresh_params(tree)
+    #del preliminary_tree
     return tree
 
 

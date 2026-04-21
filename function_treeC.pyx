@@ -858,7 +858,7 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
         Tree
     """
     
-    cdef Tree left_tree, right_tree, arg_tree, result_tree
+    cdef Tree left_tree, right_tree, arg_tree, result_tree, inner_tree, neg_one_tree
     cdef Node root_node
     cdef real_functionC.RealFunctionC func, root_func, composed_func
     
@@ -902,6 +902,8 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
     '''
     if isinstance(expr, sp.Add):
         if len(expr.args) >= 2:
+            positives = []
+            negatives = []
             for arg in expr.args:
                 arg_is_negative = False
                 if isinstance(arg, sp.Mul) and len(arg.args) > 0:
@@ -909,6 +911,43 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
                         arg_is_negative = True'''
                     if arg.args[0].is_Number and arg.args[0] < 0:
                         arg_is_negative = True
+                elif arg.is_Number and arg < 0:
+                    arg_is_negative = True
+                if arg_is_negative:
+                    negatives.append(-arg)
+                else:
+                    positives.append(arg)
+
+            if not positives:
+                # All terms are negative: build -(|a1| + |a2| + ...) as (-1) * sum
+                pos_expr = sp.Add(*negatives)
+                inner_tree = _expr_to_tree(pos_expr, domain, function_list, params_used)
+                neg_one_tree = _expr_to_tree(sp.Integer(-1), domain, function_list, params_used)
+                
+                root_node = Node(neg_one_tree.root.get_fun() * inner_tree.root.get_fun(),
+                        neg_one_tree.root, inner_tree.root, '*')
+                return Tree(root_node.node_depth, function_list, domain, root_node)
+
+            result_tree = _expr_to_tree(positives[0], domain, function_list, params_used)
+            for arg in positives[1:]:
+                arg_tree = _expr_to_tree(arg, domain, function_list, params_used)
+                root_node = Node(result_tree.root.get_fun() + arg_tree.root.get_fun(),
+                        result_tree.root, arg_tree.root, '+')
+                result_tree = Tree(root_node.node_depth, function_list, domain,
+                    root_node)
+
+            for positive_arg in negatives:
+                arg_tree = _expr_to_tree(positive_arg, domain, function_list, params_used)
+                
+                root_node = Node(result_tree.root.get_fun() - arg_tree.root.get_fun(),
+                        result_tree.root, arg_tree.root, '-')
+
+                result_tree = Tree(root_node.node_depth, function_list, domain,
+                    root_node)
+            return result_tree
+        else:
+            print("something's off in addition")
+            '''    
                 if arg_is_negative:
                     # Handle the negative argument as a subtraction
                     positive_arg = -arg
@@ -931,7 +970,7 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
             return result_tree
             
         else:
-            print("something's off in addition")
+            print("something's off in addition")'''
 
     if isinstance(expr, sp.Mul):    
         numer, denom = expr.as_numer_denom()
