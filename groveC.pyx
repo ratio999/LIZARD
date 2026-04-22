@@ -5,6 +5,7 @@ cimport numpy as cnp
 cimport function_treeC
 cimport gp_movesC
 cimport real_functionC
+cimport polya_treeC
 import itertools
 from tqdm import tqdm
 import time
@@ -52,7 +53,8 @@ cdef class Grove:
                  bint use_gradients=True,
                  bint burn_in=False,
                  int use_mpi=0,
-                 bint use_spawn=False):
+                 bint use_spawn=False,
+                 object polya=None):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -124,6 +126,10 @@ cdef class Grove:
                 self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
         else:
             self.trees = self._init_trees(node_list, Npars, init_value)
+
+        # Optional Pólya tree prior. When None, _step behaves exactly as
+        # before (no prior term, no adaptation).
+        self.polya = polya
         
     cdef _init_trees(self, list node_list, int Npars, object init_value):
         cdef list trees = [None] * self.size
@@ -263,7 +269,19 @@ cdef class Grove:
                  self.method_str, self.use_gradients)
         
         cdef double new_post = float(cand.get_superficial_posterior(y, self.lambda_reg))
-        cdef double dlogpost = new_post - old_post
+        # Pólya prior contributions (zero when self.polya is None).
+        cdef double old_prior = 0.0
+        cdef double new_prior = 0.0
+        cdef list new_path = None
+        if self.polya is not None:
+            # Prior of the *current* tree must be recomputed every step
+            # because Theta moves whenever any walker accepts.
+            old_prior = self.polya.log_prior(
+                self.polya.extract_path(self.trees[i].root)
+            )
+            new_path = self.polya.extract_path(cand.root)
+            new_prior = self.polya.log_prior(new_path)
+        cdef double dlogpost = (new_post + new_prior) - (old_post + old_prior)
 
         cdef double acc_p = _accept_prob(dlogpost, self.T)
         self.proposal_count += 1.0
@@ -271,6 +289,9 @@ cdef class Grove:
             self.trees[i] = cand
             self.root_posteriors[i] = new_post
             self.acceptance_count += 1.0
+            if self.polya is not None and new_path is not None:
+                # Reinforce accepted path with diminishing rate gamma_t = 1/(1+t).
+                self.polya.update_path(new_path)
             return True
         return False
 

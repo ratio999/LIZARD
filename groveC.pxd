@@ -26,6 +26,8 @@ cdef class Grove:
     cdef bint use_gradients
     cdef object method_str
     cdef dict cache
+    # Optional Pólya tree prior (None => behaves as before).
+    cdef public object polya
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)

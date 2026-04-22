@@ -201,6 +201,42 @@ cdef class PolyaTree:
         self._extract_recursive(node, path)
         return path
 
+    # ------------------------------------------------------------------
+    # Vocabulary growth
+    # ------------------------------------------------------------------
+    cpdef int add_primitive(self, str desc):
+        """
+        Register a new primitive description in the Pólya vocabulary.
+        Grows the root Dirichlet by appending a fresh alpha_0 slot.
+        Existing 'prim' children of the root are unaffected because their
+        root_index is `n_ops + choice_idx` and we only append at the end.
+        Returns the (possibly pre-existing) primitive index.
+        """
+        cdef int idx
+        cdef cnp.ndarray new_alphas
+        if desc in self._prim_to_idx:
+            return self._prim_to_idx[desc]
+        idx = self.n_prims
+        self.primitives.append(desc)
+        self._prim_to_idx[desc] = idx
+        self.n_prims += 1
+        # Grow root.alphas by one slot at value alpha_0.
+        new_alphas = np.empty(self.root.n_choices + 1, dtype=np.float64)
+        new_alphas[:self.root.n_choices] = self.root.alphas
+        new_alphas[self.root.n_choices] = self.alpha_0
+        self.root.alphas = new_alphas
+        self.root.n_choices += 1
+        self.root.alpha_total += self.alpha_0
+        return idx
+
+    cpdef add_primitives(self, list descs):
+        """Bulk register primitives. Returns a list of their indices."""
+        cdef list out = []
+        cdef str d
+        for d in descs:
+            out.append(self.add_primitive(d))
+        return out
+
     cdef void _extract_recursive(self, function_treeC.Node node, list path):
         cdef str op, desc
         cdef int idx
