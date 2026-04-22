@@ -43,6 +43,7 @@ extensions = [
     Extension("real_functionC", sources=["real_functionC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("function_treeC", sources=["function_treeC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("gp_movesC", sources=["gp_movesC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
+    Extension("polya_treeC", sources=["polya_treeC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("groveC", sources=["groveC.pyx"], include_dirs=grove_includes),
     #Extension("samplerC", sources=["samplerC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     #Extension("num_wrapC", sources=["num_wrapC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
