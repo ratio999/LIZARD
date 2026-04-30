@@ -2,6 +2,11 @@ cimport numpy as cnp
 cimport real_functionC
 cimport function_treeC
 
+cdef list _flatten_nodes(function_treeC.Node node, list out)
+cdef function_treeC.Node _select_uniform_node(function_treeC.Tree tree)
+cdef bint _is_perfect_binary(function_treeC.Node node, int h)
+cdef list _collect_parameter_leaves(function_treeC.Node node, list out)
+cdef int _count_selectable(function_treeC.Node node)
 cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions)
 cpdef tuple subtree_mutation(function_treeC.Tree tree , list functions)
 cpdef legacy_subtree_mutation(function_treeC.Tree tree, functions, random_depth=?)
