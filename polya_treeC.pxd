@@ -39,3 +39,4 @@ cdef class PolyaTree:
     cpdef list sample_construction_path(self, int max_steps=?)
     cpdef int add_primitive(self, str desc)
     cpdef add_primitives(self, list descs)
+    cdef void _grow_all_nodes(self)

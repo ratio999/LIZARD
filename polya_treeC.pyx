@@ -90,13 +90,18 @@ cdef class PolyaTree:
     # Tree navigation (lazy construction)
     # ------------------------------------------------------------------
     cdef PolyaNode _ensure_child(self, PolyaNode parent, str kind, int choice_idx):
-        """Create child PolyaNode if absent. Mutates the tree."""
+        """Create child PolyaNode if absent. Mutates the tree.
+
+        Children always inherit the FULL combined op+prim space, so a path
+        that alternates kinds (as produced by pre-order DFS over a GP tree)
+        traverses without kind mismatches.
+        """
         cdef tuple key = (kind, choice_idx)
         cdef PolyaNode child
-        cdef int n
+        cdef int n_total
         if key not in parent.children:
-            n = self.n_ops if kind == 'op' else self.n_prims
-            child = PolyaNode(kind, n, depth=parent.depth + 1,
+            n_total = self.n_ops + self.n_prims
+            child = PolyaNode('mixed', n_total, depth=parent.depth + 1,
                               alpha_0=self.alpha_0)
             parent.children[key] = child
         return parent.children[key]
@@ -120,36 +125,28 @@ cdef class PolyaTree:
         Compute log pi(T | Theta) for a tree with given construction path.
 
         Pure function of the current Pólya tree: does NOT create new nodes.
-        Steps that fall in unvisited subtrees contribute -log(n_kind) under
-        the symmetric default Dirichlet (since alpha_k / sum = 1/n_kind).
+        Steps that fall in unvisited subtrees contribute -log(n_total) under
+        the symmetric default Dirichlet, where n_total = n_ops + n_prims.
         """
         cdef double log_p = 0.0
         cdef PolyaNode current = self.root
         cdef PolyaNode nxt
-        cdef int idx, root_idx, n
+        cdef int idx, flat_idx
+        cdef int n_total = self.n_ops + self.n_prims
         cdef str kind
         cdef tuple step
 
         for step in construction_path:
             kind = <str> step[0]
             idx = <int> step[1]
+            flat_idx = self._root_index(kind, idx)
 
             if current is None:
-                # We are walking an unvisited region: symmetric default.
-                n = self.n_ops if kind == 'op' else self.n_prims
-                log_p += -log(<double> n)
+                # Unvisited region: symmetric default over the combined space.
+                log_p += -log(<double> n_total)
                 continue
 
-            if current is self.root:
-                root_idx = self._root_index(kind, idx)
-                log_p += current.log_prob(root_idx)
-            else:
-                if kind != current.kind:
-                    n = self.n_ops if kind == 'op' else self.n_prims
-                    log_p += -log(<double> n)
-                else:
-                    log_p += current.log_prob(idx)
-
+            log_p += current.log_prob(flat_idx)
             nxt = self._get_child_or_none(current, kind, idx)
             current = nxt  # may be None: subsequent steps use defaults
 
@@ -165,23 +162,15 @@ cdef class PolyaTree:
         """
         cdef double gamma = 1.0 / (1.0 + <double> self.t)
         cdef PolyaNode current = self.root
-        cdef int idx, root_idx
+        cdef int idx, flat_idx
         cdef str kind
         cdef tuple step
 
         for step in construction_path:
             kind = <str> step[0]
             idx = <int> step[1]
-
-            if current is self.root:
-                root_idx = self._root_index(kind, idx)
-                current.update(root_idx, gamma)
-            else:
-                if kind != current.kind:
-                    # Defensive: structural mismatch, abort further updates.
-                    break
-                current.update(idx, gamma)
-
+            flat_idx = self._root_index(kind, idx)
+            current.update(flat_idx, gamma)
             current = self._ensure_child(current, kind, idx)
 
         self.t += 1
@@ -207,27 +196,38 @@ cdef class PolyaTree:
     cpdef int add_primitive(self, str desc):
         """
         Register a new primitive description in the Pólya vocabulary.
-        Grows the root Dirichlet by appending a fresh alpha_0 slot.
-        Existing 'prim' children of the root are unaffected because their
-        root_index is `n_ops + choice_idx` and we only append at the end.
+        Grows EVERY existing Pólya node's Dirichlet by appending a fresh
+        alpha_0 slot at the end of the prim block. Existing children stay
+        addressable because their root_index = n_ops + choice_idx and we
+        only append (we don't shift).
         Returns the (possibly pre-existing) primitive index.
         """
         cdef int idx
-        cdef cnp.ndarray new_alphas
         if desc in self._prim_to_idx:
             return self._prim_to_idx[desc]
         idx = self.n_prims
         self.primitives.append(desc)
         self._prim_to_idx[desc] = idx
         self.n_prims += 1
-        # Grow root.alphas by one slot at value alpha_0.
-        new_alphas = np.empty(self.root.n_choices + 1, dtype=np.float64)
-        new_alphas[:self.root.n_choices] = self.root.alphas
-        new_alphas[self.root.n_choices] = self.alpha_0
-        self.root.alphas = new_alphas
-        self.root.n_choices += 1
-        self.root.alpha_total += self.alpha_0
+        # Walk all nodes and append a fresh alpha_0 slot.
+        self._grow_all_nodes()
         return idx
+
+    cdef void _grow_all_nodes(self):
+        """BFS: append one alpha_0 slot to every node's Dirichlet."""
+        cdef list stack = [self.root]
+        cdef PolyaNode node
+        cdef cnp.ndarray new_alphas
+        while stack:
+            node = stack.pop()
+            new_alphas = np.empty(node.n_choices + 1, dtype=np.float64)
+            new_alphas[:node.n_choices] = node.alphas
+            new_alphas[node.n_choices] = self.alpha_0
+            node.alphas = new_alphas
+            node.n_choices += 1
+            node.alpha_total += self.alpha_0
+            for child in node.children.values():
+                stack.append(child)
 
     cpdef add_primitives(self, list descs):
         """Bulk register primitives. Returns a list of their indices."""
@@ -276,16 +276,15 @@ cdef class PolyaTree:
 
         for step in range(max_steps):
             raw_idx = current.sample_choice()
-            if current is self.root:
-                if raw_idx < self.n_ops:
-                    kind = 'op'
-                    idx = raw_idx
-                else:
-                    kind = 'prim'
-                    idx = raw_idx - self.n_ops
-            else:
-                kind = current.kind
+            # Every node uses the unified flat index space:
+            #   raw_idx in [0, n_ops)            -> ('op',   raw_idx)
+            #   raw_idx in [n_ops, n_ops+n_prims)-> ('prim', raw_idx-n_ops)
+            if raw_idx < self.n_ops:
+                kind = 'op'
                 idx = raw_idx
+            else:
+                kind = 'prim'
+                idx = raw_idx - self.n_ops
             path.append((kind, idx))
             current = self._ensure_child(current, kind, idx)
 

@@ -79,7 +79,10 @@ cdef class Grove:
         if self.size > 0:
             self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
             self.burn_in = burn_in
-            self.size=0            
+            if burn_in:
+                # Keep original behavior of the burn-in path: it sets up
+                # `self.trees` itself, then re-initializes size below.
+                self.size = 0
         else:
             self.root_posteriors=None
             self.burn_in = True
@@ -222,8 +225,8 @@ cdef class Grove:
                                 kwargs.get("random_depth", False))
             elif move_name == "subtree_mutation":
                 #print(kwargs.get('random_depth', False))
-                gp_movesC.subtree_mutation(cand, self.funcs,
-                                        kwargs.get("random_depth", False))
+                gp_movesC.subtree_mutation(cand, self.funcs)
+                                        #kwargs.get("random_depth", False)) USED ONLY IF LEGACY SUBTREE
             elif move_name == "subtree_crossover":
                 # pick a donor tree (not i), deep-copied to keep original intact
                 if self.size > 1:
@@ -277,9 +280,9 @@ cdef class Grove:
             # Prior of the *current* tree must be recomputed every step
             # because Theta moves whenever any walker accepts.
             old_prior = self.polya.log_prior(
-                self.polya.extract_path(self.trees[i].root)
+                self.polya.extract_path(self.trees[i].get_root())
             )
-            new_path = self.polya.extract_path(cand.root)
+            new_path = self.polya.extract_path(cand.get_root())
             new_prior = self.polya.log_prior(new_path)
         cdef double dlogpost = (new_post + new_prior) - (old_post + old_prior)
 

@@ -2,7 +2,9 @@ cimport numpy as cnp
 cimport real_functionC
 cimport function_treeC
 
-cpdef subtree_mutation(function_treeC.Tree tree, functions, random_depth=?)
+cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions)
+cpdef tuple subtree_mutation(function_treeC.Tree tree , list functions)
+cpdef legacy_subtree_mutation(function_treeC.Tree tree, functions, random_depth=?)
 cpdef subtree_crossover(function_treeC.Tree parent1, function_treeC.Tree parent2)
 cpdef point_mutation(function_treeC.Tree tree, functions,operations=?, function_treeC.Node node_to_mutate=?)
 cpdef hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_to_lift=?)

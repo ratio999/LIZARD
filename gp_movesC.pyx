@@ -7,9 +7,133 @@ cimport function_treeC
 cimport real_functionC
 cimport numpy as cnp
 
+# ---------------------------------------------------------------------------
+# Helpers for proposal-density bookkeeping
+# ---------------------------------------------------------------------------
+
+cdef list _flatten_nodes(function_treeC.Node node, list out):
+    """Pre-order DFS into `out`, returns `out`. Lists every node exactly once."""
+    if node is None:
+        return out
+    out.append(node)
+    if not node.is_leaf():
+        _flatten_nodes(node.left,  out)
+        _flatten_nodes(node.right, out)
+    return out
+
+
+cdef function_treeC.Node _select_uniform_node(function_treeC.Tree tree):
+    """Pick one node of `tree` uniformly at random over all nodes."""
+    cdef list all_nodes = _flatten_nodes(tree.root, [])
+    return all_nodes[random.randrange(len(all_nodes))]
+
+
+cdef bint _is_perfect_binary(function_treeC.Node node, int h):
+    """True iff `node` is a perfect binary tree of height exactly h.
+
+    h == 0 -> node must be a leaf.
+    h  > 0 -> node must be internal with both children perfect of height h-1.
+    """
+    if node is None:
+        return False
+    if h == 0:
+        return node.is_leaf()
+    if node.is_leaf():
+        return False
+    if node.left is None or node.right is None:
+        return False
+    return _is_perfect_binary(node.left, h - 1) and _is_perfect_binary(node.right, h - 1)
+
+@cython.boundscheck(True)
+cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
+    """
+    Replace a uniformly-selected node's subtree with a freshly-built subtree
+    of the same height. Mutates `tree` in place. The caller is responsible
+    for deepcopying `tree` BEFORE calling this if the original must survive.
+
+    Returns
+    -------
+    (log_q_fwd, log_q_rev) : (double, double)
+        Forward and reverse log proposal densities, up to a common additive
+        constant that cancels in the MH ratio. The Metropolis-Hastings
+        acceptance ratio in groveC._step must include the term
+            log_q_rev - log_q_fwd
+        in addition to the (tempered) posterior + prior contributions.
+
+    Mathematical content (uniform-selection variant)
+    ------------------------------------------------
+        q(T'|T) = (1/|T|) * 1 * P_build(S' | h(v), F)
+        q(T|T') = (1/|T'|) * 1 * P_build(S  | h(v), F)
+    so
+        log q(T|T') - log q(T'|T)
+            = log|T| - log|T'|
+              + log P_build(S | h(v), F)  -  log P_build(S' | h(v), F).
+
+    On the regular subspace (S already perfect-binary of height h(v)) the
+    build densities cancel AND |T|=|T'|, so log_q_rev = log_q_fwd = 0.
+    Off it, the reverse build density is 0, so log_q_rev = -inf and the
+    proposal is rejected. Ergodicity is recovered by mixing with other moves.
+
+    Restrictions of this v1 implementation:
+      * random_depth removed (was not p_md-symmetric).
+      * Npars = 0 in build_tree (no fresh parameter symbols introduced).
+    """
+    cdef function_treeC.Node parent_node
+    if tree.root.is_leaf():
+        #print('actually addnode')
+        add_node(tree, functions, random_depth=False) #THIS MUST BE FIXED
+        return
+    cdef function_treeC.Node v,  new_subtree, old_subtree
+    parent_node = None
+    cdef int d_max, size_T, size_Tp
+    cdef double log_q_fwd = 0.0
+    cdef double log_q_rev = 0.0
+
+    # ---- 1. Uniform node selection (root allowed) ------------------------
+    while parent_node is None:
+        v = _select_uniform_node(tree)
+        parent_node = tree.root.find_parent(v)   # None iff v is tree.root
+    size_T = tree.node_count()
+
+    # ---- 2. Remember the OLD subtree and its height ---------------------
+    old_subtree = v
+    d_max = v.depth()                         # height of the subtree at v
+
+    # ---- 3. Sample the NEW subtree --------------------------------------
+    new_subtree = function_treeC.build_tree(d_max, functions, tree.domain)
+    
+    # ---- 4. Splice -------------------------------------------------------
+    if parent_node is None:
+        tree.root = new_subtree
+        tree.tree_update(tree.root)
+    else:
+        if parent_node.get_left() is v:
+            parent_node.assign_left(new_subtree)
+        elif parent_node.get_right() is v:
+            parent_node.assign_right(new_subtree)
+        tree.tree_update(parent_node)
+
+    # ---- 5. MH proposal-density correction ------------------------------
+    size_Tp = tree.node_count()
+    # Selection-density term (always finite):
+    log_q_fwd += -np.log(<double> size_T)
+    log_q_rev += -np.log(<double> size_Tp)
+
+    # Build-density term: cancels on the regular subspace; -inf for q_rev off it.
+    # We deliberately omit the common constant -2^d log|F| - (2^d - 1) log|Omega|
+    # because it appears identically in both q_fwd and q_rev (same d_max, F, Omega).
+    if not _is_perfect_binary(old_subtree, d_max):
+        log_q_rev = -np.inf
+
+    return log_q_fwd, log_q_rev
+
+@cython.boundscheck(True)
+cpdef tuple subtree_mutation(function_treeC.Tree tree, list functions):
+    return _subtree_mutation(tree, functions)
+
 @cython.boundscheck(True) 
-cpdef subtree_mutation( function_treeC.Tree tree, functions, random_depth=False):
-    """Substitutes a subtree with a random-generated new subtree"""
+cpdef legacy_subtree_mutation( function_treeC.Tree tree, functions, random_depth=False):
+    """Substitutes a subtree with a random-generated new subtree: old version (but works)"""
     if tree.root.is_leaf():
         #print('actually addnode')
         add_node(tree, functions, random_depth=random_depth)
