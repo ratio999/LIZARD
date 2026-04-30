@@ -44,12 +44,42 @@ cdef bint _is_perfect_binary(function_treeC.Node node, int h):
         return False
     return _is_perfect_binary(node.left, h - 1) and _is_perfect_binary(node.right, h - 1)
 
+
+cdef list _collect_parameter_leaves(function_treeC.Node node, list out):
+    """Pre-order DFS collecting parameter (constant-leaf) Nodes into `out`."""
+    if node is None:
+        return out
+    if node.is_leaf():
+        if node.is_param():
+            out.append(node)
+        return out
+    _collect_parameter_leaves(node.left,  out)
+    _collect_parameter_leaves(node.right, out)
+    return out
+
+cdef int _count_selectable(function_treeC.Node node):
+    """Count nodes that are valid selection targets for subtree_mutation:
+    every node that is NOT a parameter leaf."""
+    if node is None:
+        return 0
+    if node.is_leaf():
+        return 0 if node.is_param() else 1
+    return 1 + _count_selectable(node.left) + _count_selectable(node.right)
+
 @cython.boundscheck(True)
 cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
     """
     Replace a uniformly-selected node's subtree with a freshly-built subtree
     of the same height. Mutates `tree` in place. The caller is responsible
     for deepcopying `tree` BEFORE calling this if the original must survive.
+
+    Parameter recycling (v1.5):
+        If the OLD subtree contains K parameter leaves with names {a_{i_1}, ...,
+        a_{i_K}} and values {v_1, ..., v_K}, the NEW subtree built here is a
+        fresh perfect-binary tree of height d_max with Npars=0; we then choose
+        K leaf positions uniformly at random and inject the recycled
+        (name, value) parameters in name-sorted order. This keeps the
+        symbol vocabulary fixed (no Polya tree hookup needed for this move).
 
     Returns
     -------
@@ -59,50 +89,91 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
         acceptance ratio in groveC._step must include the term
             log_q_rev - log_q_fwd
         in addition to the (tempered) posterior + prior contributions.
+        IMPORTANT: tempering applies ONLY to (posterior + prior); the
+        proposal-correction bracket above is NOT scaled by 1/T.
 
-    Mathematical content (uniform-selection variant)
-    ------------------------------------------------
-        q(T'|T) = (1/|T|) * 1 * P_build(S' | h(v), F)
-        q(T|T') = (1/|T'|) * 1 * P_build(S  | h(v), F)
-    so
-        log q(T|T') - log q(T'|T)
-            = log|T| - log|T'|
-              + log P_build(S | h(v), F)  -  log P_build(S' | h(v), F).
+    Mathematical content (uniform-selection + parameter-recycling)
+    --------------------------------------------------------------
+        q(T'|T) = (1/|T|)  * |F|^(-(2^d - K)) * |Omega|^(-(2^d - 1))
+                          * C(2^d, K)^(-1)
+        q(T|T') = (1/|T'|) * |F|^(-(2^d - K)) * |Omega|^(-(2^d - 1))
+                          * C(2^d, K)^(-1)
+    so on the support (S perfect-binary of height d_max, K matches):
+        log q(T|T') - log q(T'|T) = log|T| - log|T'|.
+    Off support, log_q_rev = -inf (forced reject); irreducibility is
+    recovered by mixing with other moves.
 
-    On the regular subspace (S already perfect-binary of height h(v)) the
-    build densities cancel AND |T|=|T'|, so log_q_rev = log_q_fwd = 0.
-    Off it, the reverse build density is 0, so log_q_rev = -inf and the
-    proposal is rejected. Ergodicity is recovered by mixing with other moves.
-
-    Restrictions of this v1 implementation:
+    Restrictions of this v1.5 implementation:
       * random_depth removed (was not p_md-symmetric).
-      * Npars = 0 in build_tree (no fresh parameter symbols introduced).
+      * No NEW parameter symbols introduced; K of the tree is preserved by
+        this move (it can change via add_node / hoist_mutation).
     """
-    cdef function_treeC.Node parent_node
-    if tree.root.is_leaf():
-        #print('actually addnode')
-        add_node(tree, functions, random_depth=False) #THIS MUST BE FIXED
-        return
-    cdef function_treeC.Node v,  new_subtree, old_subtree
-    parent_node = None
-    cdef int d_max, size_T, size_Tp
+    cdef function_treeC.Node v, parent_node, new_subtree, old_subtree, n
+    cdef function_treeC.Node target_leaf, parent_of_leaf, new_param_node, src
+    cdef list old_param_nodes, old_param_nodes_sorted, new_leaves, chosen_slots
+    cdef int d_max, size_T, size_Tp, K, n_leaves, i
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
-
+    if tree.root.is_leaf():
+        #print('actually addnode')
+        add_node(tree, functions)
+        return
+    parent_node = None
+    cdef bint is_par = True
     # ---- 1. Uniform node selection (root allowed) ------------------------
+    
     while parent_node is None:
         v = _select_uniform_node(tree)
-        parent_node = tree.root.find_parent(v)   # None iff v is tree.root
-    size_T = tree.node_count()
+        is_par = v.is_param()
+        if not is_par:
+            parent_node = tree.root.find_parent(v)   # None iff v is tree.root
+    size_T = _count_selectable(tree.root)
 
-    # ---- 2. Remember the OLD subtree and its height ---------------------
+    # ---- 2. Inspect OLD subtree -----------------------------------------
     old_subtree = v
     d_max = v.depth()                         # height of the subtree at v
+    old_param_nodes = _collect_parameter_leaves(old_subtree, [])
+    K = len(old_param_nodes)
 
-    # ---- 3. Sample the NEW subtree --------------------------------------
+    # ---- 3. Build a fresh non-parametric subtree of height d_max --------
     new_subtree = function_treeC.build_tree(d_max, functions, tree.domain)
-    
-    # ---- 4. Splice -------------------------------------------------------
+
+    # ---- 4. Recycle K parameters into uniformly chosen leaf positions ---
+    if K > 0:
+        new_leaves = new_subtree.get_leaves(leaves_list=[])
+        n_leaves = len(new_leaves)
+        # K <= 2^d_max == n_leaves always (build_tree returns perfect binary).
+        chosen_slots = sorted(random.sample(range(n_leaves), K))
+        old_param_nodes_sorted = sorted(
+            old_param_nodes,
+            key=lambda n: n.get_fun().get_description(),
+        )
+        for i in range(K):
+            target_leaf = new_leaves[chosen_slots[i]]
+            src = old_param_nodes_sorted[i]
+            new_param_node = function_treeC.Node(
+                function=real_functionC.RealFunctionC.from_string(
+                    src.function.get_description(),
+                    tree.domain,
+                    compute_grad=False,
+                ),
+                value=src.value,
+            )
+            if target_leaf is new_subtree:
+                # d_max == 0 case: the "subtree" was a single leaf.
+                new_subtree = new_param_node
+            else:
+                parent_of_leaf = new_subtree.find_parent(target_leaf)
+                if parent_of_leaf.get_left() is target_leaf:
+                    parent_of_leaf.assign_left(new_param_node)
+                else:
+                    parent_of_leaf.assign_right(new_param_node)
+        # Rebuild internal functions of new_subtree bottom-up so that
+        # ancestor functions reflect the recycled leaves (assign_left/right
+        # only swap pointers; they do not call update_func).
+        function_treeC._post_order_update(new_subtree)
+
+    # ---- 5. Splice -------------------------------------------------------
     if parent_node is None:
         tree.root = new_subtree
         tree.tree_update(tree.root)
@@ -112,16 +183,19 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
         elif parent_node.get_right() is v:
             parent_node.assign_right(new_subtree)
         tree.tree_update(parent_node)
-
-    # ---- 5. MH proposal-density correction ------------------------------
-    size_Tp = tree.node_count()
+    '''print("root.op_symbol =", tree.root.op_symbol)
+    print("root.left.descr =", tree.tree_get_description())
+    print("root.right.descr =", tree.tree_get_description())
+    print("root.descr      =", tree.tree_get_description())'''
+    # ---- 6. MH proposal-density correction ------------------------------
+    size_Tp = _count_selectable(tree.root)
     # Selection-density term (always finite):
     log_q_fwd += -np.log(<double> size_T)
     log_q_rev += -np.log(<double> size_Tp)
 
-    # Build-density term: cancels on the regular subspace; -inf for q_rev off it.
-    # We deliberately omit the common constant -2^d log|F| - (2^d - 1) log|Omega|
-    # because it appears identically in both q_fwd and q_rev (same d_max, F, Omega).
+    # Build-density support: S must be perfect-binary of height d_max.
+    # Within support, the shape, K-subset, names+values factors cancel
+    # (K is preserved by recycling; names+values are observed, not sampled).
     if not _is_perfect_binary(old_subtree, d_max):
         log_q_rev = -np.inf
 

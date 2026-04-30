@@ -94,7 +94,7 @@ def main():
     x = np.linspace(0, 10, 100).astype(np.float64)
     y = np.sin(x)
     
-    tree1 = Tree(depth=1, functions=functions, x=x, Npars = 24, value=np.array([3, 4, 5, 6, 7, 8]))
+    tree1 = Tree(depth=2, functions=functions, x=x, Npars = 2, value=np.array([3, 4, 5, 6, 7, 8]))
     
     print(tree1.tree_get_description())
     tree1.compute_fitness_tree(y)
@@ -134,7 +134,7 @@ def main():
     print(tree1.is_defined(x), tree1.evaluate(x))
     # Eseguire le mosse di genetic programming
     
-    subtree_mutation(tree1, functions, random_depth=True)
+    subtree_mutation(tree1, functions)
     
     #print(tree1.optimize(x, y).x)
     print("Subtree mutation:")
