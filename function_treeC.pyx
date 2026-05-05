@@ -631,7 +631,7 @@ cdef class Tree:
         """
         return self.root.is_valid(x, max_abs)
 
-    cpdef double log_likelihood_at(self,
+    cdef double _log_likelihood_at(self,
                                cnp.ndarray[cnp.float64_t, ndim=1] y,
                                dict cand_name_values,
                                double sigma):
@@ -663,7 +663,7 @@ cdef class Tree:
         return -0.5 * n * np.log(2.0 * np.pi * s2) - 0.5 * ssr / s2
 
 
-    cpdef apply_param_values(self, dict new_name_values):
+    cdef void _apply_param_values(self, dict new_name_values):
         """
         Install a parameter assignment INTO the tree (mutates state).
         Used by parameter_refresh on accept. Loops Tree.params (Node objects),

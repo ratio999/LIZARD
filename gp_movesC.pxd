@@ -31,3 +31,28 @@ cdef refresh_params(function_treeC.Tree tree)
 cpdef rename_prefix_downwards(function_treeC.Tree tree, str new_prefix = ?)
 
 cdef refresh_params_downwards(function_treeC.Tree tree)
+
+
+cdef class AMState:
+    cdef public tuple param_names
+    cdef public int K
+    cdef public cnp.ndarray mu
+    cdef public cnp.ndarray C
+    cdef public double log_lambda
+    cdef public int n_visits
+    cdef public int n_accepts
+    cdef public double alpha_star
+    cdef public double kappa
+    cdef public double rel
+    cdef public double eps
+    cdef public double jitter
+
+    cdef double _gamma(self)
+    cdef cnp.ndarray _propose(self, cnp.ndarray theta)
+    cdef void _update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs)
+
+cdef tuple _parameter_refresh(function_treeC.Tree tree,
+                              cnp.ndarray[cnp.float64_t, ndim=1] y,
+                              double sigma,
+                              AMState am_state,
+                              double T)

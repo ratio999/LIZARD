@@ -134,6 +134,13 @@ cdef class Tree:
 
     cpdef bint is_valid(self, object x=?, double max_abs=?)
 
+    cdef double _log_likelihood_at(self,
+                               cnp.ndarray[cnp.float64_t, ndim=1] y,
+                               dict cand_name_values,
+                               double sigma)
+    
+    cdef void _apply_param_values(self, dict new_name_values)
+
     cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?,
                             int new_depth=?, bint ensure_valid=?)
 

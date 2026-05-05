@@ -763,3 +763,160 @@ cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune = N
     else:
         pass
         #point_mutation(tree, node_to_prune)
+
+
+cdef class AMState:
+    """
+    Per-topology Adaptive Metropolis state for parameter_refresh.
+
+    Two-layer Robbins-Monro (Andrieu-Thoms 2008, Algo 4):
+      Layer 1 (global scale):  log lambda_{t+1} = log lambda_t
+                                + gamma_t (alpha_obs - alpha*)
+      Layer 2 (covariance):    mu, C updated from theta visits
+                                Sigma_t = lambda^2 (C + jitter I)
+
+    Cold-start (n_visits < K+1): diagonal multiplicative scale
+        Sigma = diag(max(eps, |theta_i| * rel))^2
+
+    Diminishing adaptation (gamma_t -> 0) preserves ergodicity
+    (Roberts-Rosenthal 2007).
+    """
+    # NB: cdef classes do NOT support __slots__; attributes are declared
+    # below as cdef public so they are reachable from Python and from
+    # other Cython modules (parameter_refresh reads .K and .param_names).
+
+    def __init__(self, list param_names, object alpha_star=None,
+                 double kappa=_AM_KAPPA, double rel=_AM_REL_SCALE,
+                 double eps=_AM_EPS, double jitter=_AM_JITTER):
+        # alpha_star is `object` (not `double`) because we need to accept
+        # None as the sentinel meaning "pick the dim-dependent default".
+        self.param_names = tuple(param_names)
+        self.K = len(self.param_names)
+        self.mu = np.zeros(self.K, dtype=np.float64)
+        self.C = np.eye(self.K, dtype=np.float64) * (rel * rel)
+        self.log_lambda = 0.0
+        self.n_visits = 0
+        self.n_accepts = 0
+        if alpha_star is None:
+            self.alpha_star = _AM_TARGET_ACCEPT_K1 if self.K == 1 \
+                              else _AM_TARGET_ACCEPT_LARGE_K
+        else:
+            self.alpha_star = float(alpha_star)
+        self.kappa = float(kappa)
+        self.rel = float(rel)
+        self.eps = float(eps)
+        self.jitter = float(jitter)
+
+    cdef double _gamma(self):
+        # gamma_t = (n_visits + 1)^(-kappa); +1 keeps gamma_0 finite.
+        return (self.n_visits + 1) ** (-self.kappa)
+
+    cdef cnp.ndarray _propose(self, cnp.ndarray theta):
+        # theta is the current K-vector; returns a candidate K-vector.
+        # Cold-start branch uses a diagonal multiplicative scale; warm
+        # branch draws from N(0, lambda^2 (C + jitter I)) via Cholesky.
+        cdef cnp.ndarray scale
+        if self.n_visits < self.K + 1:
+            scale = np.maximum(self.eps, np.abs(theta) * self.rel)
+            return theta + np.random.normal(0.0, scale)
+        cdef cnp.ndarray cov, L
+        cov = np.exp(2.0 * self.log_lambda) * (self.C + self.jitter * np.eye(self.K))
+        try:
+            L = np.linalg.cholesky(cov)
+            return theta + L @ np.random.standard_normal(self.K)
+        except np.linalg.LinAlgError:
+            # Defensive fallback: use the diagonal of cov if C drifted
+            # non-PSD (shouldn't happen with the jitter, but cheap to guard).
+            scale = np.maximum(self.eps, np.sqrt(np.diag(cov)))
+            return theta + np.random.normal(0.0, scale)
+
+    cdef void _update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs):
+        # Robbins-Monro updates on (log_lambda, mu, C). Called on EVERY
+        # step (accept or reject) so the adaptation actually diminishes.
+        cdef double g = self._gamma()
+        cdef cnp.ndarray d_old, d_new
+        self.log_lambda += g * (alpha_obs - self.alpha_star)
+        d_old = theta_after - self.mu
+        self.mu = self.mu + g * d_old
+        d_new = theta_after - self.mu
+        self.C = self.C + g * (np.outer(d_old, d_new) - self.C)
+        # Numerical symmetrization to keep C exactly symmetric in float64.
+        self.C = 0.5 * (self.C + self.C.T)
+        self.n_visits += 1
+        if accepted:
+            self.n_accepts += 1
+
+
+cdef tuple _parameter_refresh(function_treeC.Tree tree,
+                              cnp.ndarray[cnp.float64_t, ndim=1] y,
+                              double sigma,
+                              AMState am_state,
+                              double T):
+    """
+    Phase 2.1.PR. Adaptive Metropolis on theta with topology fixed.
+    Self-contained MH: scores on raw Gaussian likelihood (D2),
+    tempered by 1/T (D7). Symmetric AM proposal => no proposal
+    correction => log_q_fwd = log_q_rev = 0.
+
+    Mutates `tree` in place ON ACCEPT. Updates am_state in place
+    (Robbins-Monro) regardless of accept/reject (required for
+    diminishing-adaptation guarantee).
+
+    Returns (accepted, 0.0, 0.0). Caller MUST NOT recompute MH from
+    the (0,0) tuple - PR has already accepted/rejected internally.
+
+    SHOULD BE SAFE BUT CHECK THAT THIS FUNCTION LEAVES TREES UNCHANGED
+    BEFORE _apply_param_values AND THAT IT CHANGES THE SPECIFIED TREE ONLY!
+    """
+    cdef int K = len(tree.params)
+    if K == 0:
+        return (True, 0.0, 0.0)
+
+    if am_state is None or am_state.K != K:
+        # Topology changed under our feet; caller must rebuild AMState.
+        return (False, 0.0, 0.0)
+
+    cdef list names = list(am_state.param_names)
+    cdef int j
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta_old = np.empty(K, dtype=np.float64)
+    cdef dict cur_nv = tree.name_values
+    for j in range(K):
+        if names[j] not in cur_nv:
+            return (False, 0.0, 0.0)
+        theta_old[j] = cur_nv[names[j]]
+
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta_new = np.asarray(
+        am_state._propose(theta_old), dtype=np.float64)
+
+    cdef dict cand_nv = dict(cur_nv)
+    for j in range(K):
+        cand_nv[names[j]] = float(theta_new[j])
+
+    cdef double logL_old = tree._log_likelihood_at(y, cur_nv, sigma)
+    cdef double logL_new = tree._log_likelihood_at(y, cand_nv, sigma)
+    
+    cdef double log_acc
+    if not np.isfinite(logL_new):
+        log_acc = -np.inf
+    elif T <= 0.0:
+        log_acc = 0.0 if logL_new >= logL_old else -np.inf
+    else:
+        log_acc = (logL_new - logL_old) / T
+
+    cdef double alpha_obs
+    if log_acc >= 0.0:
+        alpha_obs = 1.0
+    elif log_acc <= -700.0:
+        alpha_obs = 0.0
+    else:
+        alpha_obs = float(np.exp(log_acc))
+
+    cdef bint accepted = (random.random() < alpha_obs)
+
+    if accepted:
+        tree._apply_param_values(cand_nv)
+        am_state._update(theta_new, True, alpha_obs)
+    else:
+        am_state._update(theta_old, False, alpha_obs)
+
+    return (accepted, 0.0, 0.0)
