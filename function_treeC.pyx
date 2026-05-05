@@ -631,7 +631,53 @@ cdef class Tree:
         """
         return self.root.is_valid(x, max_abs)
 
+    cpdef double log_likelihood_at(self,
+                               cnp.ndarray[cnp.float64_t, ndim=1] y,
+                               dict cand_name_values,
+                               double sigma):
+        """
+        Raw Gaussian log-likelihood at a *candidate* parameter assignment, WITHOUT
+        mutating any tree state. Used by Phase 2.1.PR (parameter_refresh): the
+        PR move scores on un-profiled likelihood, so structural-move scoring
+        (BIC, Polya prior) is intentionally bypassed here.
 
+        Returns -inf on any non-finite evaluation, shape mismatch, or sigma<=0.
+        """
+        if sigma <= 0.0:
+            return -np.inf
+        cdef object raw
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] y_pred
+        try:
+            raw = self.root.function.evaluate(self.domain, cand_name_values)
+            y_pred = np.asarray(raw, dtype=np.float64).ravel()
+        except Exception:
+            return -np.inf
+        if y_pred.shape[0] != y.shape[0]:
+            return -np.inf
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] resid = y - y_pred
+        cdef double ssr = float(np.nansum(resid * resid))
+        if not np.isfinite(ssr):
+            return -np.inf
+        cdef int n = y.shape[0]
+        cdef double s2 = sigma * sigma
+        return -0.5 * n * np.log(2.0 * np.pi * s2) - 0.5 * ssr / s2
+
+
+    cpdef apply_param_values(self, dict new_name_values):
+        """
+        Install a parameter assignment INTO the tree (mutates state).
+        Used by parameter_refresh on accept. Loops Tree.params (Node objects),
+        setting each parameter Node's value via set_value, then calls
+        tree_update(self.root) so name_values, param_values and penalty stay
+        in sync. Names not present in new_name_values are left untouched.
+        """
+        cdef object par
+        cdef str name
+        for par in self.params:
+            name = par.function.get_description()
+            if name in new_name_values:
+                par.set_value(float(new_name_values[name]))
+        self.tree_update(self.root)
 
     cdef _root_replacement(self, object replacement=None, int replace_all = 0, dict kwargs= None,
      str op = None, int new_depth=1, bint ensure_valid=True):

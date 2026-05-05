@@ -13,6 +13,15 @@ cdef double _KIND_CROSS_PROB = 0.5      # mixture weight for sub-move B
 cdef double _NEW_PARAM_INIT_VALUE = 1.0  # TODO[g-placeholder]: draw from g
 
 
+# --- Phase 2.1.PR: Adaptive-Metropolis parameter refresh -------------------
+# Constants per plan decisions D5/D7.
+cdef double _AM_TARGET_ACCEPT_LARGE_K = 0.234   # Roberts-Gelman-Gilks 1997
+cdef double _AM_TARGET_ACCEPT_K1      = 0.44
+cdef double _AM_KAPPA                 = 0.6     # Robbins-Monro decay  gamma_t = t^{-kappa}
+cdef double _AM_REL_SCALE             = 0.1     # cold-start: |theta_i| * rel
+cdef double _AM_EPS                   = 1e-6    # cold-start floor
+cdef double _AM_JITTER                = 1e-8  
+
 
 
 # ---------------------------------------------------------------------------
