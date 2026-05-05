@@ -7,6 +7,14 @@ cimport function_treeC
 cimport real_functionC
 cimport numpy as cnp
 
+
+cdef double _LOG_G_PLACEHOLDER = 0.0
+cdef double _KIND_CROSS_PROB = 0.5      # mixture weight for sub-move B
+cdef double _NEW_PARAM_INIT_VALUE = 1.0  # TODO[g-placeholder]: draw from g
+
+
+
+
 # ---------------------------------------------------------------------------
 # Helpers for proposal-density bookkeeping
 # ---------------------------------------------------------------------------
@@ -353,9 +361,142 @@ cdef refresh_params_downwards(function_treeC.Tree tree):
     tree.params = tree.get_params()
     tree.param_values, tree.name_values, tree.penalty = tree.get_param_values()
 
+@cython.boundscheck(True)
+cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operations):
+    """
+    point_mutation v2: RJMCMC-aware label resampling at one node.
+
+    Selection
+    ---------
+    Uniform over ALL nodes of `tree` (size |N(T)|). Since point_mutation
+    never adds or removes nodes, |N(T')| = |N(T)| and the 1/|N(T)| factor
+    cancels between forward and reverse.
+
+    Branching on the chosen node v
+    ------------------------------
+      * v internal: kind-preserving op resample, uniform from `operations`
+        (size O). Symmetric -> contributes (0, 0).
+      * v function leaf:
+          - prob (1 - p_cross): sub-move A, pick uniform from F (size M).
+            Symmetric. (0, 0).
+          - prob p_cross: sub-move B, case (c) BIRTH. Replace with a fresh
+            parameter leaf a_new, value = _NEW_PARAM_INIT_VALUE.
+              log_q_fwd contribution =  _LOG_G_PLACEHOLDER
+              log_q_rev contribution = -log M
+      * v parameter leaf:
+          - prob (1 - p_cross): identity. Parameter relabel/refresh is
+            handled by the dedicated parameter-refresh move (Phase 2.1.PR).
+          - prob p_cross: sub-move B, case (d) DEATH. Pick a new function
+            uniform from F; the parameter value is discarded.
+              log_q_fwd contribution = -log M
+              log_q_rev contribution =  _LOG_G_PLACEHOLDER
+
+    The selection factor 1/|N(T)| and the mixture weight log p are common
+    to forward and reverse and therefore omitted.
+
+    Returns
+    -------
+    (log_q_fwd, log_q_rev) : (double, double)
+        Consumed by groveC._step:
+            log_alpha = beta * (delta target) + (log_q_rev - log_q_fwd)
+        beta = 1/T tempers ONLY the (posterior + prior) term.
+    """
+    cdef function_treeC.Node v, parent
+    cdef int O = len(operations)
+    cdef int M = len(functions)
+    cdef double log_q_fwd = 0.0
+    cdef double log_q_rev = 0.0
+    cdef str new_func_str, new_name
+    #cdef int new_idx
+    cdef bint do_cross
+
+    if tree.root is None:
+        return (0.0, 0.0)
+    if O <= 0 or M <= 0:
+        return (0.0, 0.0)
+
+    # 1. Uniform node selection.
+    v = _select_uniform_node(tree)
+    parent = tree.root.find_parent(v)
+
+    # 2. Internal node -> op resample (symmetric).
+    if not v.is_leaf():
+        v.op_symbol = random.choice(operations)
+        v.update_func()
+        if parent is None:
+            tree.tree_update(tree.root)
+        else:
+            tree.tree_update(parent)
+        return (0.0, 0.0)
+
+    # 3. Leaf node. Decide kind-cross vs kind-preserving.
+    do_cross = (random.random() < _KIND_CROSS_PROB)
+
+    if not do_cross:
+        # Sub-move A.
+        if v.is_param():
+            # Identity for parameter leaves (refresh is its own move).
+            return (0.0, 0.0)
+        # Function leaf: pick uniform from F. Symmetric.
+        new_func_str = random.choice(functions)
+        v.function = real_functionC.RealFunctionC.from_string(
+            new_func_str, tree.domain, compute_grad=False)
+        v.bis_param = v.is_param()
+        if parent is None:
+            tree.tree_update(tree.root)
+        else:
+            tree.tree_update(parent)
+        return (0.0, 0.0)
+
+    # 4. Sub-move B: kind-crossing.
+    if v.is_param():
+        # Case (d): DEATH of theta_j. Replace with a function leaf.
+        # TODO[g-placeholder]: replace _LOG_G_PLACEHOLDER with log g(v.value).
+        new_func_str = random.choice(functions)
+        v.function = real_functionC.RealFunctionC.from_string(
+            new_func_str, tree.domain, compute_grad=False)
+        v.bis_param = v.is_param()
+        if parent is None:
+            tree.tree_update(tree.root)
+        else:
+            tree.tree_update(parent)
+        log_q_fwd += -np.log(<double> M)
+        log_q_rev += _LOG_G_PLACEHOLDER
+        return (log_q_fwd, log_q_rev)
+
+    # Function leaf -> parameter leaf: case (c) BIRTH of theta_new.
+    cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
+    new_name = function_treeC.new_par(existing_names, "a")
+    v.function = real_functionC.RealFunctionC.from_string(
+        new_name, tree.domain, compute_grad=False)
+    # set_value gates on bis_param; flip flag BEFORE assigning the value.
+    v.bis_param = v.is_param()
+    # TODO[g-placeholder]: draw v_init ~ g and use the SAME draw both as
+    # the stored value here AND as the argument to log g(.) below.
+    v.set_value(_NEW_PARAM_INIT_VALUE)
+    if parent is None:
+        tree.tree_update(tree.root)
+    else:
+        tree.tree_update(parent)
+    log_q_fwd += _LOG_G_PLACEHOLDER
+    log_q_rev += -np.log(<double> M)
+    return (log_q_fwd, log_q_rev)
+
 
 @cython.boundscheck(True)
-cpdef point_mutation(function_treeC.Tree tree, functions, operations=None, function_treeC.Node node_to_mutate=None):
+cpdef tuple point_mutation(function_treeC.Tree tree, functions, operations=None,
+                           function_treeC.Node node_to_mutate=None):
+    """Public entry point. The legacy `node_to_mutate` keyword is kept for
+    backward compatibility but is IGNORED in v2: selection must be uniform
+    over all nodes for the proposal-density bookkeeping to be correct."""
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _point_mutation(tree, functions, list(operations))
+
+
+
+@cython.boundscheck(True)
+cpdef legacy_point_mutation(function_treeC.Tree tree, functions, operations=None, function_treeC.Node node_to_mutate=None):
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
     
