@@ -671,7 +671,7 @@ cdef class Tree:
         tree_update(self.root) so name_values, param_values and penalty stay
         in sync. Names not present in new_name_values are left untouched.
         """
-        cdef object par
+        cdef Node par
         cdef str name
         for par in self.params:
             name = par.function.get_description()

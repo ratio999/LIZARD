@@ -829,6 +829,9 @@ cdef class AMState:
             # non-PSD (shouldn't happen with the jitter, but cheap to guard).
             scale = np.maximum(self.eps, np.sqrt(np.diag(cov)))
             return theta + np.random.normal(0.0, scale)
+    
+    cpdef cnp.ndarray propose(self, cnp.ndarray theta):
+        return self._propose(theta)
 
     cdef void _update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs):
         # Robbins-Monro updates on (log_lambda, mu, C). Called on EVERY
@@ -846,6 +849,8 @@ cdef class AMState:
         if accepted:
             self.n_accepts += 1
 
+    cpdef void update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs):
+        self._update(theta_after, accepted, alpha_obs)
 
 cdef tuple _parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -920,3 +925,10 @@ cdef tuple _parameter_refresh(function_treeC.Tree tree,
         am_state._update(theta_old, False, alpha_obs)
 
     return (accepted, 0.0, 0.0)
+
+cpdef tuple parameter_refresh(function_treeC.Tree tree,
+                              cnp.ndarray[cnp.float64_t, ndim=1] y,
+                              double sigma,
+                              AMState am_state,
+                              double T):
+    return _parameter_refresh(tree, y, sigma, am_state, T)

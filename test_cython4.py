@@ -8,9 +8,145 @@ import time
 import numpy as np
 from function_treeC import Tree, expr_to_tree
 from gp_movesC import (subtree_mutation, subtree_crossover, point_mutation,
-                       hoist_mutation, add_node, replace_with_subtree, add_node)
+                       hoist_mutation, add_node, replace_with_subtree, add_node,
+                       AMState, parameter_refresh)
 from groveC import Grove
 import matplotlib.pyplot as plt
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.1.PR smoke tests: AMState + parameter_refresh
+# ---------------------------------------------------------------------------
+def am_state_smoke_test():
+    """Diagnostics for Adaptive Metropolis state and parameter_refresh.
+
+    Checks (in order):
+      1) constructor + attribute exposure (cdef public reachability)
+      2) K=1 path: cold-start scalar shape, warm-start after K+1 visits
+      3) K=3 path: cov stays SPD after RM updates; symmetry preserved
+      4) lambda adaptation: drive RM with synthetic alpha_obs, expect
+         log_lambda to move toward target
+      5) end-to-end parameter_refresh on a fixed-topology tree
+         (sin(x) + a0) with truth a0=2.0; expect convergence + accept rate
+         hovering near alpha_star=0.44 after warm-up.
+    """
+    print("=" * 60)
+    print("AMState / parameter_refresh smoke test")
+    print("=" * 60)
+    rng = np.random.default_rng(0)
+    np.random.seed(0)
+
+    # --- 1. constructor + attribute checks --------------------------------
+    s1 = AMState(["a0"])
+    s3 = AMState(["a0", "a1", "a2"])
+    assert s1.K == 1 and s3.K == 3, "K mismatch"
+    assert s1.alpha_star == 0.44, f"K=1 alpha* should be 0.44, got {s1.alpha_star}"
+    assert s3.alpha_star == 0.234, f"K=3 alpha* should be 0.234, got {s3.alpha_star}"
+    assert s1.mu.shape == (1,) and s3.C.shape == (3, 3), "shape init wrong"
+    assert s1.log_lambda == 0.0 and s1.n_visits == 0
+    print(f"[1] OK  param_names={s1.param_names}  K=1 alpha*={s1.alpha_star}")
+    print(f"        K=3  C.shape={s3.C.shape}  mu={s3.mu}")
+
+    # --- 2. K=1 propose: cold-start then warm -----------------------------
+    theta = np.array([3.0])
+    cold_props = np.array([s1.propose(theta)[0] for _ in range(500)])
+    cold_sd = cold_props.std()
+    expected_cold_sd = max(s1.eps, abs(theta[0]) * s1.rel)  # = 0.3
+    print(f"[2] K=1 cold-start: empirical sd={cold_sd:.3f}  expected~{expected_cold_sd:.3f}")
+    assert 0.5 * expected_cold_sd < cold_sd < 1.5 * expected_cold_sd, \
+        "cold-start sd off by >50%"
+
+    # Force warm regime: pretend we visited K+1 times, then check that
+    # propose() doesn't crash and uses Cholesky path.
+    s1.n_visits = 5
+    warm_sample = s1.propose(theta)
+    assert warm_sample.shape == (1,), f"warm K=1 shape {warm_sample.shape} != (1,)"
+    print(f"        warm propose returns shape {warm_sample.shape}: OK")
+
+    # --- 3. K=3 update: covariance stays symmetric & PSD ------------------
+    s3b = AMState(["a0", "a1", "a2"])
+    for t in range(200):
+        theta_t = rng.normal(size=3) * np.array([1.0, 2.0, 0.5])
+        s3b.update(theta_t, accepted=True, alpha_obs=0.234)
+    sym_err = float(np.max(np.abs(s3b.C - s3b.C.T)))
+    eigs = np.linalg.eigvalsh(s3b.C)
+    print(f"[3] K=3 after 200 updates:")
+    print(f"        symmetry err = {sym_err:.2e}")
+    print(f"        eigenvalues  = {eigs}")
+    print(f"        empirical mu = {s3b.mu}")
+    assert sym_err < 1e-12, "C lost symmetry"
+    assert eigs.min() >= -1e-10, "C lost positive-semidefiniteness"
+
+    # --- 4. lambda adaptation: feed alpha_obs above/below target ----------
+    s_hi = AMState(["a0", "a1", "a2"])  # alpha* = 0.234
+    s_lo = AMState(["a0", "a1", "a2"])
+    for t in range(2000):
+        # high acceptance -> log_lambda should INCREASE (broader proposals)
+        s_hi.update(np.zeros(3), accepted=True, alpha_obs=0.9)
+        # low acceptance -> log_lambda should DECREASE
+        s_lo.update(np.zeros(3), accepted=False, alpha_obs=0.05)
+    print(f"[4] lambda adaptation (target alpha*=0.234, 2000 RM steps):")
+    print(f"        high-accept feed (alpha_obs=0.9):  log_lambda -> {s_hi.log_lambda:+.3f}")
+    print(f"        low-accept  feed (alpha_obs=0.05): log_lambda -> {s_lo.log_lambda:+.3f}")
+    assert s_hi.log_lambda > 0.5, "log_lambda should grow when alpha_obs >> target"
+    assert s_lo.log_lambda < -0.5, "log_lambda should shrink when alpha_obs << target"
+
+    # --- 5. parameter_refresh end-to-end on a fixed-topology tree ---------
+    # Build  sin(x) + a0  with a0 initialized far from truth (= 2.0).
+    x = np.linspace(0.001, 10.0, 200).astype(np.float64)
+    y_true = np.sin(x) + 2.0
+    domain = x.copy()
+    a0_sym = sp.symbols("a0")
+    expr = sp.sin(sp.symbols("x")) + a0_sym
+    tree = expr_to_tree(expr, domain, ["sin(x)", "cos(x)", "x"])
+    # Force a0 far from truth.
+    for p in tree.get_params():
+        p.set_value(-5.0)
+    tree.tree_update(tree.get_root())
+    # Cache the parameter Node directly: tree.tree_update() rebuilds the
+    # name_values dict on every accept, so any dict reference captured here
+    # would go stale. The Node object itself is mutated in place by
+    # set_value(), so reading p.value each iteration is the safe path.
+    pnode = tree.get_params()[0]
+    init_val = pnode.value
+    print(f"[5] end-to-end parameter_refresh on  sin(x) + a0  (truth a0=2.0)")
+    print(f"        initial a0 = {init_val:.3f}")
+
+    names = [p.get_fun().get_description() for p in tree.get_params()]
+    am = AMState(names)
+    sigma = 0.1
+    T = 1.0
+
+    accepts = 0
+    n_iter = 1500
+    trace = np.empty(n_iter, dtype=np.float64)
+    for t in range(n_iter):
+        accepted, _, _ = parameter_refresh(tree, y_true, sigma, am, T)
+        if accepted:
+            accepts += 1
+        trace[t] = pnode.value
+
+    final_a0 = trace[-1]
+    post_warmup_mean = float(np.mean(trace[500:]))
+    post_warmup_sd = float(np.std(trace[500:]))
+    accept_rate = accepts / n_iter
+    print(f"        final a0 = {final_a0:.4f}   "
+          f"post-warmup mean = {post_warmup_mean:.4f} +/- {post_warmup_sd:.4f}")
+    print(f"        accept rate = {accept_rate:.3f}   "
+          f"(target alpha* = {am.alpha_star})")
+    print(f"        AM final: log_lambda={am.log_lambda:+.3f}  "
+          f"n_visits={am.n_visits}  C[0,0]={am.C[0, 0]:.3e}")
+    # Loose convergence check: posterior mean should be within ~3 sigma
+    # of the truth given sigma=0.1 and n=200 (analytic SE ~ sigma/sqrt(n) ~ 0.007).
+    assert abs(post_warmup_mean - 2.0) < 0.1, \
+        f"PR did not converge: post-warmup mean {post_warmup_mean} vs truth 2.0"
+    # Acceptance should be in a reasonable window around target.
+    assert 0.15 < accept_rate < 0.75, \
+        f"accept rate {accept_rate} outside sane window"
+    print("=" * 60)
+    print("AMState smoke test: ALL CHECKS PASSED")
+    print("=" * 60)
+    print()
 
 '''def grove_smoke_test():
     # Domain and target
@@ -201,6 +337,7 @@ def main():
     tree = expr_to_tree(expr, domain,functions)
     print(str(expr), tree.tree_get_description())
     print('AFTER EXPR2TREE', tree, tree.get_param_dicts())
+    am_state_smoke_test()
     grove_smoke_test()
 
 

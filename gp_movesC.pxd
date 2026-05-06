@@ -49,9 +49,17 @@ cdef class AMState:
 
     cdef double _gamma(self)
     cdef cnp.ndarray _propose(self, cnp.ndarray theta)
+    cpdef cnp.ndarray propose(self, cnp.ndarray theta)
     cdef void _update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs)
-
+    cpdef void update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs)
+    
 cdef tuple _parameter_refresh(function_treeC.Tree tree,
+                              cnp.ndarray[cnp.float64_t, ndim=1] y,
+                              double sigma,
+                              AMState am_state,
+                              double T)
+
+cpdef tuple parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
                               double sigma,
                               AMState am_state,
