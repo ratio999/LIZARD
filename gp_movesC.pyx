@@ -22,7 +22,13 @@ cdef double _AM_REL_SCALE             = 0.1     # cold-start: |theta_i| * rel
 cdef double _AM_EPS                   = 1e-6    # cold-start floor
 cdef double _AM_JITTER                = 1e-8  
 
-
+# --- Phase 2.1.K: add_node / hoist RJMCMC bookkeeping ---------------------
+cdef double _ADD_NODE_DEPTH_RHO  = 0.5    # truncated-geometric over depths
+cdef int    _ADD_NODE_DEPTH_MAX  = 4      # truncation; reverse hoists of
+                                          # subtrees deeper than this give
+                                          # log_q_rev = -inf (off-support).
+cdef double _ADD_NODE_PARAM_PROB = 0.3    # per-leaf Bernoulli prob to be a
+                                          # parameter leaf in the new subtree
 
 # ---------------------------------------------------------------------------
 # Helpers for proposal-density bookkeeping
@@ -61,6 +67,78 @@ cdef bint _is_perfect_binary(function_treeC.Node node, int h):
         return False
     return _is_perfect_binary(node.left, h - 1) and _is_perfect_binary(node.right, h - 1)
 
+cdef tuple _sample_truncated_geometric(double rho, int d_max):
+    """Sample d ~ truncated Geom(rho) on {1,...,d_max}.
+    Returns (d, log_p_d(d))."""
+    cdef double Z = (1.0 - rho ** d_max) / (1.0 - rho)
+    cdef double u = random.random()
+    cdef double cdf = 0.0
+    cdef double pmf
+    cdef int d
+    for d in range(1, d_max + 1):
+        pmf = (rho ** (d - 1)) / Z
+        cdf += pmf
+        if u < cdf:
+            return (d, np.log(pmf))
+    return (d_max, np.log((rho ** (d_max - 1)) / Z))
+
+
+cdef double _truncated_geometric_log_pmf(int d, double rho, int d_max):
+    """log p(d) under truncated Geom on {1,...,d_max}. -inf if out of range."""
+    if d < 1 or d > d_max:
+        return -np.inf
+    cdef double Z = (1.0 - rho ** d_max) / (1.0 - rho)
+    return (d - 1) * np.log(rho) - np.log(Z)
+
+
+cdef int _count_nodes(function_treeC.Node node):
+    if node is None:
+        return 0
+    if node.is_leaf():
+        return 1
+    return 1 + _count_nodes(node.left) + _count_nodes(node.right)
+
+
+cdef double _eval_build_density(function_treeC.Node S, int d,
+                                int M, int O, double p_par):
+    """log q_build(S | d) for a perfect-binary subtree of height d.
+    Caller must verify _is_perfect_binary(S, d) before calling.
+
+    Per-leaf Bernoulli(p_par) for parameter-vs-function, uniform from F
+    for function leaves, uniform from O for ops, log g(.) per parameter
+    value (placeholder)."""
+    cdef int n_leaves = 1 << d           # 2^d
+    cdef int n_int    = n_leaves - 1     # 2^d - 1
+    cdef int K_S = len(_collect_parameter_leaves(S, []))
+    return (
+        (<double> K_S) * (np.log(p_par) + _LOG_G_PLACEHOLDER)
+        + (<double> (n_leaves - K_S)) * (np.log(1.0 - p_par) - np.log(<double> M))
+        - (<double> n_int) * np.log(<double> O)
+    )
+
+
+cdef function_treeC.Node _build_subtree_with_params(
+        int d, list functions, list operations, object domain,
+        double p_par, list existing_param_names):
+    """Build a perfect-binary subtree of height d with per-leaf Bernoulli
+    parameter assignment. Parameter names extend `existing_param_names`."""
+    cdef function_treeC.Node root = function_treeC.build_tree(d, functions, domain)
+    cdef list leaves = root.get_leaves(leaves_list=[])
+    cdef list pool = list(existing_param_names)
+    cdef function_treeC.Node leaf
+    cdef str new_name
+    for leaf in leaves:
+        if random.random() < p_par:
+            new_name = function_treeC.new_par(pool, "a")
+            pool.append(new_name)
+            leaf.function = real_functionC.RealFunctionC.from_string(
+                new_name, domain, compute_grad=False)
+            leaf.bis_param = leaf.is_param()
+            # TODO[g-placeholder]: draw v ~ g; for now use the deterministic
+            # init. Same convention as point_mutation v2 case (c).
+            leaf.set_value(_NEW_PARAM_INIT_VALUE)
+    function_treeC._post_order_update(root)
+    return root
 
 cdef list _collect_parameter_leaves(function_treeC.Node node, list out):
     """Pre-order DFS collecting parameter (constant-leaf) Nodes into `out`."""
@@ -537,7 +615,7 @@ cpdef legacy_point_mutation(function_treeC.Tree tree, functions, operations=None
     
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cpdef hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_to_lift = None):
+cpdef legacy_hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_to_lift = None):
     """Replaces subtree with one of its subtrees"""
  
     cdef function_treeC.Node subtree, parent_node, granpa
@@ -617,7 +695,109 @@ cpdef hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_to_lift 
             #print('new parent node: ', parent_node.get_fun().get_description(), 'left: ', parent_node.left.get_fun().get_description(),
             # 'right: ', parent_node.right.get_fun().get_description())
     
-        
+@cython.boundscheck(True)
+@cython.wraparound(True)
+cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operations):
+    """
+    hoist_mutation v2 (Phase 2.1.K). Lift a uniformly-chosen non-root node v;
+    v takes its parent's place; the sibling subtree is dropped.
+
+    Reverse pairing
+    ---------------
+      * If v is a LEAF: reverse is add_node (wrap v with the dropped sibling).
+        Both densities computable; on-support iff sibling is perfect-binary
+        of depth <= _ADD_NODE_DEPTH_MAX.
+      * If v is INTERNAL: no inverse move in the current move set; the kernel
+        from T_new back to T has zero density via add_node. Set
+        log_q_rev = -inf so the move is always rejected.
+        TODO[split-move]: introduce a split move so internal hoists become
+        productive. Phase 2.1.K v3 or Phase 2.8.
+
+    Returns (log_q_fwd, log_q_rev).
+
+    NOTE on selection-mix balance: same TODO[move-pair-balance] as add_node.
+    """
+    cdef function_treeC.Node v, parent, sibling, granpa
+    cdef list non_root_nodes
+    cdef int n_nodes_T, n_leaves_Tnew, M, O, d_S
+    cdef double log_q_fwd = 0.0
+    cdef double log_q_rev = 0.0
+    cdef bint v_is_leaf
+
+    if tree.root is None or tree.root.is_leaf():
+        return (0.0, 0.0)
+    M = len(functions)
+    O = len(operations)
+
+    # ---- 1. uniform pick of non-root node v ----
+    non_root_nodes = _flatten_nodes(tree.root, [])
+    non_root_nodes = non_root_nodes[1:]   # drop the root
+    n_nodes_T = len(non_root_nodes) + 1   # |N(T)|; hoist selects from |N(T)|-1
+    if n_nodes_T <= 1:
+        return (0.0, 0.0)
+    v = non_root_nodes[random.randrange(n_nodes_T - 1)]
+    parent = tree.root.find_parent(v)     # never None: v != root
+    v_is_leaf = v.is_leaf()
+    if parent.get_left() is v:
+        sibling = parent.right
+    else:
+        sibling = parent.left
+
+    # ---- 2. perform the lift (parent <- v) ----
+    granpa = tree.root.find_parent(parent)
+    if granpa is None:
+        # parent IS the root; v becomes the new root.
+        tree.root.assign_left(None)
+        tree.root.assign_right(None)
+        tree.root.assign_operation(None)
+        tree.root = v
+        tree.tree_update(tree.root)
+    else:
+        if granpa.left is parent:
+            granpa.assign_left(v)
+        else:
+            granpa.assign_right(v)
+        tree.tree_update(granpa)
+
+    # ---- 3. proposal densities ----
+    log_q_fwd = -np.log(<double> (n_nodes_T - 1))
+
+    if not v_is_leaf:
+        # Internal-node hoist: no inverse in current move set.
+        # TODO[split-move]: implement and remove this branch.
+        log_q_rev = -np.inf
+        return (log_q_fwd, log_q_rev)
+
+    # Leaf hoist: reverse is add_node wrapping v with `sibling`.
+    # On-support iff sibling is perfect-binary of height d_S <= _ADD_NODE_DEPTH_MAX.
+    d_S = sibling.depth()
+    if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
+        log_q_rev = -np.inf
+        return (log_q_fwd, log_q_rev)
+
+    n_leaves_Tnew = len(tree.root.get_leaves(leaves_list=[]))
+    log_q_rev = (-np.log(<double> n_leaves_Tnew)
+                 - np.log(<double> O)
+                 + _truncated_geometric_log_pmf(d_S, _ADD_NODE_DEPTH_RHO,
+                                                _ADD_NODE_DEPTH_MAX)
+                 - np.log(2.0)
+                 + _eval_build_density(sibling, d_S, M, O, _ADD_NODE_PARAM_PROB))
+
+    return (log_q_fwd, log_q_rev)
+
+
+@cython.boundscheck(True)
+@cython.wraparound(True)
+cpdef tuple hoist_mutation(function_treeC.Tree tree, functions=None, operations=None):
+    """Phase 2.1.K public entry point. Returns (log_q_fwd, log_q_rev).
+    `functions`/`operations` are required to compute the reverse-add_node
+    density; they default to the standard sets if omitted (legacy callers)."""
+    if functions is None:
+        functions = ["sin(x)", "cos(x)", "x"]
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _hoist_mutation(tree, list(functions), list(operations))
+
 #@cython.boundscheck(False)
 #@cython.wraparound(False)
 '''
@@ -676,7 +856,7 @@ cpdef add_node(function_treeC.Tree tree, functions, operations):
 '''
 
 @cython.boundscheck(True)  # Per migliorare le prestazioni
-cpdef add_node( function_treeC.Tree tree, functions, operations=None, random_depth=False):
+cpdef legacy_add_node( function_treeC.Tree tree, functions, operations=None, random_depth=False):
     """Adds a node from a random location in an existing tree"""
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
@@ -733,7 +913,106 @@ cpdef add_node( function_treeC.Tree tree, functions, operations=None, random_dep
         #print(tree.root.get_fun().get_description(), tree.root.is_leaf(), parent_node.is_leaf())
         #print(parent_node, tree.root)
         tree.tree_update(parent_node)
-        
+
+@cython.boundscheck(True)
+cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
+    """
+    add_node v2 (Phase 2.1.K). Wraps a uniformly-chosen LEAF L of T with
+    op(L, S) or op(S, L), where:
+      * op  ~ Uniform(operations),                 (size O)
+      * d   ~ TruncatedGeom(rho) on {1,...,d_max}, (depth of S)
+      * S   = perfect-binary subtree of height d,
+              each leaf ind. parameter w.p. p_par (else uniform from F),
+              ops uniform from operations,
+              parameter values from g (placeholder),
+      * side ~ Uniform({L, R}).                    (1/2 each)
+
+    Reverse move = leaf-hoist of L on T' (Phase 2.1 hoist).
+
+    Returns (log_q_fwd, log_q_rev). On-support by construction.
+    K(T') = K(T) + K_S, where K_S is the number of parameter leaves in S.
+
+    NOTE on selection probabilities (mixture-balance term):
+    The exact RJMCMC ratio also needs log p_select(hoist) - log p_select(add)
+    from _choose_move. For Phase 2.1 we assume p_add = p_hoist (term = 0);
+    Phase 2.8 (move-rate calibration) will revisit. TODO[move-pair-balance].
+    """
+    cdef list leaves = tree.root.get_leaves(leaves_list=[])
+    cdef int n_leaves_T = len(leaves)
+    cdef int M = len(functions)
+    cdef int O = len(operations)
+    cdef function_treeC.Node L, parent, new_internal, S
+    cdef str op
+    cdef int d, n_nodes_Tp
+    cdef double log_p_d
+    cdef double log_q_fwd = 0.0
+    cdef double log_q_rev = 0.0
+    cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
+    cdef bint side_left
+
+    if n_leaves_T == 0 or M <= 0 or O <= 0:
+        return (0.0, 0.0)
+
+    # ---- 1. pick leaf, op, depth, side ----
+    L = leaves[random.randrange(n_leaves_T)]
+    op = random.choice(operations)
+    d, log_p_d = _sample_truncated_geometric(_ADD_NODE_DEPTH_RHO, _ADD_NODE_DEPTH_MAX)
+    side_left = (random.random() < 0.5)
+
+    # ---- 2. build subtree S ----
+    S = _build_subtree_with_params(d, functions, operations, tree.domain,
+                                   _ADD_NODE_PARAM_PROB, existing_names)
+
+    # ---- 3. wrap L ----
+    parent = tree.root.find_parent(L)   # None iff L is the root (single-node T)
+    new_internal = function_treeC.Node(function=L.get_fun())  # placeholder
+    if side_left:
+        new_internal.assign_left(L)
+        new_internal.assign_right(S)
+    else:
+        new_internal.assign_left(S)
+        new_internal.assign_right(L)
+    new_internal.assign_operation(op)
+    new_internal.update_func()
+
+    if parent is None:
+        tree.root = new_internal
+        tree.tree_update(tree.root)
+    else:
+        if parent.get_left() is L:
+            parent.assign_left(new_internal)
+        else:
+            parent.assign_right(new_internal)
+        tree.tree_update(parent)
+
+    # ---- 4. proposal densities ----
+    n_nodes_Tp = _count_nodes(tree.root)
+
+    log_q_fwd = (-np.log(<double> n_leaves_T)
+                 - np.log(<double> O)
+                 + log_p_d
+                 - np.log(2.0)
+                 + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB))
+
+    # Reverse: leaf-hoist of L on T'. Uniform over non-root nodes of T'.
+    if n_nodes_Tp <= 1:
+        log_q_rev = -np.inf
+    else:
+        log_q_rev = -np.log(<double> (n_nodes_Tp - 1))
+
+    return (log_q_fwd, log_q_rev)
+
+
+@cython.boundscheck(True)
+cpdef tuple add_node(function_treeC.Tree tree, functions, operations=None,
+                     random_depth=False):
+    """Phase 2.1.K public entry point.
+    Legacy `random_depth` kept for back-compat; ignored (depth is sampled
+    from the truncated-geometric distribution by design)."""
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _add_node(tree, list(functions), list(operations))
+
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Generates a random subtree with chosen size"""
     depth = size // 2  #  profondità approssimativa

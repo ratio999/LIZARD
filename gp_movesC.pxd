@@ -14,11 +14,24 @@ cpdef subtree_crossover(function_treeC.Tree parent1, function_treeC.Tree parent2
 cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operations)
 cpdef tuple point_mutation(function_treeC.Tree tree, functions, operations=?, function_treeC.Node node_to_mutate=?)
 cpdef legacy_point_mutation(function_treeC.Tree tree, functions,operations=?, function_treeC.Node node_to_mutate=?)
-cpdef hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_to_lift=?)
+cpdef legacy_hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_to_lift=?)
+cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operations)
+cpdef hoist_mutation(function_treeC.Tree tree, functions, operations=?, function_treeC.Node node_to_lift=?)
 #cpdef size_fair_mutation(tree, functions, x)
 #cpdef replace_with_subtree(tree, functions, x)
 #cpdef add_node(function_treeC.Tree tree, functions, operations)
-cpdef add_node(function_treeC.Tree tree, functions, operations=?, random_depth=?)
+cpdef legacy_add_node(function_treeC.Tree tree, functions, operations=?, random_depth=?)
+cdef tuple _sample_truncated_geometric(double rho, int d_max)
+cdef double _truncated_geometric_log_pmf(int d, double rho, int d_max)
+cdef int _count_nodes(function_treeC.Node node)
+cdef double _eval_build_density(function_treeC.Node S, int d,
+                                int M, int O, double p_par)
+cdef function_treeC.Node _build_subtree_with_params(
+        int d, list functions, list operations, object domain,
+        double p_par, list existing_param_names)
+cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations)
+cpdef tuple add_node(function_treeC.Tree tree, functions, operations=None,
+                     random_depth=?)
 #cpdef select_random_node(node)
 #cpdef find_parent(root, child)
 #cpdef compute_subtree_size(node)
