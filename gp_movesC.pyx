@@ -297,7 +297,9 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
     return log_q_fwd, log_q_rev
 
 @cython.boundscheck(True)
-cpdef tuple subtree_mutation(function_treeC.Tree tree, list functions):
+cpdef tuple subtree_mutation(function_treeC.Tree tree, list functions=None):
+    if functions is None:
+        functions = tree.functions
     return _subtree_mutation(tree, functions)
 
 @cython.boundscheck(True) 
@@ -571,13 +573,15 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
 
 
 @cython.boundscheck(True)
-cpdef tuple point_mutation(function_treeC.Tree tree, functions, operations=None,
+cpdef tuple point_mutation(function_treeC.Tree tree, list functions= None, list operations=None,
                            function_treeC.Node node_to_mutate=None):
     """Public entry point. The legacy `node_to_mutate` keyword is kept for
     backward compatibility but is IGNORED in v2: selection must be uniform
     over all nodes for the proposal-density bookkeeping to be correct."""
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
+    if functions is None:
+        functions = tree.functions
     return _point_mutation(tree, functions, list(operations))
 
 
@@ -719,7 +723,7 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
     """
     cdef function_treeC.Node v, parent, sibling, granpa
     cdef list non_root_nodes
-    cdef int n_nodes_T, n_leaves_Tnew, M, O, d_S
+    cdef int n_nodes_T,  M, O, d_S
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
     cdef bint v_is_leaf
@@ -762,21 +766,27 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
     # ---- 3. proposal densities ----
     log_q_fwd = -np.log(<double> (n_nodes_T - 1))
 
-    if not v_is_leaf:
-        # Internal-node hoist: no inverse in current move set.
-        # TODO[split-move]: implement and remove this branch.
-        log_q_rev = -np.inf
-        return (log_q_fwd, log_q_rev)
-
-    # Leaf hoist: reverse is add_node wrapping v with `sibling`.
-    # On-support iff sibling is perfect-binary of height d_S <= _ADD_NODE_DEPTH_MAX.
+    cdef int n_nodes_Tnew, n_leaves_Tnew
+    cdef double log_select_rev
     d_S = sibling.depth()
     if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
         log_q_rev = -np.inf
         return (log_q_fwd, log_q_rev)
 
-    n_leaves_Tnew = len(tree.root.get_leaves(leaves_list=[]))
-    log_q_rev = (-np.log(<double> n_leaves_Tnew)
+    if v_is_leaf:
+        n_leaves_Tnew = len(tree.root.get_leaves(leaves_list=[]))
+        if n_leaves_Tnew <= 0:
+            log_q_rev = -np.inf
+            return (log_q_fwd, log_q_rev)
+        log_select_rev = -np.log(<double> n_leaves_Tnew)
+    else:
+        n_nodes_Tnew = _count_nodes(tree.root)
+        if n_nodes_Tnew <= 0:
+            log_q_rev = -np.inf
+            return (log_q_fwd, log_q_rev)
+        log_select_rev = -np.log(<double> n_nodes_Tnew)
+
+    log_q_rev = (log_select_rev
                  - np.log(<double> O)
                  + _truncated_geometric_log_pmf(d_S, _ADD_NODE_DEPTH_RHO,
                                                 _ADD_NODE_DEPTH_MAX)
@@ -788,12 +798,12 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
 
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cpdef tuple hoist_mutation(function_treeC.Tree tree, functions=None, operations=None):
+cpdef tuple hoist_mutation(function_treeC.Tree tree, list functions=None, list operations=None):
     """Phase 2.1.K public entry point. Returns (log_q_fwd, log_q_rev).
     `functions`/`operations` are required to compute the reverse-add_node
     density; they default to the standard sets if omitted (legacy callers)."""
     if functions is None:
-        functions = ["sin(x)", "cos(x)", "x"]
+        functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
     return _hoist_mutation(tree, list(functions), list(operations))
@@ -1004,14 +1014,138 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
 
 
 @cython.boundscheck(True)
-cpdef tuple add_node(function_treeC.Tree tree, functions, operations=None,
+cpdef tuple add_node(function_treeC.Tree tree, list functions=None, list operations=None,
                      random_depth=False):
     """Phase 2.1.K public entry point.
     Legacy `random_depth` kept for back-compat; ignored (depth is sampled
     from the truncated-geometric distribution by design)."""
+    if functions is None:
+        functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    return _add_node(tree, list(functions), list(operations))
+    return _add_node(tree, functions, operations)
+
+# ---------------------------------------------------------------------------
+# Phase 2.1.K v3: Split move (inverse of internal hoist_mutation)
+# ---------------------------------------------------------------------------
+@cython.boundscheck(True)
+cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
+    """
+    Split move: paired inverse of the internal-node branch of hoist_mutation.
+
+    Selection
+    ---------
+    Pick u ~ Uniform(N(T)) (size n = |N(T)|). Wrap u with a fresh internal
+    node carrying:
+      * op    ~ Uniform(operations),                       (size O)
+      * d     ~ TruncatedGeom(rho) on {1,...,d_max},
+      * S     = perfect-binary subtree of height d, built by
+                _build_subtree_with_params (per-leaf parameter Bernoulli),
+      * side  ~ Uniform({L, R}).                           (1/2 each)
+
+    Difference from add_node
+    ------------------------
+    add_node selects from leaves(T); split selects from N(T). On a leaf u
+    the two moves are structurally identical. We keep them separate (Option
+    A from the design discussion) so that each has a single, clean reverse:
+        add_node  <-> hoist (leaf branch)
+        split     <-> hoist (internal branch)
+    The leaf-overlap inflates the effective Birth proposal weight by a
+    constant; this is harmless for correctness (changes effective mixture
+    weights, not the stationary distribution) and will be folded into the
+    Phase 2.8 calibration.
+
+    Returns
+    -------
+    (log_q_fwd, log_q_rev) : (double, double)
+        On-support by construction (S is built from the proposal kernel
+        itself).
+
+    NOTE on selection-mix balance: same TODO[move-pair-balance] as
+    add_node and hoist. Phase 2.8.
+    """
+    cdef list all_nodes = _flatten_nodes(tree.root, [])
+    cdef int n_nodes_T = len(all_nodes)
+    cdef int M = len(functions)
+    cdef int O = len(operations)
+    cdef function_treeC.Node u, parent, new_internal, S
+    cdef str op
+    cdef int d, n_nodes_Tp
+    cdef double log_p_d
+    cdef double log_q_fwd = 0.0
+    cdef double log_q_rev = 0.0
+    cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
+    cdef bint side_left
+
+    if n_nodes_T == 0 or M <= 0 or O <= 0:
+        return (0.0, 0.0)
+
+    # ---- 1. pick wrap target u, op, depth, side ----
+    u = all_nodes[random.randrange(n_nodes_T)]
+    op = random.choice(operations)
+    d, log_p_d = _sample_truncated_geometric(_ADD_NODE_DEPTH_RHO,
+                                             _ADD_NODE_DEPTH_MAX)
+    side_left = (random.random() < 0.5)
+
+    # ---- 2. build subtree S ----
+    S = _build_subtree_with_params(d, functions, operations, tree.domain,
+                                   _ADD_NODE_PARAM_PROB, existing_names)
+
+    # ---- 3. wrap u with a fresh internal node ----
+    parent = tree.root.find_parent(u)   # None iff u is the root
+    new_internal = function_treeC.Node(function=u.get_fun())  # placeholder
+    if side_left:
+        new_internal.assign_left(u)
+        new_internal.assign_right(S)
+    else:
+        new_internal.assign_left(S)
+        new_internal.assign_right(u)
+    new_internal.assign_operation(op)
+    new_internal.update_func()
+
+    if parent is None:
+        tree.root = new_internal
+        tree.tree_update(tree.root)
+    else:
+        if parent.get_left() is u:
+            parent.assign_left(new_internal)
+        else:
+            parent.assign_right(new_internal)
+        tree.tree_update(parent)
+
+    # ---- 4. proposal densities ----
+    n_nodes_Tp = _count_nodes(tree.root)
+
+    log_q_fwd = (-np.log(<double> n_nodes_T)
+                 - np.log(<double> O)
+                 + log_p_d
+                 - np.log(2.0)
+                 + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB))
+
+    # Reverse: hoist of (the former) u on T'. The chosen node in the
+    # reverse is the new_internal's child that corresponds to u; selecting
+    # it requires picking it uniformly from the (n_nodes_Tp - 1) non-root
+    # nodes of T'. Hoist's reverse density is just the selection term.
+    if n_nodes_Tp <= 1:
+        log_q_rev = -np.inf
+    else:
+        log_q_rev = -np.log(<double> (n_nodes_Tp - 1))
+
+    return (log_q_fwd, log_q_rev)
+
+
+@cython.boundscheck(True)
+cpdef tuple split(function_treeC.Tree tree, list functions=None, list operations=None):
+    """Phase 2.1.K v3 public entry point. Returns (log_q_fwd, log_q_rev).
+
+    Paired inverse of the internal-node branch of hoist_mutation. See
+    `_split` docstring for full mathematical content.
+    """
+    if functions is None:
+        functions = tree.functions
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _split(tree, functions, operations)
 
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Generates a random subtree with chosen size"""
@@ -1027,10 +1161,11 @@ cpdef root_replacement(function_treeC.Tree tree):
     cdef function_treeC.Tree new_tree = function_treeC.Tree(depth, funcs, x)
     tree = new_tree
     tree.tree_update(tree.root) #RIGUARDA QUESTO METODO
-
+'''
+TO BE WORKED ON
 cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune = None):
     if node_to_prune is None:
-       hoist_mutation(tree)
+       hoist_mutation(tree, tree.functions)
        pass
 
     cdef function_treeC.Node parent = tree.root.find_parent(node_to_prune)  
@@ -1042,7 +1177,7 @@ cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune = N
     else:
         pass
         #point_mutation(tree, node_to_prune)
-
+'''
 
 cdef class AMState:
     """

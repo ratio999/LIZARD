@@ -12,6 +12,7 @@ from gp_movesC import (subtree_mutation, subtree_crossover, point_mutation,
                        AMState, parameter_refresh)
 from groveC import Grove
 import matplotlib.pyplot as plt
+from gp_movesC import split
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +318,14 @@ def main():
     
     add_node(tree1, functions, operations)
     print("Node addition:")
+    print(tree1)
+    print(tree1.tree_get_description())
+
+    
+    print("\nSplit move:")
+    lq_f, lq_r = split(tree1, functions, operations)
+    print(f"  shape: {tree1.tree_get_description()}")
+    print(f"  log_q_fwd={lq_f:.3f}  log_q_rev={lq_r:.3f}  delta={lq_r - lq_f:+.3f}")
     print(tree1)
     print(tree1.tree_get_description())
     #print(tree1.get_root().get_fun().get_params())
