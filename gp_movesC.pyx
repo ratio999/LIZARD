@@ -773,6 +773,9 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
         log_q_rev = -np.inf
         return (log_q_fwd, log_q_rev)
 
+    cdef list internal_Tnew
+    cdef int n_int_Tnew
+    
     if v_is_leaf:
         n_leaves_Tnew = len(tree.root.get_leaves(leaves_list=[]))
         if n_leaves_Tnew <= 0:
@@ -780,11 +783,14 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
             return (log_q_fwd, log_q_rev)
         log_select_rev = -np.log(<double> n_leaves_Tnew)
     else:
-        n_nodes_Tnew = _count_nodes(tree.root)
-        if n_nodes_Tnew <= 0:
-            log_q_rev = -np.inf
-            return (log_q_fwd, log_q_rev)
-        log_select_rev = -np.log(<double> n_nodes_Tnew)
+        # Reverse is split: selects from internal(T').
+        internal_Tnew = [n for n in _flatten_nodes(tree.root, [])
+                         if not n.is_leaf()]
+        n_int_Tnew = len(internal_Tnew)
+        if n_int_Tnew <= 0:
+            return (log_q_fwd, -np.inf)
+        log_select_rev = -np.log(<double> n_int_Tnew)
+
 
     log_q_rev = (log_select_rev
                  - np.log(<double> O)
@@ -1065,7 +1071,8 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
     add_node and hoist. Phase 2.8.
     """
     cdef list all_nodes = _flatten_nodes(tree.root, [])
-    cdef int n_nodes_T = len(all_nodes)
+    cdef list internal_nodes = [n for n in all_nodes if not n.is_leaf()]
+    cdef int n_int_T = len(internal_nodes)
     cdef int M = len(functions)
     cdef int O = len(operations)
     cdef function_treeC.Node u, parent, new_internal, S
@@ -1077,11 +1084,11 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
     cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
     cdef bint side_left
 
-    if n_nodes_T == 0 or M <= 0 or O <= 0:
+    if n_int_T == 0 or M <= 0 or O <= 0:
         return (0.0, 0.0)
 
     # ---- 1. pick wrap target u, op, depth, side ----
-    u = all_nodes[random.randrange(n_nodes_T)]
+    u = internal_nodes[random.randrange(n_int_T)]
     op = random.choice(operations)
     d, log_p_d = _sample_truncated_geometric(_ADD_NODE_DEPTH_RHO,
                                              _ADD_NODE_DEPTH_MAX)
@@ -1116,7 +1123,7 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
     # ---- 4. proposal densities ----
     n_nodes_Tp = _count_nodes(tree.root)
 
-    log_q_fwd = (-np.log(<double> n_nodes_T)
+    log_q_fwd = (-np.log(<double> n_int_T)
                  - np.log(<double> O)
                  + log_p_d
                  - np.log(2.0)
