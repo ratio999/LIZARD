@@ -20,8 +20,12 @@ cdef class Node:
         self.op_symbol = symbol
         self.function = function if function is not None else self.fetch_fun()
         self.node_depth = self.depth()
-        self.domain = self.function.domain
-        self.bis_param = self.is_param()
+        if self.function is not None:
+            self.domain = self.function.domain
+            self.bis_param = self.is_param()
+        else:
+            self.domain = None
+            self.bis_param = False
         if self.bis_param and value==None:
             self.value = 1
         elif self.bis_param and value is not None:
@@ -164,21 +168,29 @@ cdef class Node:
         return self.function.posterior(y, parameters, self.fitness, self.prior, 
                                        self.sigma, None, penalty)
 
-    cpdef assign_operation(self, operation):
+    cpdef assign_operation(self, operation, bint brute_force=False):
         '''Assigns an operation between self.left and self.right'''
-        if not self.bis_param:
+        if not self.bis_param or brute_force:
             self.op_symbol = operation
             self.update_func()
+        else:
+            raise ValueError("Parameters have no children nor operations.")
    
-    cpdef assign_left(self, node):
+    cpdef assign_left(self, node, bint brute_force=False):
         '''Assigns left node'''
-        if not self.bis_param:
+        if not self.bis_param or brute_force:
             self.left = node
+        else:
+            raise ValueError("Parameters have no children nor operations.")
+   
   
-    cpdef assign_right(self, node):
+    cpdef assign_right(self, node, bint brute_force=False):
         '''Assigns right node'''
-        if not self.bis_param:
+        if not self.bis_param or brute_force:
             self.right = node
+        else:
+            raise ValueError("Parameters have no children nor operations.")
+   
     #cdef?
     cpdef find_parent(self, child):
         """Find the node whose left or right branch is child node"""

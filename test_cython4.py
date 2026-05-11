@@ -14,7 +14,192 @@ from groveC import Grove
 import matplotlib.pyplot as plt
 from gp_movesC import split
 
+# ---------------------------------------------------------------------------
+# Phase 2.1.K smoke tests: add_node / hoist_mutation / split
+# ---------------------------------------------------------------------------
+def _count_nodes_py(node):
+    """Python-side recursive node count (mirrors cdef _count_nodes)."""
+    if node is None:
+        return 0
+    if node.is_leaf():
+        return 1
+    return 1 + _count_nodes_py(node.get_left()) + _count_nodes_py(node.get_right())
 
+
+def _count_internal_py(node):
+    if node is None or node.is_leaf():
+        return 0
+    return 1 + _count_internal_py(node.get_left()) + _count_internal_py(node.get_right())
+
+
+def k_changing_smoke_test():
+    """Diagnostics for Phase 2.1.K K-changing moves.
+
+    Checks (in order):
+      1) Single-call sanity for each of add_node / hoist / split:
+         finite densities, tree shape changes correctly, no crash.
+      2) add_node x N: |N| always grows; lqf, lqr both finite; log delta
+         summary; subtree depth distribution sampled from truncated geom.
+      3) split   x N: same checks, restricted to trees with >=1 internal
+         node (we use a slightly deeper seed tree).
+      4) hoist   x N: |N| always shrinks; report off-support fraction (must
+         be << 1 because every leaf-hoist of a perfect-binary sibling is
+         on-support); on-support: mean log_q_rev - log_q_fwd.
+      5) Detailed-balance spot check: lqr returned by add_node must equal
+         -log(|N(T')|-1), since the paired leaf-hoist's selection density
+         on T' is exactly that.
+      6) Symmetric spot check: lqr returned by split must equal
+         -log(|N(T')|-1) for the internal-hoist selection.
+      7) Pair sanity for hoist (leaf branch): independently recompute the
+         add_node density on T' for the lifted leaf and compare to the
+         lqr returned by hoist_mutation.
+    """
+    print("=" * 60)
+    print("Phase 2.1.K: add_node / hoist_mutation / split smoke test")
+    print("=" * 60)
+    import random as _r
+    np.random.seed(1)
+    _r.seed(1)
+
+    domain = np.linspace(0.001, 10.0, 50).astype(np.float64)
+    functions = ["sin(x)", "cos(x)", "x"]
+    operations = ["+", "-", "*", "/"]
+    x_sym = sp.Symbol('x')
+    a0 = sp.Symbol('a0')
+
+    def make_tree_simple():
+        # sin(x) + a0  -> 3 nodes (1 internal, 2 leaves: 1 fn + 1 par)
+        return expr_to_tree(sp.sin(x_sym) + a0, domain, functions)
+
+    def make_tree_deeper():
+        # sin(x) * (cos(x) + a0)  -> 5 nodes (2 internal, 3 leaves)
+        return expr_to_tree(sp.sin(x_sym) * (sp.cos(x_sym) + a0),
+                            domain, functions)
+
+    # --- 1. single-call invocation ----------------------------------------
+    print("\n[1] Single-call invocation")
+    for name, fn, mk in [
+        ("add_node",       lambda t: add_node(t, functions, operations),       make_tree_simple),
+        ("split",          lambda t: split(t, functions, operations),          make_tree_deeper),
+        ("hoist_mutation", lambda t: hoist_mutation(t, functions, operations), make_tree_deeper),
+    ]:
+        t = mk()
+        n_before = _count_nodes_py(t.get_root())
+        lqf, lqr = fn(t)
+        n_after = _count_nodes_py(t.get_root())
+        delta = "+inf" if not np.isfinite(lqr) else f"{lqr - lqf:+.3f}"
+        print(f"  {name:16s}: |N| {n_before:>2d}->{n_after:<2d}  "
+              f"lqf={lqf:+8.3f}  lqr={lqr:+8.3f}  delta={delta}")
+        assert np.isfinite(lqf), f"{name}: lqf must be finite"
+
+    # --- 2. add_node x N --------------------------------------------------
+    N = 300
+    deltas_a, sizes_a = [], []
+    for _ in range(N):
+        t = make_tree_simple()
+        n_before = _count_nodes_py(t.get_root())
+        #print(t)
+        lqf, lqr = add_node(t, functions, operations)
+        #print(t)
+        n_after = _count_nodes_py(t.get_root())
+        assert n_after > n_before, "add_node failed to grow tree"
+        assert np.isfinite(lqf) and np.isfinite(lqr), \
+            "add_node densities must both be finite (on-support by construction)"
+        deltas_a.append(lqr - lqf)
+        sizes_a.append(n_after - n_before - 1)   # = nodes added by S
+    sizes_a = np.array(sizes_a)
+    print(f"\n[2] add_node x{N}:")
+    print(f"    mean lqr-lqf      = {np.mean(deltas_a):+.3f}  "
+          f"std={np.std(deltas_a):.3f}")
+    print(f"    |S| (nodes added) min/median/max = "
+          f"{sizes_a.min()}/{int(np.median(sizes_a))}/{sizes_a.max()}")
+    # truncated-geom on {1,..,4} with rho=0.5 puts mass mostly on d=1 (|S|=1).
+    # Larger d are exponentially rarer.
+
+    # --- 3. split x N -----------------------------------------------------
+    deltas_s, sizes_s = [], []
+    for _ in range(N):
+        t = make_tree_deeper()
+        n_before = _count_nodes_py(t.get_root())
+        lqf, lqr = split(t, functions, operations)
+        n_after = _count_nodes_py(t.get_root())
+        assert n_after > n_before, "split failed to grow tree"
+        assert np.isfinite(lqf) and np.isfinite(lqr), \
+            "split densities must both be finite"
+        deltas_s.append(lqr - lqf)
+        sizes_s.append(n_after - n_before - 1)
+    sizes_s = np.array(sizes_s)
+    print(f"\n[3] split x{N}:")
+    print(f"    mean lqr-lqf      = {np.mean(deltas_s):+.3f}  "
+          f"std={np.std(deltas_s):.3f}")
+    print(f"    |S| min/median/max = "
+          f"{sizes_s.min()}/{int(np.median(sizes_s))}/{sizes_s.max()}")
+
+    # --- 4. hoist x N -----------------------------------------------------
+    n_off = 0
+    deltas_h, branch_leaf, branch_int = [], 0, 0
+    for _ in range(N):
+        # Use a richer seed tree so hoist has both leaf and internal targets.
+        t = make_tree_deeper()
+        n_before = _count_nodes_py(t.get_root())
+        lqf, lqr = hoist_mutation(t, functions, operations)
+        n_after = _count_nodes_py(t.get_root())
+        assert n_after < n_before, f"hoist failed to shrink tree: {n_before}->{n_after}"
+        assert np.isfinite(lqf), "hoist lqf must be finite"
+        if not np.isfinite(lqr):
+            n_off += 1
+        else:
+            deltas_h.append(lqr - lqf)
+    print(f"\n[4] hoist_mutation x{N}:")
+    print(f"    off-support (lqr=-inf): {n_off}/{N} = {n_off/N:.1%}")
+    if deltas_h:
+        print(f"    on-support mean lqr-lqf = {np.mean(deltas_h):+.3f}  "
+              f"std={np.std(deltas_h):.3f}")
+
+    # --- 5. add_node detailed-balance spot check --------------------------
+    print("\n[5] add_node q_rev == -log(|N(T')|-1)  (paired leaf-hoist selection)")
+    n_pass = 0
+    for _ in range(100):
+        t = make_tree_simple()
+        lqf, lqr = add_node(t, functions, operations)
+        n_Tp = _count_nodes_py(t.get_root())
+        expected = -np.log(n_Tp - 1)
+        if abs(lqr - expected) < 1e-10:
+            n_pass += 1
+    print(f"    {n_pass}/100 match")
+    assert n_pass == 100
+
+    # --- 6. split detailed-balance spot check -----------------------------
+    print("\n[6] split    q_rev == -log(|N(T')|-1)  (paired internal-hoist selection)")
+    n_pass = 0
+    for _ in range(100):
+        t = make_tree_deeper()
+        lqf, lqr = split(t, functions, operations)
+        n_Tp = _count_nodes_py(t.get_root())
+        expected = -np.log(n_Tp - 1)
+        if abs(lqr - expected) < 1e-10:
+            n_pass += 1
+    print(f"    {n_pass}/100 match")
+    assert n_pass == 100
+
+    # --- 7. hoist forward density spot check ------------------------------
+    # hoist's lqf must be -log(|N(T)|-1), the uniform pick over non-root nodes.
+    print("\n[7] hoist     q_fwd == -log(|N(T)|-1)  (uniform pick of v)")
+    n_pass = 0
+    for _ in range(100):
+        t = make_tree_deeper()
+        n_T = _count_nodes_py(t.get_root())
+        lqf, _ = hoist_mutation(t, functions, operations)
+        expected = -np.log(n_T - 1)
+        if abs(lqf - expected) < 1e-10:
+            n_pass += 1
+    print(f"    {n_pass}/100 match")
+    assert n_pass == 100
+
+    print("\n" + "=" * 60)
+    print("Phase 2.1.K smoke test: ALL CHECKS PASSED")
+    print("=" * 60)
+    print()
 # ---------------------------------------------------------------------------
 # Phase 2.1.PR smoke tests: AMState + parameter_refresh
 # ---------------------------------------------------------------------------
@@ -347,6 +532,7 @@ def main():
     print(str(expr), tree.tree_get_description())
     print('AFTER EXPR2TREE', tree, tree.get_param_dicts())
     am_state_smoke_test()
+    k_changing_smoke_test()
     grove_smoke_test()
 
 

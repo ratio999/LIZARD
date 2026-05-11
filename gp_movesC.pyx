@@ -970,7 +970,11 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
         return (0.0, 0.0)
 
     # ---- 1. pick leaf, op, depth, side ----
-    L = leaves[random.randrange(n_leaves_T)]
+    #parent = None
+    
+    L = tree.root.select_random_leaf()
+    parent = tree.root.find_parent(L)
+    #L = leaves[random.randrange(n_leaves_T)]
     op = random.choice(operations)
     d, log_p_d = _sample_truncated_geometric(_ADD_NODE_DEPTH_RHO, _ADD_NODE_DEPTH_MAX)
     side_left = (random.random() < 0.5)
@@ -981,14 +985,16 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 3. wrap L ----
     parent = tree.root.find_parent(L)   # None iff L is the root (single-node T)
-    new_internal = function_treeC.Node(function=L.get_fun())  # placeholder
+    
+    new_internal = function_treeC.Node()
+    #print('new internal', new_internal.get_fun().get_description())  # placeholder
     if side_left:
-        new_internal.assign_left(L)
-        new_internal.assign_right(S)
+        new_internal.assign_left(L, brute_force=True)
+        new_internal.assign_right(S, brute_force=True)
     else:
-        new_internal.assign_left(S)
-        new_internal.assign_right(L)
-    new_internal.assign_operation(op)
+        new_internal.assign_left(S, brute_force=True)
+        new_internal.assign_right(L, brute_force=True)
+    new_internal.assign_operation(op, brute_force=True)
     new_internal.update_func()
 
     if parent is None:
@@ -1100,7 +1106,7 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 3. wrap u with a fresh internal node ----
     parent = tree.root.find_parent(u)   # None iff u is the root
-    new_internal = function_treeC.Node(function=u.get_fun())  # placeholder
+    new_internal = function_treeC.Node()  # placeholder
     if side_left:
         new_internal.assign_left(u)
         new_internal.assign_right(S)
