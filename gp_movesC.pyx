@@ -336,7 +336,7 @@ cpdef legacy_subtree_mutation( function_treeC.Tree tree, functions, random_depth
     #print('nuova descr: ', tree.tree_get_description())
 
 @cython.boundscheck(True)
-cpdef subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent2):
+cpdef legacy_subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent2):
     """Crossover between two subtrees from different trees"""
     #cdef function_treeC.Node node1 = parent1.root.select_random_node()
     #cdef function_treeC.Node node2 = parent2.root.select_random_node()
@@ -358,6 +358,141 @@ cpdef subtree_crossover( function_treeC.Tree parent1, function_treeC.Tree parent
     parent1.tree_update(parent_node)
     
     refresh_params(parent1)
+
+# ---------------------------------------------------------------------------
+# Phase 2.1.K v4: Symmetric subtree_crossover (RJMCMC-aware)
+# ---------------------------------------------------------------------------
+@cython.boundscheck(True)
+cdef tuple _subtree_crossover(function_treeC.Tree parent1,
+                              function_treeC.Tree parent2):
+    """
+    subtree_crossover v2 (Phase 2.1.K). SYMMETRIC structural swap.
+
+    Pick v ~ Uniform(N(T_a)) and w ~ Uniform(N(T_b)). Let S_v, S_w be the
+    subtrees rooted at v, w. The proposal is the deterministic swap
+        T_a -> T_a' = T_a[v <- S_w]
+        T_b -> T_b' = T_b[w <- S_v].
+
+    Why no build density / no Jacobian / no g(.)
+    --------------------------------------------
+    Crossover relocates existing material; it does NOT sample any new
+    structure, and does NOT draw any new parameter values. Therefore the
+    proposal correction reduces to the node-count ratio derived in the
+    Phase 2.1.K v4 plan:
+        log q_fwd = - log |N(T_a)|  - log |N(T_b)|
+        log q_rev = - log |N(T_a')| - log |N(T_b')|
+        log q_rev - log q_fwd = log[ |N(T_a)| |N(T_b)|
+                                     / ( |N(T_a')| |N(T_b')| ) ]
+    Re-applying crossover to (root-of-S_w in T_a', root-of-S_v in T_b')
+    restores (T_a, T_b), so this swap is its own inverse on the chosen
+    pair, which is what makes the reverse density well-defined.
+
+    Parameter-name handling
+    -----------------------
+    BEFORE the swap, we move T_b's parameters into the disjoint 'b'
+    namespace via rename_prefix(parent2, 'b'). After the swap, T_a' and
+    T_b' each contain a mix of 'a' and 'b' labels. refresh_params on
+    each tree re-canonicalizes every 'b' to a fresh 'a' index past the
+    tree's current max. Renaming is a deterministic bijection on label
+    space and therefore contributes 0 to the proposal correction.
+
+    NOTE on selection-mix balance: same TODO[move-pair-balance] as the
+    other K-changing moves. Phase 2.8.
+
+    SIDE EFFECTS: parent1 AND parent2 are both mutated in place. The
+    caller (typically Grove._step) must deepcopy if originals are needed.
+
+    Returns (log_q_fwd, log_q_rev).
+    """
+    cdef function_treeC.Node v, w, parent_v, parent_w
+    cdef list nodes_a, nodes_b
+    cdef int n_a, n_b, n_a_p, n_b_p
+    cdef double log_q_fwd, log_q_rev
+
+    if parent1.root is None or parent2.root is None:
+        return (0.0, 0.0)
+
+    # ---- 1. Disjoint label spaces ---------------------------------------
+    # Every parameter currently in parent2 becomes 'b<k>'. parent1 keeps
+    # its 'a<k>'. After the swap the post-refresh step will resolve any
+    # 'b' that landed in either tree to fresh 'a' indices.
+    rename_prefix(parent2, 'b')
+
+    # ---- 2. Uniform node selection in each tree -------------------------
+    nodes_a = _flatten_nodes(parent1.root, [])
+    nodes_b = _flatten_nodes(parent2.root, [])
+    n_a = len(nodes_a)
+    n_b = len(nodes_b)
+    if n_a == 0 or n_b == 0:
+        return (0.0, 0.0)
+    v = nodes_a[random.randrange(n_a)]
+    w = nodes_b[random.randrange(n_b)]
+
+    parent_v = parent1.root.find_parent(v)   # None iff v is parent1.root
+    parent_w = parent2.root.find_parent(w)   # None iff w is parent2.root
+
+    # ---- 3. Perform the swap --------------------------------------------
+    # v and w live in disjoint trees, so there is no aliasing risk: we
+    # can rewire parent1 first, then parent2, in either order.
+    if parent_v is None:
+        parent1.root = w
+    else:
+        if parent_v.get_left() is v:
+            parent_v.assign_left(w)
+        else:
+            parent_v.assign_right(w)
+
+    if parent_w is None:
+        parent2.root = v
+    else:
+        if parent_w.get_left() is w:
+            parent_w.assign_left(v)
+        else:
+            parent_w.assign_right(v)
+
+    # ---- 4. Rebuild both trees & refresh parameter labels ---------------
+    # tree_update walks UP from the splice point recomputing functions
+    # and refreshing leaves/params/name_values. After the swap both trees
+    # need it; passing the (now updated) parent slot is the natural entry.
+    if parent_v is None:
+        parent1.tree_update(parent1.root)
+    else:
+        parent1.tree_update(parent_v)
+    if parent_w is None:
+        parent2.tree_update(parent2.root)
+    else:
+        parent2.tree_update(parent_w)
+
+    # Re-canonicalize 'b<k>' -> 'a<new>' in each tree, continuing past the
+    # tree's current max 'a' index. refresh_params is a no-op when no 'b'
+    # labels remain, so calling on both trees is always safe.
+    refresh_params(parent1)
+    refresh_params(parent2)
+
+    # ---- 5. Proposal-density correction ---------------------------------
+    n_a_p = _count_nodes(parent1.root)
+    n_b_p = _count_nodes(parent2.root)
+    log_q_fwd = -np.log(<double> n_a) - np.log(<double> n_b)
+    if n_a_p <= 0 or n_b_p <= 0:
+        # Defensive: degenerate tree post-swap should be impossible
+        # (both subtrees we moved had >=1 node), but guard anyway.
+        log_q_rev = -np.inf
+    else:
+        log_q_rev = -np.log(<double> n_a_p) - np.log(<double> n_b_p)
+
+    return (log_q_fwd, log_q_rev)
+
+
+@cython.boundscheck(True)
+cpdef tuple subtree_crossover(function_treeC.Tree parent1,
+                              function_treeC.Tree parent2):
+    """Phase 2.1.K v4 public entry point. Returns (log_q_fwd, log_q_rev).
+
+    SYMMETRIC: both trees are mutated in place. The caller (typically
+    Grove._step) must deepcopy parent1 and parent2 BEFORE calling if
+    the originals must be preserved for the MH reject path.
+    """
+    return _subtree_crossover(parent1, parent2)
 
 cpdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
     '''Renames parameters of a tree using a new prefix'''
@@ -873,7 +1008,9 @@ cpdef add_node(function_treeC.Tree tree, functions, operations):
 
 @cython.boundscheck(True)  # Per migliorare le prestazioni
 cpdef legacy_add_node( function_treeC.Tree tree, functions, operations=None, random_depth=False):
-    """Adds a node from a random location in an existing tree"""
+    """Adds a node from a random location in an existing tree
+    NOT ONLY DEPRECATED: THIS IS ACTUALLY WRONG. DO NOT USE.
+    """
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
     cdef str op = random.choice(operations)
