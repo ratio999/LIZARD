@@ -89,7 +89,20 @@ cdef class Grove:
 
         self.acceptance_count = 0.0
         self.proposal_count = 0.0
+        self.move_proposals = {
+            "point_mutation":     0,
+            "hoist_mutation":     0,
+            "add_node":           0,
+            "split":              0,
+            "subtree_mutation":   0,
+            "subtree_crossover":  0,
+            "parameter_refresh":  0,
+        }
+        self.move_accepts = dict.fromkeys(self.move_proposals, 0)
         self.cache = {}
+        self._am_states = {}
+        self.sigma = 1.0
+        self.pr_prob = 0.02
         if self.burn_in:
             # Run two-stage burn-in procedure to initialize trees
             # Stage 1: Generate all depth-1 combinations (primitive op primitive)
@@ -177,32 +190,41 @@ cdef class Grove:
         Select a move and parameters based on temperature.
         Returns (name, kwargs_dict).
         """
+        
+        #if random.random() < self.pr_prob:
+        #     return ("parameter_refresh", {})
         # normalize temperature to [0, +inf): higher → more disruptive moves
         cdef double tau = self.T / self.base_temp
         # probabilities
         # small/local moves favored when tau << 1
-        p_point = 0.35 * (1.0 / (1.0 + tau)) + 0.05
-        p_hoist = 0.20 * (1.0 / (1.0 + tau)) + 0.05
-        p_add   = 0.20 * (1.0 / (1.0 + tau)) + 0.05
-        # bigger moves favored when tau >> 1
+        p_point = 0.30 * (1.0 / (1.0 + tau)) + 0.05
+        p_hoist = 0.15 * (1.0 / (1.0 + tau)) + 0.05
+        p_add   = 0.15 * (1.0 / (1.0 + tau)) + 0.05
+        # mid-scale: split is birth-from-internal, useful at all T
+        p_split = 0.10
+        # global moves favored when tau >> 1
         p_subtree = 0.15 * (tau / (1.0 + tau)) + 0.10
         p_cross   = 0.10 * (tau / (1.0 + tau)) + 0.05
-        probs = np.array([p_point, p_hoist, p_add, p_subtree, p_cross], dtype=np.float64)
+        probs = np.array([p_point, p_hoist, p_add, p_split, p_subtree, p_cross],
+                        dtype=np.float64)
         probs = probs / probs.sum()
-        idx = int(np.random.choice(np.arange(5), p=probs))
-        random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
+        idx = int(np.random.choice(np.arange(6), p=probs))
+        #random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
             return ("point_mutation", {"operations": self.operations})
         elif idx == 1:
             return ("hoist_mutation", {})
         elif idx == 2:
-            return ("add_node", {"operations": self.operations, "random_depth": random_depth})
+            return ("add_node", {"operations": self.operations})
         elif idx == 3:
-            return ("subtree_mutation", {"random_depth": random_depth})
+            return ("split", {"operations": self.operations})
+        elif idx == 4:
+            return ("subtree_mutation", {})
         else:
-            return ("subtree_crossover", {})  # needs donor tree
+            return ("subtree_crossover", {})
 
-    cdef _propose(self, int i, int max_attempts=2) :
+
+    cdef tuple _propose(self, int i, int max_attempts=2) :
         """
         Build a proposal from tree i using a move drawn from the temperature-dependent kernel.
         Returns a deepcopy candidate (original tree remains unchanged).
@@ -211,21 +233,27 @@ cdef class Grove:
         cdef str move_name
         cdef dict kwargs
         cdef int attempts = 0
-               
+        cdef int donor_idx
+        cdef double lqf, lqr
+
         while attempts < max_attempts:
             cand = deepcopy(self.trees[i])
             move_name, kwargs = self._choose_move()
             if move_name == "point_mutation":
-                gp_movesC.point_mutation(cand, self.funcs, kwargs.get("operations", None))
+                lqf, lqr = gp_movesC.point_mutation(
+                    cand, self.funcs, kwargs.get("operations", None))
             elif move_name == "hoist_mutation":
-                gp_movesC.hoist_mutation(cand)
+                lqf, lqr = gp_movesC.hoist_mutation(
+                    cand, self.funcs, self.operations)
             elif move_name == "add_node":
-                gp_movesC.add_node(cand, self.funcs,
-                                kwargs.get("operations", None),
-                                kwargs.get("random_depth", False))
+                lqf, lqr = gp_movesC.add_node(
+                    cand, self.funcs, kwargs.get("operations", None))
+            elif move_name == "split":
+                lqf, lqr = gp_movesC.split(
+                    cand, self.funcs, kwargs.get("operations", None))
             elif move_name == "subtree_mutation":
-                #print(kwargs.get('random_depth', False))
-                gp_movesC.subtree_mutation(cand, self.funcs)
+                    #print(kwargs.get('random_depth', False))
+                lqf, lqr = gp_movesC.subtree_mutation(cand, self.funcs)
                                         #kwargs.get("random_depth", False)) USED ONLY IF LEGACY SUBTREE
             elif move_name == "subtree_crossover":
                 # pick a donor tree (not i), deep-copied to keep original intact
@@ -234,22 +262,246 @@ cdef class Grove:
                     while donor_idx == i:
                         donor_idx = random.randrange(self.size)
                     donor = deepcopy(self.trees[donor_idx])
-                    gp_movesC.subtree_crossover(cand, donor)
+                    lqf, lqr = gp_movesC.subtree_crossover(cand, donor)
                 else:
-                    # fallback to a local move if only one tree
-                    gp_movesC.point_mutation(cand, self.funcs, self.operations)
+                    lqf, lqr = gp_movesC.point_mutation(
+                        cand, self.funcs, self.operations)
+                    move_name = "point_mutation"
             else:
-                # default safety: point mutation
-                gp_movesC.point_mutation(cand, self.funcs, self.operations)
-            
+                lqf, lqr = gp_movesC.point_mutation(
+                    cand, self.funcs, self.operations)
+                move_name = "point_mutation"
+
             if cand.is_valid(self.domain):
                 
-                return cand
+                return (cand, lqf, lqr, move_name)
             attempts += 1
             #print(attempts)
-        return deepcopy(self.trees[i])
+        return (None, 0.0, 0.0, move_name)
+        #return deepcopy(self.trees[i])
+
+    cdef _step_parameter_refresh(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+        """
+        Phase 2.1.PR. Self-accepting parameter refresh on a uniformly chosen
+        tree of this grove.
+
+        Flow
+        ----
+        1. Pick i uniformly in {0, ..., size-1}.
+        2. If K(tree_i) == 0, count as a trivially-accepted no-op (PR on a
+           parameter-free tree is the identity move).
+        3. Look up / lazily create the per-topology AMState keyed by
+           tree.tree_get_description() (D1, D6). If a cached state exists
+           but its K disagrees with the current tree's K (e.g. a structural
+           move was just accepted under the same description string -- which
+           shouldn't happen with a canonical key, but we guard anyway),
+           rebuild the AMState from scratch.
+        4. Delegate to gp_movesC.parameter_refresh, which runs ONE step of
+           the AM-tempered MH (D2 raw-likelihood scoring, D7 tempering by
+           1/T) and returns (accepted, 0.0, 0.0). The (0, 0) is a sentinel
+           meaning "PR has already accepted/rejected"; we MUST NOT re-score.
+        5. On accept, refresh self.root_posteriors[i] from the new theta and
+           bump counters.
+
+        Why this is NOT in the structural _propose path
+        -----------------------------------------------
+        parameter_refresh is the only move with persistent state and the
+        only move whose acceptance is decided internally. Folding it into
+        _propose / outer-MH would either (a) double-evaluate the
+        likelihood (the outer MH would re-score after PR already accepted,
+        composing two MH kernels with the same target -- correct but no
+        longer the AM kernel that PR was tuned for), or (b) silently
+        sidestep the AM adaptation entirely. Keeping it on its own branch
+        preserves the AM kernel as written.
+
+        Why we do not feed (lqf, lqr) from PR into the outer MH
+        -------------------------------------------------------
+        PR's proposal is symmetric (Gaussian) -> log_q_rev - log_q_fwd = 0.
+        The (0, 0) it returns is a convention, not a real proposal density
+        for the outer MH. The accept/reject is already done.
+        """
+        if self.size == 0:
+            return False
+        cdef int i = random.randrange(self.size)
+        cdef function_treeC.Tree tree = self.trees[i]
+        cdef int K = len(tree.params)
+
+        # Counters: PR is always "proposed" (even no-op K=0 case).
+        self.proposal_count += 1.0
+        self.move_proposals["parameter_refresh"] = \
+            self.move_proposals.get("parameter_refresh", 0) + 1
+
+        if K == 0:
+            # Identity move on a parameter-free tree. Count as accepted so
+            # the per-move rate doesn't get artificially deflated by topologies
+            # that PR cannot meaningfully act on.
+            self.acceptance_count += 1.0
+            self.move_accepts["parameter_refresh"] = \
+                self.move_accepts.get("parameter_refresh", 0) + 1
+            return True
+
+        # Per-topology AM state (D1, D6). Key on canonical description --
+        # the same key Phase 2.7(f) BIC cache will use.
+        cdef str key = tree.tree_get_description()
+        cdef gp_movesC.AMState am
+        cdef list names
+        if key not in self._am_states:
+            names = [p.get_fun().get_description() for p in tree.params]
+            am = gp_movesC.AMState(names)
+            self._am_states[key] = am
+        else:
+            am = <gp_movesC.AMState> self._am_states[key]
+            if am.K != K:
+                # Defensive: same description string but K mismatch.
+                # Should not occur if tree_get_description is canonical;
+                # rebuild to keep PR safe.
+                names = [p.get_fun().get_description() for p in tree.params]
+                am = gp_movesC.AMState(names)
+                self._am_states[key] = am
+
+        cdef bint accepted
+        cdef double _lqf, _lqr  # sentinels (0, 0); not used downstream
+        accepted, _lqf, _lqr = gp_movesC.parameter_refresh(
+            tree, y, self.sigma, am, self.T)
+
+        if accepted:
+            # theta changed in place -> cached posterior is stale.
+            # Refresh against the same scorer used by the structural path
+            # so root_posteriors stays comparable across move types.
+            self.root_posteriors[i] = tree.get_superficial_posterior(
+                y, self.lambda_reg)
+            self.acceptance_count += 1.0
+            self.move_accepts["parameter_refresh"] = \
+                self.move_accepts.get("parameter_refresh", 0) + 1
+            # TODO[Phase 2.7 D8]: when the BIC cache lands, mark
+            # self._bic_cache[key].dirty = True here so the next
+            # structural-move scoring re-runs update_parameters from
+            # the freshly accepted theta.
+            return True
+        return False
 
     cdef _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+        """
+        One MH step on a uniformly chosen tree in this grove. Returns True
+        if the proposal was accepted.
+
+        Acceptance rule (Phase 2.2):
+            log_alpha = beta * [(new_post + new_prior) - (old_post + old_prior)]
+                    + (log_q_rev - log_q_fwd)
+        with beta = 1/T tempering the target only. The proposal correction
+        is applied at face value (see Phase 1.3, Phase 2.2 derivation).
+        """
+        if self.size == 0:
+            return False
+                # Front-of-queue PR branch: PR is self-accepting (it runs its own
+        # tempered MH internally with the AM kernel) and must NOT go
+        # through the structural _propose / log_alpha path.
+        if random.random() < self.pr_prob:
+            return self._step_parameter_refresh(y)
+        cdef int i = random.randrange(self.size)
+        cdef function_treeC.Tree cand
+        cdef double lqf, lqr
+        cdef str move_name
+        cdef tuple proposal
+
+        proposal = self._propose(i)
+        cand     = <function_treeC.Tree> proposal[0]
+        lqf      = <double> proposal[1]
+        lqr      = <double> proposal[2]
+        move_name = <str>   proposal[3]
+
+        self.proposal_count += 1.0
+        self.move_proposals[move_name] = self.move_proposals.get(move_name, 0) + 1
+
+        # Validity-failed proposal -> hard reject (already counted as proposed).
+        if cand is None:
+            return False
+        # Off-support reverse density -> hard reject without scoring.
+        if not np.isfinite(lqr):
+            return False
+
+        # Cache-fill for current tree if needed.
+        if np.isnan(self.root_posteriors[i]):
+            self.root_posteriors[i] = self.trees[i].get_superficial_posterior(
+                y, self.lambda_reg)
+        cdef double old_post = float(self.root_posteriors[i])
+
+        # Refit theta on the candidate (BIC-style profile; Phase 2.7 will
+        # formalise this into an explicit BIC scorer).
+        if len(cand.param_values) > 0:
+            cand.update_parameters(self.domain, y,
+                                self.method_str, self.use_gradients)
+
+        cdef double new_post = float(cand.get_superficial_posterior(
+            y, self.lambda_reg))
+        if not np.isfinite(new_post):
+            return False
+
+        # Polya prior contributions (zero when self.polya is None).
+        cdef double old_prior = 0.0
+        cdef double new_prior = 0.0
+        cdef list new_path = None
+        if self.polya is not None:
+            old_prior = self.polya.log_prior(
+                self.polya.extract_path(self.trees[i].get_root())
+            )
+            new_path  = self.polya.extract_path(cand.get_root())
+            new_prior = self.polya.log_prior(new_path)
+
+        cdef double dtarget = (new_post + new_prior) - (old_post + old_prior)
+        cdef double q_corr  = lqr - lqf
+        cdef double log_alpha
+
+        # Tempering: beta = 1/T multiplies dtarget ONLY. Greedy if T <= 0.
+        if self.T <= 0.0:
+            # Greedy acceptance on the target diff; q_corr is the tiebreaker
+            # at exact equality. Strictly: accept iff target strictly improves.
+            if dtarget > 0.0:
+                log_alpha = 0.0
+            elif dtarget == 0.0 and q_corr >= 0.0:
+                log_alpha = 0.0
+            else:
+                log_alpha = -np.inf
+        else:
+            log_alpha = dtarget / self.T + q_corr
+
+        cdef double u
+        cdef bint accepted
+        if log_alpha >= 0.0:
+            accepted = True
+        elif log_alpha == -np.inf:
+            accepted = False
+        else:
+            u = random.random()
+            # u == 0 would give log(u) = -inf; accept (probability-zero edge).
+            accepted = (u <= 0.0) or (np.log(u) < log_alpha)
+
+        if accepted:
+            self.trees[i] = cand
+            self.root_posteriors[i] = new_post
+            self.acceptance_count += 1.0
+            self.move_accepts[move_name] = self.move_accepts.get(move_name, 0) + 1
+            if self.polya is not None and new_path is not None:
+                self.polya.update_path(new_path)
+            return True
+        return False
+
+    cpdef dict move_stats(self):
+        """Per-move (proposed, accepted, rate) summary. Feeds Phase 2.8."""
+        cdef dict out = {}
+        cdef str name
+        cdef int n_p, n_a
+        for name in self.move_proposals:
+            n_p = int(self.move_proposals[name])
+            n_a = int(self.move_accepts.get(name, 0))
+            out[name] = {
+                "proposed": n_p,
+                "accepted": n_a,
+                "rate": (float(n_a) / n_p) if n_p > 0 else 0.0,
+            }
+        return out
+
+    cdef legacy_step(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
         """
         One MH step on a random tree in this grove.
         Returns True if accepted.
@@ -304,7 +556,7 @@ cdef class Grove:
         """
         cdef int t
         for t in range(n_steps):
-            print(t)
+            #print(t)
             self._step(y)
 
     cpdef acceptance_rate(self):

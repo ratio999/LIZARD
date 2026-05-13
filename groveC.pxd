@@ -28,6 +28,14 @@ cdef class Grove:
     cdef dict cache
     # Optional Pólya tree prior (None => behaves as before).
     cdef public object polya
+    cdef public dict move_proposals
+    cdef public dict move_accepts
+    cdef public dict _am_states
+    # Noise scale for raw-likelihood scoring inside parameter_refresh.
+    # Placeholder until Phase 2.7(a) wires sigma=None -> profiled sigma.
+    cdef public double sigma
+    # PR mixture weight (Phase 2.1.PR D3, default 0.02).
+    cdef public double pr_prob
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
@@ -45,10 +53,13 @@ cdef class Grove:
     cdef  _choose_move(self)
     cpdef compute_posteriors(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
     
-    cdef  _propose(self, int i, int max_attempts=?)
+    cdef  tuple _propose(self, int i, int max_attempts=?)
 
-    cdef  _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cdef  legacy_step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cdef _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
+    cpdef dict move_stats(self)
+    cdef _step_parameter_refresh(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
 
     cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
                                 bint replace_all=?, bint optimize_params=?)

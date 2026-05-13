@@ -447,8 +447,10 @@ def grove_smoke_test():
     
     # Now run MCMC on the initialized grove
     print("\n--- Running MCMC evolution ---")
+    t0 = time.time()
     grove.run(y, n_steps=50)
-    
+    t1 = time.time()
+    print(f"MCMC run completed in {t1 - t0:.2f} seconds")
     # Report
     print("\n" + "=" * 60)
     print(f"Final acceptance rate: {grove.acceptance_rate():.3f}")
