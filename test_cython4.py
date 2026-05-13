@@ -448,9 +448,17 @@ def grove_smoke_test():
     # Now run MCMC on the initialized grove
     print("\n--- Running MCMC evolution ---")
     t0 = time.time()
-    grove.run(y, n_steps=50)
+    grove.run(y, n_steps=500)
     t1 = time.time()
     print(f"MCMC run completed in {t1 - t0:.2f} seconds")
+
+    # After grove.run(...):
+    stats = grove.move_stats()
+    print("Per-move stats:")
+    for name, s in stats.items():
+        print(f"  {name:20s} proposed={s['proposed']:5d} "
+            f"accepted={s['accepted']:5d}  rate={s['rate']:.3f}")
+    print(f"AM states cached: {len(grove._am_states)} topologies")
     # Report
     print("\n" + "=" * 60)
     print(f"Final acceptance rate: {grove.acceptance_rate():.3f}")
@@ -588,6 +596,7 @@ def main():
     am_state_smoke_test()
     k_changing_smoke_test()
     grove_smoke_test()
+    
 
 
 

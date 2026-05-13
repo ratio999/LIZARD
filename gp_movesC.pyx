@@ -217,8 +217,8 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
     cdef double log_q_rev = 0.0
     if tree.root.is_leaf():
         #print('actually addnode')
-        add_node(tree, functions)
-        return
+        
+        return add_node(tree, functions)
     parent_node = None
     cdef bint is_par = True
     # ---- 1. Uniform node selection (root allowed) ------------------------
