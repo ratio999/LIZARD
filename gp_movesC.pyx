@@ -44,6 +44,12 @@ cdef list _flatten_nodes(function_treeC.Node node, list out):
         _flatten_nodes(node.right, out)
     return out
 
+cpdef list flatten_nodes(function_treeC.Node node, list out=None):
+    """Wrapper around _flatten_nodes that creates the output list."""
+    if out is None:
+        out = []
+    return _flatten_nodes(node, out)
+
 
 cdef function_treeC.Node _select_uniform_node(function_treeC.Tree tree):
     """Pick one node of `tree` uniformly at random over all nodes."""
@@ -406,7 +412,7 @@ cdef tuple _subtree_crossover(function_treeC.Tree parent1,
     """
     cdef function_treeC.Node v, w, parent_v, parent_w
     cdef list nodes_a, nodes_b
-    cdef int n_a, n_b, n_a_p, n_b_p
+    cdef int n_int_a, n_int_b, n_int_a_p, n_int_b_p
     cdef double log_q_fwd, log_q_rev
 
     if parent1.root is None or parent2.root is None:
@@ -419,14 +425,14 @@ cdef tuple _subtree_crossover(function_treeC.Tree parent1,
     rename_prefix(parent2, 'b')
 
     # ---- 2. Uniform node selection in each tree -------------------------
-    nodes_a = _flatten_nodes(parent1.root, [])
-    nodes_b = _flatten_nodes(parent2.root, [])
-    n_a = len(nodes_a)
-    n_b = len(nodes_b)
-    if n_a == 0 or n_b == 0:
+    nodes_a = [n for n in _flatten_nodes(parent1.root, []) if not n.is_leaf()]
+    nodes_b = [n for n in _flatten_nodes(parent2.root, []) if not n.is_leaf()]
+    n_int_a = len(nodes_a)
+    n_int_b = len(nodes_b)
+    if n_int_a == 0 or n_int_b == 0:
         return (0.0, 0.0)
-    v = nodes_a[random.randrange(n_a)]
-    w = nodes_b[random.randrange(n_b)]
+    v = nodes_a[random.randrange(n_int_a)]
+    w = nodes_b[random.randrange(n_int_b)]
 
     parent_v = parent1.root.find_parent(v)   # None iff v is parent1.root
     parent_w = parent2.root.find_parent(w)   # None iff w is parent2.root
@@ -466,19 +472,21 @@ cdef tuple _subtree_crossover(function_treeC.Tree parent1,
     # Re-canonicalize 'b<k>' -> 'a<new>' in each tree, continuing past the
     # tree's current max 'a' index. refresh_params is a no-op when no 'b'
     # labels remain, so calling on both trees is always safe.
-    refresh_params(parent1)
-    refresh_params(parent2)
-
+    #refresh_params(parent1)
+    #refresh_params(parent2)
+    _compact_param_labels(parent1)
+    _compact_param_labels(parent2)
     # ---- 5. Proposal-density correction ---------------------------------
-    n_a_p = _count_nodes(parent1.root)
-    n_b_p = _count_nodes(parent2.root)
-    log_q_fwd = -np.log(<double> n_a) - np.log(<double> n_b)
-    if n_a_p <= 0 or n_b_p <= 0:
-        # Defensive: degenerate tree post-swap should be impossible
-        # (both subtrees we moved had >=1 node), but guard anyway.
+    n_int_a_p = sum(1 for n in _flatten_nodes(parent1.root, []) if not n.is_leaf())
+    n_int_b_p = sum(1 for n in _flatten_nodes(parent2.root, []) if not n.is_leaf())
+    log_q_fwd = -np.log(<double> n_int_a) - np.log(<double> n_int_b)
+    if n_int_a_p <= 0 or n_int_b_p <= 0:
+        # Defensive: should be impossible since both swapped-in subtrees
+        # were internal nodes themselves.
         log_q_rev = -np.inf
     else:
-        log_q_rev = -np.log(<double> n_a_p) - np.log(<double> n_b_p)
+        log_q_rev = -np.log(<double> n_int_a_p) - np.log(<double> n_int_b_p)
+
 
     return (log_q_fwd, log_q_rev)
 
@@ -505,6 +513,61 @@ cpdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
         node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain, compute_grad = False)
     tree.tree_update(tree.root)
     
+cdef _compact_param_labels(function_treeC.Tree tree, str prefix='a'):
+    """Re-label every parameter in `tree` to a contiguous
+    `<prefix>0`, `<prefix>1`, ... sequence in tree.params order.
+
+    Why this exists
+    ---------------
+    The legacy refresh_params only renames 'b<k>' -> 'a<max_a + 1 + ...>',
+    which leaves gaps when the swap removed some 'a' indices (e.g. a swap
+    that drops the subtree containing a0 leaves {a2, b0} -> {a2, a3}
+    instead of {a0, a1}). _compact_param_labels rebuilds the index space
+    from scratch every time, so the resulting label set is always
+    contiguous starting at 0.
+
+    Why it is RJMCMC-safe
+    ---------------------
+    Renaming is a deterministic bijection on label space; the prior factor
+    p_Polya(T) and the likelihood L(y | T) depend on the tree's labelled
+    structure only through value lookup, which is rebuilt by tree_update
+    before any score is computed. The rename therefore contributes 0 to
+    the MH proposal correction.
+
+    Repeat names (e.g. a tree of the form a0 + a0) are preserved as a
+    single shared label by going through the rename_map.
+    """
+    cdef function_treeC.Node node
+    cdef list params = list(tree.params)
+    cdef dict rename_map = {}
+    cdef int counter = 0
+    cdef str old_name, new_name
+    # Pass 1: build the map in tree.params order. tree.params has already
+    # been canonicalised by name via sort_params during tree_update, so
+    # the resulting indexing is deterministic given the structure.
+    for node in params:
+        old_name = node.function.get_description()
+        if old_name not in rename_map:
+            rename_map[old_name] = f"{prefix}{counter}"
+            counter += 1
+    # Pass 2: apply. Reading node.function.get_description() inside the
+    # loop is safe even with renames-in-flight, because each Node owns
+    # its own RealFunctionC and renaming one Node never aliases another.
+    for node in params:
+        old_name = node.function.get_description()
+        new_name = rename_map[old_name]
+        if new_name == old_name:
+            continue
+        node.function = real_functionC.RealFunctionC.from_string(
+            new_name, tree.domain, compute_grad=False)
+    # Rebuild internal functions bottom-up + refresh tree metadata.
+    function_treeC._post_order_update(tree.root)
+    tree.update_tree_description()
+    tree.leaves = tree.get_leaves()
+    tree.params = tree.get_params()
+    tree.param_values, tree.name_values, tree.penalty = tree.get_param_values()
+
+
 cdef refresh_params(function_treeC.Tree tree):
     '''Conforms all parameters to one prefix'''
     

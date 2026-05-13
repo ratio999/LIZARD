@@ -9,7 +9,7 @@ import numpy as np
 from function_treeC import Tree, expr_to_tree
 from gp_movesC import (subtree_mutation, subtree_crossover, point_mutation,
                        hoist_mutation, add_node, replace_with_subtree, add_node,
-                       AMState, parameter_refresh)
+                       AMState, parameter_refresh, flatten_nodes)
 from groveC import Grove
 import matplotlib.pyplot as plt
 from gp_movesC import split
@@ -31,7 +31,58 @@ def _count_internal_py(node):
         return 0
     return 1 + _count_internal_py(node.get_left()) + _count_internal_py(node.get_right())
 
+def crossover_smoke_test():
+    print("[X] subtree_crossover symmetric swap")
+    x_sym, a0 = sp.Symbol('x'), sp.Symbol('a0')
+    domain = np.linspace(0.001, 10, 50).astype(np.float64)
+    funs = ["sin(x)", "cos(x)", "x"]
+    for _ in range(50):
+        ta = expr_to_tree(sp.sin(x_sym) + a0, domain, funs)
+        tb = expr_to_tree(sp.cos(x_sym) * a0, domain, funs)
+        n_a, n_b = _count_nodes_py(ta.get_root()), _count_nodes_py(tb.get_root())
+        ni_a, ni_b = _count_internal_py(ta.get_root()), _count_internal_py(tb.get_root())
+        lqf, lqr = subtree_crossover(ta, tb)
+        n_ap, n_bp = _count_nodes_py(ta.get_root()), _count_nodes_py(tb.get_root())
+        ni_ap, ni_bp = _count_internal_py(ta.get_root()), _count_internal_py(tb.get_root())
+        # Conservation of total node count: every node either stays put or
+        # crosses to the other tree. Therefore n_a + n_b == n_a' + n_b'.
+        assert n_a + n_b == n_ap + n_bp, \
+            f"node total not conserved: {n_a}+{n_b} -> {n_ap}+{n_bp}"
+        # Option-1 (internal-only) selection densities.
+        expected_lqf = -np.log(ni_a) - np.log(ni_b)
+        expected_lqr = -np.log(ni_ap) - np.log(ni_bp)
+        assert abs(lqf - expected_lqf) < 1e-10, \
+            f"lqf {lqf} != {expected_lqf} (ni_a={ni_a}, ni_b={ni_b})"
+        assert abs(lqr - expected_lqr) < 1e-10, \
+            f"lqr {lqr} != {expected_lqr} (ni_ap={ni_ap}, ni_bp={ni_bp})"
+        # No 'b'-prefixed params should remain after refresh.
+        for tree in (ta, tb):
+            for p in tree.get_params():
+                name = p.get_fun().get_description()
+                assert not name.startswith('b'), f"unrefreshed label {name}"
+    print("    crossover OK (50 random pairs, conservation + densities + labels)")
+    # Crossover post-condition: parameter labels must be contiguous a0..a{K-1}.
+    for tree in (ta, tb):
+        names = sorted(p.get_fun().get_description() for p in tree.get_params())
+        expected = [f"a{i}" for i in range(len(names))]
+        assert sorted(names) == expected, \
+            f"non-contiguous labels after crossover: {names}"
 
+    # All swap targets must be internal nodes (sanity for option-1 restriction):
+    # we test by counting. After many crossovers leaves(T_a)+leaves(T_b) is
+    # conserved (only internal subtrees were swapped, and a swap maps internal
+    # subtrees to internal subtrees, so the leaf populations of each tree shuffle
+    # with no creation/destruction of leaves).
+    n_leaves_before = (
+        sum(1 for n in flatten_nodes(ta.get_root()) if n.is_leaf()) +
+        sum(1 for n in flatten_nodes(tb.get_root()) if n.is_leaf())
+    )
+    subtree_crossover(ta, tb)
+    n_leaves_after = (
+        sum(1 for n in flatten_nodes(ta.get_root()) if n.is_leaf()) +
+        sum(1 for n in flatten_nodes(tb.get_root()) if n.is_leaf())
+    )
+    assert n_leaves_before == n_leaves_after
 def k_changing_smoke_test():
     """Diagnostics for Phase 2.1.K K-changing moves.
 
@@ -416,12 +467,12 @@ def main():
     x = np.linspace(0, 10, 100).astype(np.float64)
     y = np.sin(x)
     
-    tree1 = Tree(depth=2, functions=functions, x=x, Npars = 2, value=np.array([3, 4, 5, 6, 7, 8]))
+    tree1 = Tree(depth=3, functions=functions, x=x, Npars = 2, value=np.array([3, 4, 5, 6, 7, 8]))
     
     print(tree1.tree_get_description())
     tree1.compute_fitness_tree(y)
     tree1.print_fitness_tree()
-    tree2 = Tree(depth=5, functions=functions, x=x, Npars =24, value=np.array([545, 546, 547, 548]))
+    tree2 = Tree(depth=4, functions=functions, x=x, Npars =4, value=np.array([545, 546, 547, 548]))
     n=0
     for param in tree2.get_params():
         param.set_value(n)
@@ -531,6 +582,7 @@ def main():
     tree = expr_to_tree(expr, domain,functions)
     print(str(expr), tree.tree_get_description())
     print('AFTER EXPR2TREE', tree, tree.get_param_dicts())
+    crossover_smoke_test()
     am_state_smoke_test()
     k_changing_smoke_test()
     grove_smoke_test()

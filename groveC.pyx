@@ -304,6 +304,7 @@ cdef class Grove:
         """
         cdef int t
         for t in range(n_steps):
+            print(t)
             self._step(y)
 
     cpdef acceptance_rate(self):

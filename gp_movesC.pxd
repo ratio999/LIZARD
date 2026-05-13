@@ -3,6 +3,7 @@ cimport real_functionC
 cimport function_treeC
 
 cdef list _flatten_nodes(function_treeC.Node node, list out)
+cpdef list flatten_nodes(function_treeC.Node node, list out=?)
 cdef function_treeC.Node _select_uniform_node(function_treeC.Tree tree)
 cdef bint _is_perfect_binary(function_treeC.Node node, int h)
 cdef list _collect_parameter_leaves(function_treeC.Node node, list out)
@@ -44,7 +45,7 @@ cpdef root_replacement(function_treeC.Tree tree)
 #cpdef prune_node(function_treeC.Tree tree, function_treeC.Node node_to_prune=?)
 cpdef rename_prefix(function_treeC.Tree tree, str new_prefix=?)
 cdef refresh_params(function_treeC.Tree tree)
-
+cdef _compact_param_labels(function_treeC.Tree tree, str prefix=?)
 cpdef rename_prefix_downwards(function_treeC.Tree tree, str new_prefix = ?)
 
 cdef refresh_params_downwards(function_treeC.Tree tree)
