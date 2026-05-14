@@ -36,6 +36,7 @@ cdef class PolyaTree:
     cpdef double log_prior(self, list construction_path)
     cpdef void update_path(self, list construction_path)
     cpdef list extract_path(self, function_treeC.Node node)
+    cdef void _legacy_extract_recursive(self, function_treeC.Node node, list path)
     cdef void _extract_recursive(self, function_treeC.Node node, list path)
     cpdef double log_prior_from_tree(self, function_treeC.Node root_node)
     cpdef list sample_construction_path(self, int max_steps=?)

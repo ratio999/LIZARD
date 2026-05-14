@@ -240,7 +240,7 @@ cdef class PolyaTree:
             out.append(self.add_primitive(d))
         return out
 
-    cdef void _extract_recursive(self, function_treeC.Node node, list path):
+    cdef void _legacy_extract_recursive(self, function_treeC.Node node, list path):
         cdef str op, desc
         cdef int idx
         if node is None:
@@ -258,7 +258,7 @@ cdef class PolyaTree:
         self._extract_recursive(node.get_left(), path)
         self._extract_recursive(node.get_right(), path)
 
-        cdef void _extract_recursive(self, function_treeC.Node node, list path):
+    cdef void _extract_recursive(self, function_treeC.Node node, list path):
             """Phase 2.3: no silent drops. Unknown leaves auto-register (default)
             or raise; unknown ops raise unless explicitly opted out."""
             cdef str op, desc
