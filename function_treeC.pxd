@@ -109,6 +109,11 @@ cdef class Tree:
 
     cpdef get_superficial_posterior(self, y, double lambda_reg=?)
 
+    cpdef double log_marginal_bic(self,
+                                  cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                  bint optimize=?,
+                                  bint use_gradients=?,
+                                  str method_str=?)
 
     cpdef is_defined(self, x=?)
 

@@ -597,7 +597,7 @@ cdef class Tree:
         print(self.build_posterior_tree(self.root))
 
     cdef compute_superficial_posterior(self, y, double lambda_reg = 0.0):
-        self.root.set_posterior(y, self.name_values, self.penalty*lambda_reg)
+        self.root.set_posterior(y, self.name_values, self.penalty * lambda_reg)
 
     cpdef get_superficial_posterior(self, y, double lambda_reg = 0.0):
         if self.root.posterior is None:
@@ -611,6 +611,44 @@ cdef class Tree:
         cdef dict input_pars = self.name_values
         return self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
     
+    cpdef double log_marginal_bic(self,
+                                  cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                  bint optimize=True,
+                                  bint use_gradients=False,
+                                  str method_str='L-BFGS-B'):
+        cdef int N = y.shape[0]
+        cdef int K = len(self.params)
+        cdef double ssr, sigma2_hat, log_L, log_marg
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] y_pred, resid
+        cdef object raw
+
+        if N <= 0 or K >= N:
+            return -np.inf
+
+        # 1. Optimise parameters to their MLE (in place).
+        if optimize and K > 0:
+            
+            self._update_parameters(self.domain, y,
+                                    method_str, use_gradients)
+        
+        # 2. Evaluate the tree at current theta (= theta_hat after step 1).
+        
+        raw = self.root.function.evaluate(self.domain, self.name_values)
+        y_pred = np.asarray(raw, dtype=np.float64).ravel()
+        
+        if y_pred.shape[0] != N:
+            return -np.inf
+
+        resid = y - y_pred
+        ssr = float(np.nansum(resid * resid))
+        
+        # 3. Profile-sigma log-likelihood + BIC complexity penalty.
+        sigma2_hat = ssr / N
+        log_L = -0.5 * N * (np.log(2.0 * np.pi * sigma2_hat) + 1.0)
+        log_marg = log_L - 0.5 * K * np.log(N)
+        
+        return log_marg
+
     cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         str method_str='L-BFGS-B', bint use_gradients=False):
