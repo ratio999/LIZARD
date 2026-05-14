@@ -611,7 +611,13 @@ cdef class Tree:
         cdef dict input_pars = self.name_values
         return self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
     
-    cpdef double log_marginal_bic(self,
+    cpdef double log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                           bint optimize=True,
+                           bint use_gradients=False,
+                           str method_str='L-BFGS-B'):
+        return self._log_marginal_bic(y, optimize, use_gradients, method_str)
+
+    cdef double _log_marginal_bic(self,
                                   cnp.ndarray[cnp.float64_t, ndim=1] y,
                                   bint optimize=True,
                                   bint use_gradients=False,

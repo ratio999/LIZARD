@@ -177,8 +177,13 @@ cdef class Grove:
         else:
             for i in range(self.size):
                 #print('FITNESS', self.trees[i])
-                self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y, self.lambda_reg)
-
+                #BELOW IS DEPRECATED
+                #self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y, self.lambda_reg)
+                self.root_posteriors[i] = self.trees[i].log_marginal_bic(
+                    y, optimize=True,
+                    use_gradients=self.use_gradients,
+                    method_str=self.method_str,
+                )
     cpdef best_index(self):
         return int(np.nanargmax(self.root_posteriors))
 
@@ -368,15 +373,26 @@ cdef class Grove:
             # theta changed in place -> cached posterior is stale.
             # Refresh against the same scorer used by the structural path
             # so root_posteriors stays comparable across move types.
-            self.root_posteriors[i] = tree.get_superficial_posterior(
+            '''self.root_posteriors[i] = tree.get_superficial_posterior(
                 y, self.lambda_reg)
             self.acceptance_count += 1.0
             self.move_accepts["parameter_refresh"] = \
                 self.move_accepts.get("parameter_refresh", 0) + 1
-            # TODO[Phase 2.7 D8]: when the BIC cache lands, mark
+            # TODO[Phase 2.7 D8]: when the BIC cache lands, mark'''
+            
             # self._bic_cache[key].dirty = True here so the next
             # structural-move scoring re-runs update_parameters from
             # the freshly accepted theta.
+            # Phase 2.7: BIC is the score at the topology's MLE and is
+            # independent of the current theta. PR diffuses theta around
+            # theta_hat without changing the BIC of this topology, so the
+            # cache stays valid — do NOT refresh root_posteriors here.
+            # The next structural-move proposal will re-optimise the OLD
+            # tree from the freshly accepted theta as a warm start (cheap)
+            # via log_marginal_bic on the cache-fill path.
+            self.acceptance_count += 1.0
+            self.move_accepts["parameter_refresh"] = \
+                self.move_accepts.get("parameter_refresh", 0) + 1
             return True
         return False
 
@@ -422,18 +438,36 @@ cdef class Grove:
 
         # Cache-fill for current tree if needed.
         if np.isnan(self.root_posteriors[i]):
-            self.root_posteriors[i] = self.trees[i].get_superficial_posterior(
-                y, self.lambda_reg)
+            #nelow is deprecated
+            #self.root_posteriors[i] = self.trees[i].get_superficial_posterior(
+            #    y, self.lambda_reg)
+            self.root_posteriors[i] = self.trees[i].log_marginal_bic(
+                y, optimize=True,
+                use_gradients=self.use_gradients,
+                method_str=self.method_str,
+            )
         cdef double old_post = float(self.root_posteriors[i])
 
         # Refit theta on the candidate (BIC-style profile; Phase 2.7 will
         # formalise this into an explicit BIC scorer).
-        if len(cand.param_values) > 0:
+        #BELOW IS DEPRECATED
+        '''if len(cand.param_values) > 0:
             cand.update_parameters(self.domain, y,
                                 self.method_str, self.use_gradients)
 
         cdef double new_post = float(cand.get_superficial_posterior(
             y, self.lambda_reg))
+        '''    
+        cdef double new_post
+        if len(cand.param_values) > 0:
+            new_post = cand.log_marginal_bic(
+                y, optimize=True,
+                use_gradients=self.use_gradients,
+                method_str=self.method_str,
+            )
+        else:
+            new_post = cand.log_marginal_bic(y, optimize=False)
+        
         if not np.isfinite(new_post):
             return False
 

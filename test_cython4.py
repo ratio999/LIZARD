@@ -446,7 +446,7 @@ def grove_smoke_test():
     
     print(f"\nAfter burn-in, grove contains some depth-2 trees")
     for i, tree in enumerate(grove.trees[:10]):
-        print(f"  Tree {i}: {tree.tree_get_description()} | posterior: {grove.root_posteriors[i]:.4f}")
+        print(f"  Tree {i}: {tree.tree_get_description()} | posterior: {tree.log_marginal_bic(y, optimize=False):.4f}")
     
     # Now run MCMC on the initialized grove
     print("\n--- Running MCMC evolution ---")
@@ -469,7 +469,7 @@ def grove_smoke_test():
     best = grove.best_tree()
     print("Best tree after MCMC:")
     print(f"  Expression: {best.tree_get_description()}")
-    print(f"  Posterior: {best.get_superficial_posterior(y):.4f}")
+    print(f"  Posterior: {best.log_marginal_bic(y, optimize=False):.4f}")
     print(f"  Target: 2.0 + sin(x)")
     print("=" * 60)
 
