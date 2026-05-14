@@ -71,7 +71,8 @@ cdef class PolyaTree:
         Initial Dirichlet concentration (symmetric).
     """
 
-    def __init__(self, list operations, list primitives, double alpha_0=1.0):
+    def __init__(self, list operations, list primitives, double alpha_0=1.0,
+                 bint auto_register=True, bint strict_ops=True):
         self.operations = list(operations)
         self.primitives = list(primitives)
         self.alpha_0 = alpha_0
@@ -82,6 +83,8 @@ cdef class PolyaTree:
         self._op_to_idx = {op: i for i, op in enumerate(self.operations)}
         self._prim_to_idx = {p: i for i, p in enumerate(self.primitives)}
         # Root: a "virtual" decision over n_ops + n_prims (op vs prim + which one).
+        self.auto_register = auto_register
+        self.strict_ops = strict_ops
         self.root = PolyaNode(
             'root', self.n_ops + self.n_prims, depth=0, alpha_0=alpha_0
         )
@@ -255,6 +258,47 @@ cdef class PolyaTree:
         self._extract_recursive(node.get_left(), path)
         self._extract_recursive(node.get_right(), path)
 
+        cdef void _extract_recursive(self, function_treeC.Node node, list path):
+            """Phase 2.3: no silent drops. Unknown leaves auto-register (default)
+            or raise; unknown ops raise unless explicitly opted out."""
+            cdef str op, desc
+            cdef int idx
+            if node is None:
+                return
+            if node.is_leaf():
+                desc = node.get_fun().get_description()
+                idx = self._prim_to_idx.get(desc, -1)
+                if idx < 0:
+                    if self.auto_register:
+                        # Side effect: grows every node's Dirichlet by one slot.
+                        # Phase 1.5 invariance ensures this is well-defined.
+                        idx = self.add_primitive(desc)
+                    else:
+                        raise KeyError(
+                            f"PolyaTree: unknown leaf primitive '{desc}'. "
+                            f"Either pre-register via add_primitive(), enable "
+                            f"auto_register=True, or check the move that "
+                            f"introduced this symbol."
+                        )
+                path.append(('prim', idx))
+                return
+            op = node.get_op()
+            idx = self._op_to_idx.get(op, -1)
+            if idx < 0:
+                if self.strict_ops:
+                    raise KeyError(
+                        f"PolyaTree: unknown operation '{op}'. The op vocabulary "
+                        f"is supposed to be locked at construction; an unknown op "
+                        f"here means the move set produces an op outside "
+                        f"`operations`. Pass strict_ops=False to silence (NOT "
+                        f"recommended)."
+                    )
+                # Legacy silent-drop path (strict_ops=False only).
+            else:
+                path.append(('op', idx))
+            self._extract_recursive(node.get_left(), path)
+            self._extract_recursive(node.get_right(), path)
+
     cpdef double log_prior_from_tree(self, function_treeC.Node root_node):
         """log pi(T | Theta) computed directly from a GP tree root node."""
         cdef list path = self.extract_path(root_node)
@@ -289,3 +333,41 @@ cdef class PolyaTree:
             current = self._ensure_child(current, kind, idx)
 
         return path
+
+        # ------------------------------------------------------------------
+    # Phase 2.3: explicit vocabulary-coverage check (for tests)
+    # ------------------------------------------------------------------
+    cpdef assert_covers(self, function_treeC.Node root_node):
+        """
+        Walk `root_node` and raise KeyError on the first leaf description or
+        op symbol that is absent from this Pólya tree's vocabulary.
+
+        This is the no-silent-drops guarantee promised by the plan: tests
+        should call `polya.assert_covers(tree.get_root())` after every move
+        to catch any vocabulary leak before it silently corrupts the prior.
+
+        Note: this is a *read-only* check. It does NOT call add_primitive()
+        — that's `extract_path`'s job under auto_register=True.
+        """
+        self._assert_covers_recursive(root_node)
+
+    cdef _assert_covers_recursive(self, function_treeC.Node node):
+        cdef str op, desc
+        if node is None:
+            return
+        if node.is_leaf():
+            desc = node.get_fun().get_description()
+            if desc not in self._prim_to_idx:
+                raise KeyError(
+                    f"PolyaTree.assert_covers: leaf primitive '{desc}' "
+                    f"is not in the vocabulary."
+                )
+            return
+        op = node.get_op()
+        if op not in self._op_to_idx:
+            raise KeyError(
+                f"PolyaTree.assert_covers: operation '{op}' is not in the "
+                f"vocabulary."
+            )
+        self._assert_covers_recursive(node.get_left())
+        self._assert_covers_recursive(node.get_right())

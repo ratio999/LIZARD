@@ -441,10 +441,10 @@ cdef class Grove:
         cdef double old_prior = 0.0
         cdef double new_prior = 0.0
         cdef list new_path = None
+        cdef list old_path = None
         if self.polya is not None:
-            old_prior = self.polya.log_prior(
-                self.polya.extract_path(self.trees[i].get_root())
-            )
+            old_path = self.polya.extract_path(self.trees[i].get_root())
+            old_prior = self.polya.log_prior(old_path)
             new_path  = self.polya.extract_path(cand.get_root())
             new_prior = self.polya.log_prior(new_path)
 

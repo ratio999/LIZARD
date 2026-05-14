@@ -26,6 +26,8 @@ cdef class PolyaTree:
     cdef public int n_prims
     cdef public dict _op_to_idx
     cdef public dict _prim_to_idx
+    cdef public bint auto_register   # auto add_primitive on unknown leaves
+    cdef public bint strict_ops      # KeyError on unknown ops (default True)
 
     cdef PolyaNode _ensure_child(self, PolyaNode parent, str kind, int choice_idx)
     cdef PolyaNode _get_child_or_none(self, PolyaNode parent, str kind, int choice_idx)
@@ -40,3 +42,6 @@ cdef class PolyaTree:
     cpdef int add_primitive(self, str desc)
     cpdef add_primitives(self, list descs)
     cdef void _grow_all_nodes(self)
+
+    cpdef assert_covers(self, function_treeC.Node root_node)
+    cdef _assert_covers_recursive(self, function_treeC.Node node)
