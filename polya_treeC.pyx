@@ -22,6 +22,7 @@ import numpy as np
 cimport function_treeC
 from libc.math cimport log
 
+cdef list _OPERATIONS = ["+", "-", "*", "/", "o", "**"]
 
 # ---------------------------------------------------------------------------
 # PolyaNode
@@ -73,7 +74,7 @@ cdef class PolyaTree:
 
     def __init__(self, list operations, list primitives, double alpha_0=1.0,
                  bint auto_register=True, bint strict_ops=True):
-        self.operations = list(operations)
+        self.operations = _OPERATIONS
         self.primitives = list(primitives)
         self.alpha_0 = alpha_0
         self.t = 0

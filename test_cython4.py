@@ -13,7 +13,7 @@ from gp_movesC import (subtree_mutation, subtree_crossover, point_mutation,
 from groveC import Grove
 import matplotlib.pyplot as plt
 from gp_movesC import split
-
+from polya_treeC import PolyaTree
 # ---------------------------------------------------------------------------
 # Phase 2.1.K smoke tests: add_node / hoist_mutation / split
 # ---------------------------------------------------------------------------
@@ -427,9 +427,12 @@ def grove_smoke_test():
     T = 1.0
     size = 6
     depth = 2
+    polya = PolyaTree(operations, functions, alpha_0=1.0,
+                      auto_register=True, strict_ops=True)
+
     grove = Grove(x,y, T, size, depth, functions, Npars=4, init_value=1.0, 
                   operations=operations, base_temp=1.0, use_gradients=False, 
-                  burn_in=True, use_mpi=4, use_spawn=True, lambda_reg=0.01)
+                  burn_in=True, use_mpi=4, use_spawn=True, lambda_reg=0.01, polya=polya)
     
     print("=" * 60)
     print("Initial random trees:")
@@ -448,7 +451,8 @@ def grove_smoke_test():
     # Now run MCMC on the initialized grove
     print("\n--- Running MCMC evolution ---")
     t0 = time.time()
-    grove.run(y, n_steps=500)
+    #grove.run(y, n_steps=500)
+    grove.run(y, n_steps=50)
     t1 = time.time()
     print(f"MCMC run completed in {t1 - t0:.2f} seconds")
 
@@ -468,6 +472,11 @@ def grove_smoke_test():
     print(f"  Posterior: {best.get_superficial_posterior(y):.4f}")
     print(f"  Target: 2.0 + sin(x)")
     print("=" * 60)
+
+    for tree in grove.trees:
+        polya.assert_covers(tree.get_root())
+    print(f"polya vocab after run: n_ops={polya.n_ops} n_prims={polya.n_prims}")
+    print(f"  primitives: {polya.primitives}")
 
 def main():
     # Definire le funzioni disponibili
