@@ -1,6 +1,7 @@
 import numpy as np
 cimport numpy as cnp
 import sympy as sp
+import warnings
 
 from cpython.ref cimport Py_INCREF, Py_DECREF
 #cimport sympy as csp
@@ -490,14 +491,18 @@ cdef class RealFunctionC:
         cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
         #cdef double[:] initial_params = np.array(list(input_pars.values()))
         #print(initial_params)
-        
-        cdef object result = minimize(
-                fun=self.objective,
-                x0=initial_params,
-                args=(x_data, y_data),
-                method=method_str,
-                options={'disp': False}
-                )
+        cdef object result
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                result = minimize(
+                        fun=self.objective,
+                        x0=initial_params,
+                        args=(x_data, y_data),
+                        method=method_str,
+                        options={'disp': False}
+                        )
         #self.params = dict(zip(self.param_str, result.x))
         #print(result)
         return result

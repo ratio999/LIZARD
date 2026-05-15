@@ -40,16 +40,16 @@ cdef class PolyaNode:
         # both 'op' and 'prim' continuations from the same decision point.
         self.children = {}
 
-    cpdef double log_prob(self, int choice_idx):
+    cdef double log_prob(self, int choice_idx):
         """log P(choice = k | this node) under current Dirichlet mean."""
         return log(self.alphas[choice_idx]) - log(self.alpha_total)
 
-    cpdef int sample_choice(self):
+    cdef int sample_choice(self):
         """Sample a choice index from current Dirichlet-Multinomial mean."""
         cdef cnp.ndarray probs = self.alphas / self.alpha_total
         return int(np.random.choice(self.n_choices, p=probs))
 
-    cpdef void update(self, int choice_idx, double gamma):
+    cdef void update(self, int choice_idx, double gamma):
         """Pólya urn update: alpha_k += gamma."""
         self.alphas[choice_idx] += gamma
         self.alpha_total += gamma
@@ -124,7 +124,7 @@ cdef class PolyaTree:
     # ------------------------------------------------------------------
     # Prior evaluation (READ-ONLY)
     # ------------------------------------------------------------------
-    cpdef double log_prior(self, list construction_path):
+    cdef double log_prior(self, list construction_path):
         """
         Compute log pi(T | Theta) for a tree with given construction path.
 
@@ -159,7 +159,7 @@ cdef class PolyaTree:
     # ------------------------------------------------------------------
     # Posterior update (call only on accepted MH steps)
     # ------------------------------------------------------------------
-    cpdef void update_path(self, list construction_path):
+    cdef void update_path(self, list construction_path):
         """
         Reinforce path with diminishing learning rate gamma_t = 1/(1+t).
         Call AFTER an accepted MH step.

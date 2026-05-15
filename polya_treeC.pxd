@@ -11,9 +11,9 @@ cdef class PolyaNode:
     cdef public double alpha_total
     cdef public dict children
 
-    cpdef double log_prob(self, int choice_idx)
-    cpdef int sample_choice(self)
-    cpdef void update(self, int choice_idx, double gamma)
+    cdef double log_prob(self, int choice_idx)
+    cdef int sample_choice(self)
+    cdef void update(self, int choice_idx, double gamma)
 
 
 cdef class PolyaTree:
@@ -33,8 +33,8 @@ cdef class PolyaTree:
     cdef PolyaNode _get_child_or_none(self, PolyaNode parent, str kind, int choice_idx)
     cdef int _root_index(self, str kind, int choice_idx)
 
-    cpdef double log_prior(self, list construction_path)
-    cpdef void update_path(self, list construction_path)
+    cdef double log_prior(self, list construction_path)
+    cdef void update_path(self, list construction_path)
     cpdef list extract_path(self, function_treeC.Node node)
     cdef void _legacy_extract_recursive(self, function_treeC.Node node, list path)
     cdef void _extract_recursive(self, function_treeC.Node node, list path)
