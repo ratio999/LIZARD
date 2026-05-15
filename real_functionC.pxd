@@ -28,7 +28,8 @@ cdef class RealFunctionC:
     cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
             dict params=?, object fitness=?, object prior=?,
             object sigma=?, object x=?, double penalty=?)
-    
+    cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                dict params = ?, object x= ?)
     cdef posterior_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?,
             object x=?, double penalty=?)
 

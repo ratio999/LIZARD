@@ -10,6 +10,11 @@ import re
 #from libc.stdlib cimport malloc, free  # Not needed so far 
 from cython.cimports.libc.string import memcpy
 from copy import copy, deepcopy
+
+cdef object _LOG = np.log
+cdef double _PI = np.pi
+cdef double _NAN = np.nan
+
 def safe_convert(value):
         try:
             return np.float64(value)
@@ -188,11 +193,19 @@ cdef class RealFunctionC:
             out_safe = vector_safe_convert(out)
             return np.ascontiguousarray(out_safe, dtype=np.float64).ravel()
         except:
-            return np.full_like(x, np.nan, dtype=np.float64)
+            return np.full_like(x,_NAN, dtype=np.float64)
         #return self.func(x, params=params)
     
     def get_eval(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
         return self.evaluate(x, params)
+
+    cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                dict params = None, object x= None):
+        if x is None:
+            x = self.domain
+        cdef double fitness = self.fitness(y, params, x)
+        cdef int N = y.shape[0]
+        return -0.5 * N * (_LOG(2.0 * _PI * fitness) + 1.0) - 0.5*len(params)*_LOG(N)
 
     cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
                    dict params=None, object fitness=None, object prior=None, 

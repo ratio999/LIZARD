@@ -622,15 +622,10 @@ cdef class Tree:
                                   bint optimize=True,
                                   bint use_gradients=False,
                                   str method_str='L-BFGS-B'):
-        cdef int N = y.shape[0]
+        
         cdef int K = len(self.params)
-        cdef double ssr, sigma2_hat, log_L, log_marg
-        cdef cnp.ndarray[cnp.float64_t, ndim=1] y_pred, resid
-        cdef object raw
 
-        if N <= 0 or K >= N:
-            return -np.inf
-
+        
         # 1. Optimise parameters to their MLE (in place).
         if optimize and K > 0:
             
@@ -642,9 +637,7 @@ cdef class Tree:
         raw = self.root.function.evaluate(self.domain, self.name_values)
         y_pred = np.asarray(raw, dtype=np.float64).ravel()
         
-        if y_pred.shape[0] != N:
-            return -np.inf
-
+        
         resid = y - y_pred
         ssr = float(np.nansum(resid * resid))
         
