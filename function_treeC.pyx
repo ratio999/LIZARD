@@ -51,6 +51,9 @@ cdef class Node:
         memo1[id(self)] = node_copy
         return node_copy
 
+    cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x=None):
+        return self.function._log_marginal_bic(y, params, x)
+
     def get_root(self):
         print(self.root)
     def get_domain(self):
@@ -623,30 +626,13 @@ cdef class Tree:
                                   bint use_gradients=False,
                                   str method_str='L-BFGS-B'):
         
-        cdef int K = len(self.params)
-
-        
-        # 1. Optimise parameters to their MLE (in place).
-        if optimize and K > 0:
+        if optimize and len(self.params) > 0:
             
             self._update_parameters(self.domain, y,
                                     method_str, use_gradients)
         
-        # 2. Evaluate the tree at current theta (= theta_hat after step 1).
+        return self.root._log_marginal_bic(y, self.name_values, self.domain)
         
-        raw = self.root.function.evaluate(self.domain, self.name_values)
-        y_pred = np.asarray(raw, dtype=np.float64).ravel()
-        
-        
-        resid = y - y_pred
-        ssr = float(np.nansum(resid * resid))
-        
-        # 3. Profile-sigma log-likelihood + BIC complexity penalty.
-        sigma2_hat = ssr / N
-        log_L = -0.5 * N * (np.log(2.0 * np.pi * sigma2_hat) + 1.0)
-        log_marg = log_L - 0.5 * K * np.log(N)
-        
-        return log_marg
 
     cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, 

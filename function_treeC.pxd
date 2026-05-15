@@ -25,6 +25,8 @@ cdef class Node:
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         dict input_pars, str method_str=?, bint use_gradients=?)
     
+    cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, object x=?)
+
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
     
     cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)

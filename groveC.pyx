@@ -16,6 +16,7 @@ from libc.math cimport exp, fmax
 from mpi4py import MPI
 #from mpi4py cimport MPI as cMPI
 #from mpi4py.libmpi cimport *
+cdef str _DEFAULT_OPTIM = str("L-BFGS-B")
 
 cdef inline double _safe_exp(double x) nogil:
     # mild guard for very negative x
@@ -407,8 +408,7 @@ cdef class Grove:
         with beta = 1/T tempering the target only. The proposal correction
         is applied at face value (see Phase 1.3, Phase 2.2 derivation).
         """
-        if self.size == 0:
-            return False
+        
                 # Front-of-queue PR branch: PR is self-accepting (it runs its own
         # tempered MH internally with the AM kernel) and must NOT go
         # through the structural _propose / log_alpha path.
@@ -418,9 +418,9 @@ cdef class Grove:
         cdef function_treeC.Tree cand
         cdef double lqf, lqr
         cdef str move_name
-        cdef tuple proposal
+        cdef tuple proposal = self._propose(i)
 
-        proposal = self._propose(i)
+        
         cand     = <function_treeC.Tree> proposal[0]
         lqf      = <double> proposal[1]
         lqr      = <double> proposal[2]
@@ -430,14 +430,11 @@ cdef class Grove:
         self.move_proposals[move_name] = self.move_proposals.get(move_name, 0) + 1
 
         # Validity-failed proposal -> hard reject (already counted as proposed).
-        if cand is None:
-            return False
-        # Off-support reverse density -> hard reject without scoring.
-        if not np.isfinite(lqr):
+        if cand is None or not np.isfinite(lqr):
             return False
 
         # Cache-fill for current tree if needed.
-        if np.isnan(self.root_posteriors[i]):
+        '''if np.isnan(self.root_posteriors[i]):
             #nelow is deprecated
             #self.root_posteriors[i] = self.trees[i].get_superficial_posterior(
             #    y, self.lambda_reg)
@@ -445,7 +442,7 @@ cdef class Grove:
                 y, optimize=True,
                 use_gradients=self.use_gradients,
                 method_str=self.method_str,
-            )
+            )'''
         cdef double old_post = float(self.root_posteriors[i])
 
         # Refit theta on the candidate (BIC-style profile; Phase 2.7 will
@@ -459,14 +456,15 @@ cdef class Grove:
             y, self.lambda_reg))
         '''    
         cdef double new_post
-        if len(cand.param_values) > 0:
-            new_post = cand.log_marginal_bic(
-                y, optimize=True,
-                use_gradients=self.use_gradients,
-                method_str=self.method_str,
-            )
-        else:
-            new_post = cand.log_marginal_bic(y, optimize=False)
+        cdef bint optim_need = len(cand.param_values) > 0
+        if not cand.is_valid(self.domain):
+            return False
+
+        new_post = cand._log_marginal_bic(
+            y, optimize=optim_need,
+            use_gradients=self.use_gradients if optim_need else False,
+            method_str=self.method_str,
+        )
         
         if not np.isfinite(new_post):
             return False
