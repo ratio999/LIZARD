@@ -203,6 +203,8 @@ cdef class RealFunctionC:
                                 dict params = None, object x= None):
         if x is None:
             x = self.domain
+        if params is None:
+            params = {}
         cdef double fitness = self.fitness(y, params, x)
         cdef int N = y.shape[0]
         return -0.5 * N * (_LOG(2.0 * _PI * fitness) + 1.0) - 0.5*len(params)*_LOG(N)

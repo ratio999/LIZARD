@@ -180,7 +180,11 @@ cdef class Grove:
                 #print('FITNESS', self.trees[i])
                 #BELOW IS DEPRECATED
                 #self.root_posteriors[i] = self.trees[i].get_superficial_posterior(y, self.lambda_reg)
-                self.root_posteriors[i] = self.trees[i].log_marginal_bic(
+                if not self.trees[i].is_valid(self.domain):
+                    self.root_posteriors[i] = -np.inf
+                    continue
+
+                self.root_posteriors[i] = self.trees[i]._log_marginal_bic(
                     y, optimize=True,
                     use_gradients=self.use_gradients,
                     method_str=self.method_str,
@@ -684,13 +688,15 @@ cdef class Grove:
                 if not tree.is_valid(self.domain):
                     continue
                 # Optimize parameters if any exist
-                if optimize_params and len(tree.params) > 0:
+                '''if optimize_params and len(tree.params) > 0:
                     tree.update_parameters(self.domain, y,
-                        self.method_str, self.use_gradients)
+                        self.method_str, self.use_gradients)'''
                     
                 
                 # Compute posterior
-                post = tree.get_superficial_posterior(y, self.lambda_reg)
+                post = tree._log_marginal_bic(y,optimize_params,
+                        self.use_gradients if optimize_params else False,
+                        self.method_str)
                 if np.isfinite(post):
                     candidates.append((tree, post))
             
@@ -784,12 +790,9 @@ cdef class Grove:
             
             if primitive_tree.is_valid(self.domain) and primitive_expression not in tree_cache:
                 
-                if optimize_params and len(primitive_tree.params) > 0:
-                    primitive_tree.update_parameters(self.domain, y, 
-                    self.method_str, self.use_gradients)
-                
-                post = primitive_tree.get_superficial_posterior(y, self.lambda_reg)
-                
+                post = primitive_tree._log_marginal_bic(y, optimize_params,
+                        self.use_gradients if optimize_params else False, self.method_str)
+
                 if np.isfinite(post) and primitive_expression not in tree_cache:
                     tree_cache[primitive_expression] = post
                 
@@ -850,13 +853,9 @@ cdef class Grove:
                     continue
                 #print(tree)
                 
-                if optimize_params and len(tree.params) > 0:
-                    #print('computing params for ', expression)
-                    tree.update_parameters(self.domain, y, 
-                        self.method_str, self.use_gradients)
+                post = tree._log_marginal_bic(y, optimize_params,
+                        self.use_gradients if optimize_params else False, self.method_str)
                 
-                #print(id(tree.name_values.keys()))
-                post = tree.get_superficial_posterior(y, self.lambda_reg)
                 tree_cache[expression] = post
                 
                 if np.isfinite(post):
@@ -923,10 +922,9 @@ cdef class Grove:
                     
                     if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
             
-                        if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y, 
-                                self.method_str, self.use_gradients)
-                        post = tree.get_superficial_posterior(y, self.lambda_reg)
+                        post = tree._log_marginal_bic(y, optimize_params,
+                            self.use_gradients if optimize_params else False, self.method_str)
+
                         tree_cache[expression] = post
                         if np.isfinite(post):
                             candidates.append((tree, post))
@@ -936,10 +934,10 @@ cdef class Grove:
                     expression = tree.tree_get_description()
                     
                     if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
-                        if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y, 
-                                self.method_str, self.use_gradients)
-                        post = tree.get_superficial_posterior(y, self.lambda_reg)
+                        
+                        post = tree._log_marginal_bic(y, optimize_params,
+                            self.use_gradients if optimize_params else False, self.method_str)
+                        
                         tree_cache[expression] = post
                         if np.isfinite(post):
                             candidates.append((tree, post)) # depth 2
@@ -955,10 +953,10 @@ cdef class Grove:
                     expression = tree.tree_get_description()
                     
                     if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
-                        if optimize_params and len(tree.params) > 0:
-                            tree.update_parameters(self.domain, y,
-                                self.method_str, self.use_gradients)
-                        post = tree.get_superficial_posterior(y, self.lambda_reg)
+                        
+                        post = tree._log_marginal_bic(y, optimize_params,
+                            self.use_gradients if optimize_params else False, self.method_str)
+                        
                         tree_cache[expression] = post
                         if np.isfinite(post):
                             candidates.append((tree, post)) # depth 2
@@ -1537,9 +1535,10 @@ cdef class Grove:
             tree.update_parameters(self.domain, y,
                                 self.method_str, self.use_gradients)
         
-        cdef dict names_values = tree.name_values
+        #cdef dict names_values = tree.name_values
         tree.replace_constants_with_pars()
-        cdef double post = tree.get_superficial_posterior(y, self.lambda_reg)
+        #cdef double post = tree.get_superficial_posterior(y, self.lambda_reg)
+        cdef double post = tree.root._log_marginal_bic(y)
         local_cache[expression] = post
         
         if np.isfinite(post):
@@ -1605,9 +1604,11 @@ cdef class Forest:
         cdef int i = random.randrange(min(sizeA, sizeB))
         # ensure posteriors
         if np.isnan(A.root_posteriors[i]):
-            A.root_posteriors[i] = A.trees[i].get_superficial_posterior(y)
+            #A.root_posteriors[i] = A.trees[i].get_superficial_posterior(y)
+            A.root_posteriors[i] = A.trees[i].root._log_marginal_bic(y)
         if np.isnan(B.root_posteriors[i]):
-            B.root_posteriors[i] = B.trees[i].get_superficial_posterior(y)
+            #B.root_posteriors[i] = B.trees[i].get_superficial_posterior(y)
+            B.root_posteriors[i] = B.trees[i].root._log_marginal_bic(y)
         cdef double postA = float(A.root_posteriors[i])
         cdef double postB = float(B.root_posteriors[i])
         cdef double Ta = A.T
