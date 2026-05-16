@@ -45,6 +45,7 @@ cdef class Grove:
                  int size,
                  int depth,
                  list funcs,
+                 object sigma = 1.0,
                  object node_list=None,
                  int Npars=0,
                  object init_value=1.0,
@@ -65,6 +66,7 @@ cdef class Grove:
         if operations is None:
             operations = ["+", "-", "*", "/", "**", "o"]
         self.operations = operations
+        self.sigma = sigma if sigma is not None else 1.0
         self.funcs = funcs
         self.domain = real_functionC._domain_fixer(x)
         self.use_gradients = use_gradients
@@ -154,14 +156,18 @@ cdef class Grove:
         for i in range(self.size):
             if node_list is not None and len(node_list)>i:
                     trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
-                                               node_list[i], Npars, init_value, self.T)
+                                               node_list[i], Npars, init_value, self.T, sigma=self.sigma)
             else:
                 trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
-                                               Npars=Npars, value=init_value, T=self.T)
+                                               Npars=Npars, value=init_value, T=self.T, sigma = self.sigma)
         return trees
 
     cpdef set_trees(self, list new_trees):
         self.trees = new_trees
+
+    cpdef void set_sigmas(self, object new_sigma):
+        for j in range(0, self.size):
+            self.trees[j].set_sigma(new_sigma)
 
     cpdef set_single_tree(self, function_treeC.Tree tree, int i):
         self.trees[i] = tree

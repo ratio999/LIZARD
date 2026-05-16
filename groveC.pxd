@@ -12,6 +12,7 @@ cdef class Grove:
     cdef list nodes
     cdef int n_pars
     cdef double T
+    cdef public object sigma
     cdef public object root_posteriors
     cdef public list trees
     cdef double lambda_reg
@@ -33,12 +34,13 @@ cdef class Grove:
     cdef public dict _am_states
     # Noise scale for raw-likelihood scoring inside parameter_refresh.
     # Placeholder until Phase 2.7(a) wires sigma=None -> profiled sigma.
-    cdef public double sigma
+    #cdef public double sigma
     # PR mixture weight (Phase 2.1.PR D3, default 0.02).
     cdef public double pr_prob
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
+    cpdef void set_sigmas(self, object new_sigma)
 
     cpdef set_trees(self, list new_trees)
 

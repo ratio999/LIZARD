@@ -78,6 +78,12 @@ cdef class Node:
 
     cdef set_sigma(self, object newsigma):
         self.sigma = newsigma
+
+    cdef void set_sigma_recursive(self, object new_sigma):
+        self.set_sigma(new_sigma)
+        if not self.is_leaf():
+            self.left.set_sigma_recursive(new_sigma)
+            self.right.set_sigma_recursive(new_sigma)
     
     cdef set_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters):
         self.fitness = self.evaluate_node_fitness(y, parameters)
@@ -457,6 +463,11 @@ cdef class Tree:
             par.set_value(init_val)
         '''
         pass
+    
+
+    cpdef void set_sigma(self, object new_sigma):
+        self.root.set_sigma_recursive(new_sigma)
+        
 
     #def?
     cpdef get_root(self):

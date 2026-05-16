@@ -41,6 +41,8 @@ cdef class Node:
 
     cdef set_sigma(self, object newsigma)
 
+    cdef void set_sigma_recursive(self, object new_sigma)
+
     cdef set_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters, double penalty=?)
 
     cdef evaluate_node_posterior(self,cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters, double penalty=?)
@@ -128,6 +130,8 @@ cdef class Tree:
     cpdef compute_fitness_tree(self, y)
 
     cpdef evaluate(self, object x=?)
+
+    cpdef void set_sigma(self, object new_sigma)
 
     cpdef get_root(self)
     
