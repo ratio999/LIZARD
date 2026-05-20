@@ -106,52 +106,66 @@ cdef void _worker_main():
     cdef int idx
 
     for idx, item in enumerate(my_work):
-        item_type = item[0]
-        
-        
-        if item_type == 'd1_prim':
-            _, i, prim_str, op = item
+        # NOTE: every exception inside this loop MUST be swallowed. If a
+        # worker dies here, the parent's collective `gather` below never
+        # completes and the whole burn-in freezes. `_evaluate_tree` already
+        # returns None for "expected" failures (invalid domain, stale
+        # parameters that fold to complex, non-finite posterior); this
+        # try/except is the last-resort net for anything else.
+        try:
+            item_type = item[0]
             
-            # Create primitive node
-            prim_node = function_treeC.Node(
-                function=real_functionC.RealFunctionC.from_string(
-                    prim_str, domain, compute_grad=False))
             
-            d1_tree = depth1_trees[i][0]
-            if d1_tree is None:
-                continue
-            
-            # Direction 1: depth-1 op primitive
-            tree = _combine_nodes(d1_tree.root, prim_node, op, domain, funcs, T)
-            result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
-            expr_string = tree.tree_get_description()
-            if result is not None:
-                local_results.append(result)
-                local_cache[expr_string] = result[2]  # Cache the posterior 
-            # Direction 2: primitive op depth-1
-            tree = _combine_nodes(prim_node, d1_tree.root, op, domain, funcs, T)
-            result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
-            expr_string = tree.tree_get_description()
-            if result is not None:
-                local_results.append(result)
-                local_cache[expr_string] = result[2]  # Cache the posterior        
-        elif item_type == 'd1_d1':
-            _, i, j, op = item
-            
-            d1_tree = depth1_trees[i][0]
-            d1_tree_2 = depth1_trees[j][0]
-            
-            if d1_tree is None or d1_tree_2 is None:
-                continue
-            
-            tree = _combine_nodes(d1_tree.root, d1_tree_2.root, op, domain, funcs, T)
-            result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
-            expr_string = tree.tree_get_description()
-            if result is not None:
-                local_results.append(result)
-                local_cache[expr_string] = result[2]  # Cache the posterior
-        if (idx +1) % 50 == 0:
-            parent_comm.isend(idx+1, dest=0, tag=99)
+            if item_type == 'd1_prim':
+                _, i, prim_str, op = item
+                
+                # Create primitive node
+                prim_node = function_treeC.Node(
+                    function=real_functionC.RealFunctionC.from_string(
+                        prim_str, domain, compute_grad=False))
+                
+                d1_tree = depth1_trees[i][0]
+                if d1_tree is None:
+                    continue
+                
+                # Direction 1: depth-1 op primitive
+                tree = _combine_nodes(d1_tree.root, prim_node, op, domain, funcs, T)
+                result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
+                expr_string = tree.tree_get_description()
+                if result is not None:
+                    local_results.append(result)
+                    local_cache[expr_string] = result[2]  # Cache the posterior 
+                # Direction 2: primitive op depth-1
+                tree = _combine_nodes(prim_node, d1_tree.root, op, domain, funcs, T)
+                result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
+                expr_string = tree.tree_get_description()
+                if result is not None:
+                    local_results.append(result)
+                    local_cache[expr_string] = result[2]  # Cache the posterior        
+            elif item_type == 'd1_d1':
+                _, i, j, op = item
+                
+                d1_tree = depth1_trees[i][0]
+                d1_tree_2 = depth1_trees[j][0]
+                
+                if d1_tree is None or d1_tree_2 is None:
+                    continue
+                
+                tree = _combine_nodes(d1_tree.root, d1_tree_2.root, op, domain, funcs, T)
+                result = _evaluate_tree(tree, y, domain, lambda_reg, method_str, use_gradients, T)
+                expr_string = tree.tree_get_description()
+                if result is not None:
+                    local_results.append(result)
+                    local_cache[expr_string] = result[2]  # Cache the posterior
+            if (idx +1) % 50 == 0:
+                parent_comm.isend(idx+1, dest=0, tag=99)
+        except Exception as e:
+            # Discard this work item. Print once for diagnostics but do
+            # NOT re-raise: keeping the worker alive is more important
+            # than perfect coverage of the candidate space.
+            print(f'[Worker {rank}] skipped item {idx} ({type(e).__name__}: {e})')
+            sys.stdout.flush()
+            continue
         #print(idx, rank)
         #sys.stdout.flush()
     # =========================================================
@@ -228,8 +242,13 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     if len(tree.params) > 0:
         tree.update_parameters(domain, y, method_str, use_gradients)
     
-    #tree.replace_constants_with_pars()
-    tree.replace_constants_with_pars()
+    # Fold constants -> fresh parameter leaves. If any constant subexpression
+    # evaluates to complex / non-finite at the optimised theta (e.g. (-a0)**0.5
+    # with a0 > 0), replace_constants_with_pars returns False; the tree has
+    # drifted into a pathological basin and must be discarded.
+    cdef bint ok = tree.replace_constants_with_pars()
+    if not ok:
+        return None
     cdef double post = tree.root._log_marginal_bic(y)
     
     if not np.isfinite(post):

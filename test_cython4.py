@@ -421,7 +421,7 @@ def grove_smoke_test():
     
     # Primitive set
     functions = ["sin(x)", "cos(x)", "x"]
-    operations = ["+", "-", "*", "/"]
+    operations = ["+", "-", "*", "o"]
 
     # Grove config
     T = 1.0
@@ -447,7 +447,7 @@ def grove_smoke_test():
     print(f"\nAfter burn-in, grove contains some depth-2 trees")
     for i, tree in enumerate(grove.trees[:10]):
         print(f"  Tree {i}: {tree.tree_get_description()} | posterior: {tree.log_marginal_bic(y, optimize=False):.4f}")
-    
+    print(grove.size)
     # Now run MCMC on the initialized grove
     print("\n--- Running MCMC evolution ---")
     t0 = time.time()

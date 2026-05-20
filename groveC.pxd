@@ -1,13 +1,14 @@
 import numpy as np
 cimport numpy as cnp
 cimport function_treeC
+cimport polya_treeC
 
 cdef class Grove:
     cdef list operations
     cdef cnp.float64_t[::1] data
-    cdef int size
+    cdef public int size
     cdef int depth
-    cdef list funcs
+    cdef public list funcs
     cdef object x
     cdef list nodes
     cdef int n_pars
@@ -28,7 +29,7 @@ cdef class Grove:
     cdef object method_str
     cdef dict cache
     # Optional Pólya tree prior (None => behaves as before).
-    cdef public object polya
+    cdef public polya_treeC.PolyaTree polya
     cdef public dict move_proposals
     cdef public dict move_accepts
     cdef public dict _am_states

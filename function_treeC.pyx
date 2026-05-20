@@ -327,10 +327,25 @@ cdef class Node:
         return constants
 
     cdef replace_constants_with_pars(self, dict name_values=None):
-        
+        """Fold every constant subtree into a fresh parameter leaf seeded
+        with the constant's numeric value at the current `name_values`.
+
+        Returns
+        -------
+        bint
+            True  -> all constants folded successfully.
+            False -> at least one constant evaluated to a complex number,
+                     NaN, or could otherwise not be converted to float64.
+                     The caller is expected to discard the tree (the
+                     parameters have drifted into a pathological basin
+                     where the symbolic expression is no longer real).
+                     The tree may be left partially modified: do NOT
+                     continue using it.
+        """
         cdef tuple constant
         cdef double value
         cdef Node constant_node
+        cdef object raw_value
         cdef list symbols_values = _symbol_values(name_values) if name_values else None
         cdef list existing_params = list(name_values.keys())
         cdef set constant_pars
@@ -348,13 +363,25 @@ cdef class Node:
             if symbols_values:
                 
                 subs_dict = [(sy, val) for sy, val in symbols_values if sy in constant_pars]
-                value = np.float64(constant_node.function.expr.subs(subs_dict))
+                # Guard: sympy may return a complex (e.g. (-x)**0.5 with x>0
+                # after substitution) or a non-finite number. np.float64() of
+                # a complex raises TypeError; that has historically killed
+                # the worker mid-burn-in. Signal failure to the caller so
+                # the offending tree gets discarded.
+                raw_value = constant_node.function.expr.subs(subs_dict)
+                try:
+                    value = np.float64(raw_value)
+                except (TypeError, ValueError):
+                    return False
+                if not np.isfinite(value):
+                    return False
             else:
                 
                 value = 1.0
 
             constant_node.reinit_to_par(existing_params, user_prefix=None, value=value)
-            self._rebuild_ancestor_functions(constant_node)  
+            self._rebuild_ancestor_functions(constant_node)
+        return True
 
 
 
