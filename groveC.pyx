@@ -1465,6 +1465,7 @@ cdef class Grove:
         cdef function_treeC.Node param
         # Flatten results from all workers
         #cdef int jj=0
+        #cdef bint ok
         cdef object pbar1=tqdm(total=len(all_return_list), desc="Growing Grove", unit=" trees", 
                 dynamic_ncols=True)
         for worker_results in all_return_list:
@@ -1485,7 +1486,7 @@ cdef class Grove:
                             if not param.function.expr.is_Number and param.get_description() in names_params.keys():
                                 param.set_value(names_params[param.get_description()])
                         
-                        #tree.replace_constants_with_pars(names_params)
+                        #ok = tree.replace_constants_with_pars(names_params)
                         descr = str(tree.root.function.expr)
                         if descr != str(expr):
                             print('Warning: expression mismatch after rebuilding tree')

@@ -40,6 +40,15 @@ cdef class RealFunctionC:
     
     cdef _symbolic_gradient_parallel(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, 
               dict params=?)
+    cdef double fitness_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+                     cnp.ndarray[cnp.float64_t, ndim=1] sigma)
+    
+    cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+                                cnp.ndarray[cnp.float64_t, ndim=1] sigma)
+    cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+                                double sigma)
 
     cdef double _finite_diff_gradient(self, str param_name, dict params, 
                                        cnp.ndarray[cnp.float64_t, ndim=1] x,
@@ -52,6 +61,10 @@ cdef class RealFunctionC:
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, str method_str=?)
+    cdef optimize_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+        dict input_pars, str method_str, cnp.ndarray[cnp.float64_t, ndim=1] sigma)
+        
+        
     cdef sort_params_list(self, list pars)
     cdef get_par_string(self)
     cdef gradient(self, cnp.ndarray[cnp.float64_t, ndim=1] y, object x=?, dict params=?) 

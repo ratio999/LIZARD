@@ -208,7 +208,29 @@ cdef class RealFunctionC:
             params = {}
         cdef double fitness = self.fitness(y, params, x)
         cdef int N = y.shape[0]
-        return -0.5 * N * (_LOG(2.0 * _PI * fitness) + 1.0) - 0.5*len(params)*_LOG(N)
+        return -0.5 * N * (_LOG(2.0 * _PI * fitness) + 1.0) - 0.5*len(params)*_LOG(N) #-0.5 * N * fitness /s2
+
+    cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+                                double sigma):
+        cdef double mse = self.fitness(y, params, x)
+        cdef int N = y.shape[0]
+        cdef int k = len(params)
+        cdef double var = sigma*sigma
+
+        return (-0.5 * N * mse/var - 0.5 * k * _LOG(N))
+
+    cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+                                cnp.ndarray[cnp.float64_t, ndim=1] sigma):
+        
+        cdef double mse = self.fitness_sigma(y, params, x, sigma)
+        cdef int N = y.shape[0]
+        cdef int k = len(params)
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] var = sigma*sigma
+
+        return (-0.5 * N * mse/var - 0.5 * k * _LOG(N))
+
 
     cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
                    dict params=None, object fitness=None, object prior=None, 
@@ -254,7 +276,17 @@ cdef class RealFunctionC:
             return np.nanmean((y - self.evaluate(x,  params))**2) #+ lambda_reg * np.sum(np.array(list(params.values()))**2)
         except:
             return np.inf
+
+    cdef double fitness_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+                     cnp.ndarray[cnp.float64_t, ndim=1] sigma):
+        
+        cdef  cnp.ndarray[cnp.float64_t, ndim=1] var = sigma*sigma
+        try:
+            return np.nanmean(((y-self.evaluate(x, params))**2)/var)
+        except:
+            return np.inf
     
+
 
 
     cdef dict _build_gradient_functions(self):
@@ -418,6 +450,19 @@ cdef class RealFunctionC:
         #print(f'  objective called: params={flat_params}, params_dict={params_dict}, fitness={fit}')
         
         return fit
+
+    def objective_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, 
+            cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+            cnp.ndarray[cnp.float64_t, ndim=1] sigma):
+        cdef dict params_dict = dict(zip(self.params_strs, flat_params))
+        #print(x_data, y_data)
+        cdef double fit = self.fitness_sigma( y_data,  params_dict, x_data, sigma)
+        
+        #print(self.expr)
+        #if flat_params[0] < 2.0 or flat_params[0] > 5.0:  # log only at different param values
+        #print(f'  objective called: params={flat_params}, params_dict={params_dict}, fitness={fit}')
+        
+        return fit
     
 
     def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):   
@@ -500,6 +545,27 @@ cdef class RealFunctionC:
                         fun=self.objective,
                         x0=initial_params,
                         args=(x_data, y_data),
+                        method=method_str,
+                        options={'disp': False}
+                        )
+        #self.params = dict(zip(self.param_str, result.x))
+        #print(result)
+        return result
+
+    cdef optimize_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+        dict input_pars, str method_str, cnp.ndarray[cnp.float64_t, ndim=1] sigma):
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
+        #cdef double[:] initial_params = np.array(list(input_pars.values()))
+        #print(initial_params)
+        cdef object result
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                result = minimize(
+                        fun=self.objective_sigma,
+                        x0=initial_params,
+                        args=(x_data, y_data, sigma),
                         method=method_str,
                         options={'disp': False}
                         )

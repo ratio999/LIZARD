@@ -54,6 +54,15 @@ cdef class Node:
     cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x=None):
         return self.function._log_marginal_bic(y, params, x)
 
+    
+    cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, 
+            cnp.ndarray[cnp.float64_t, ndim=1] x, double sigma):
+            return self.function._log_sigma_bic(y, params, x, sigma)
+    
+    cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, 
+            cnp.ndarray[cnp.float64_t, ndim=1] x, cnp.ndarray[cnp.float64_t, ndim=1] sigma):
+            return self.function._log_sigma_array_bic(y, params, x, sigma)
+
     def get_root(self):
         print(self.root)
     def get_domain(self):
@@ -149,7 +158,10 @@ cdef class Node:
             return self.function._optimize_with_grad(x_data, y_data, input_pars, method_str)
         else:
             return self.function.optimize(x_data, y_data, input_pars, method_str='Powell')
-        
+    
+    cdef optimize_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+        dict input_pars, cnp.ndarray[cnp.float64_t, ndim=1] sigma, str method_str='L-BFGS-B', bint use_gradients=False):
+        return self.function.optimize_sigma(x_data, y_data, input_pars, method_str = 'Powell', sigma)
         
     cdef set_prior(self):
         self.prior = self.function.prior
@@ -668,9 +680,12 @@ cdef class Tree:
             
             self._update_parameters(self.domain, y,
                                     method_str, use_gradients)
-        
-        return self.root._log_marginal_bic(y, self.name_values, self.domain)
-        
+        if self.sigma is None:
+            return self.root._log_marginal_bic(y, self.name_values, self.domain)
+        elif hasattr(self.sigma, '__len__'):
+                return self.root._log_sigma_array_bic(y, self.name_values, self.domain, self.sigma)
+        else:
+            return self.root._log_sigma_bic(y, self.name_values, self.domain, <double>(self.sigma))
 
     cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
@@ -684,7 +699,11 @@ cdef class Tree:
         #print(f'EXPR: {self.tree_get_description()}')
         #print(f'input_pars id: {id(input_pars)}, value: {input_pars}')
         #print(f'self.name_values id: {id(self.name_values)}')
-        result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
+        if not hasattr(self.sigma, '__len__'): 
+            result = self.root.optimize_sigma(x_data, y_data, input_pars, method_str, use_gradients)
+        else:
+            result = self.root.optimize(x_data, y_data, 
+            input_pars, method_str, use_gradients, self.sigma)
         optimized_params = dict(zip(input_pars.keys(), result.x))
         #print(self.tree_get_description(), result)
         for par in self.params:
