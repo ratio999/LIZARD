@@ -196,7 +196,7 @@ cdef class Grove:
                     method_str=self.method_str,
                 )
     cpdef best_index(self):
-        return int(np.nanargmin(self.root_posteriors))
+        return int(np.nanargmax(self.root_posteriors))
 
     cpdef best_tree(self):
         return self.trees[self.best_index()]
@@ -223,6 +223,7 @@ cdef class Grove:
         p_cross   = 0.10 * (tau / (1.0 + tau)) + 0.05
         probs = np.array([p_point, p_hoist, p_add, p_split, p_subtree, p_cross],
                         dtype=np.float64)
+        
         probs = probs / probs.sum()
         idx = int(np.random.choice(np.arange(6), p=probs))
         #random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
@@ -712,7 +713,7 @@ cdef class Grove:
             return
         
         # Sort by posterior (descending = better)
-        candidates.sort(key=lambda x: x[1])
+        candidates.sort(key=lambda x: x[1], reverse=True)
         
         print(f"Burn-in: {len(candidates)} valid candidates generated")
         print(f"  Best 3 posteriors: {[c[1] for c in candidates[:3]]}")
@@ -868,7 +869,7 @@ cdef class Grove:
                     tree.name_values = deepcopy(tree.name_values)  
                     candidates.append((tree, post, 1)) # depth 1
                     print(f"  After append: id(name_values)={id(tree.name_values.keys())}, content={tree.name_values}")
-        candidates.sort(key=lambda x: x[1])
+        candidates.sort(key=lambda x: x[1], reverse=True)
         print(f"Stage 1: {len(candidates)} valid depth-1 candidates")
         
         if len(candidates) > 0:
@@ -983,7 +984,7 @@ cdef class Grove:
             candidates.append(up2depth1_candidates[i])
         
         # Re-sort the combined list (maybe delete?)
-        candidates.sort(key=lambda x: x[1])
+        candidates.sort(key=lambda x: x[1], reverse=True)
             
         if replace_all:
             if self.trees is None:
@@ -1203,7 +1204,7 @@ cdef class Grove:
             '''
             
             # Sort and assign to grove
-            candidates.sort(key=_bis2_parallel_helper)
+            candidates.sort(key=_bis2_parallel_helper, reverse=True)
             
             # ... rest of the assignment logic (same as original)
             if replace_all:
@@ -1507,7 +1508,7 @@ cdef class Grove:
             candidates.append((c[0], c[1]))
         
         # Sort by posterior (best first)
-        candidates.sort(key=itemgetter(1))
+        candidates.sort(key=itemgetter(1), reverse=True)
         
         # =========================================================
         # ASSIGN TO GROVE
