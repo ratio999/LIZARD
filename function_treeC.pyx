@@ -161,7 +161,7 @@ cdef class Node:
     
     cdef optimize_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         dict input_pars, cnp.ndarray[cnp.float64_t, ndim=1] sigma, str method_str='L-BFGS-B', bint use_gradients=False):
-        return self.function.optimize_sigma(x_data, y_data, input_pars, method_str = 'Powell', sigma)
+        return self.function.optimize_sigma(x_data, y_data, input_pars, method_str = 'Powell', sigma=sigma)
         
     cdef set_prior(self):
         self.prior = self.function.prior
@@ -700,9 +700,9 @@ cdef class Tree:
         #print(f'input_pars id: {id(input_pars)}, value: {input_pars}')
         #print(f'self.name_values id: {id(self.name_values)}')
         if not hasattr(self.sigma, '__len__'): 
-            result = self.root.optimize_sigma(x_data, y_data, input_pars, method_str, use_gradients)
+            result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         else:
-            result = self.root.optimize(x_data, y_data, 
+            result = self.root.optimize_sigma(x_data, y_data, 
             input_pars, method_str, use_gradients, self.sigma)
         optimized_params = dict(zip(input_pars.keys(), result.x))
         #print(self.tree_get_description(), result)

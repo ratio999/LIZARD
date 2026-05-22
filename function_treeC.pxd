@@ -25,6 +25,10 @@ cdef class Node:
     cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         dict input_pars, str method_str=?, bint use_gradients=?)
     
+    cdef optimize_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+        dict input_pars, cnp.ndarray[cnp.float64_t, ndim=1] sigma, 
+        str method_str=?, bint use_gradients=?)
+
     cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, object x=?)
 
     cdef evaluate_node_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters)
@@ -36,7 +40,15 @@ cdef class Node:
     cdef set_alpha(self, double newalpha)
 
     cdef set_prior(self)
-    
+
+    cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, object x=?)
+        
+    cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, 
+            cnp.ndarray[cnp.float64_t, ndim=1] x, double sigma)
+
+    cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, 
+            cnp.ndarray[cnp.float64_t, ndim=1] x, cnp.ndarray[cnp.float64_t, ndim=1] sigma)
+
     cpdef is_constant(self)
 
     cdef set_sigma(self, object newsigma)

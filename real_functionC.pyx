@@ -227,9 +227,9 @@ cdef class RealFunctionC:
         cdef double mse = self.fitness_sigma(y, params, x, sigma)
         cdef int N = y.shape[0]
         cdef int k = len(params)
-        cdef cnp.ndarray[cnp.float64_t, ndim=1] var = sigma*sigma
+        #cdef cnp.ndarray[cnp.float64_t, ndim=1] var = sigma*sigma
 
-        return (-0.5 * N * mse/var - 0.5 * k * _LOG(N))
+        return (-0.5 * N * mse - 0.5 * k * _LOG(N))
 
 
     cdef posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
