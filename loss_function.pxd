@@ -7,13 +7,13 @@
 cimport numpy as cnp
 
 cdef class LossFunction:
-    cdef readonly str  name
-    cdef readonly bint has_grad
+    cdef  str  name
+    cdef  bint has_grad
 
     cpdef double evaluate_scalar(self, double y_true, double y_pred)
     cpdef double grad_scalar   (self, double y_true, double y_pred)
-    cpdef double evaluate_array(self, double[::1] y_true, double[::1] y_pred)
-    cpdef double[::1] grad_array(self, double[::1] y_true, double[::1] y_pred)
+    cpdef double evaluate_array(self, cnp.ndarray[cnp.float64_t, ndim=1] y_true, cnp.ndarray[cnp.float64_t, ndim=1] y_pred)
+    cpdef cnp.ndarray[cnp.float64_t, ndim=1] grad_array(self, cnp.ndarray[cnp.float64_t, ndim=1] y_true, cnp.ndarray[cnp.float64_t, ndim=1] y_pred)
 
 
 cdef class CustomLoss(LossFunction):
@@ -23,13 +23,8 @@ cdef class CustomLoss(LossFunction):
 
     cpdef double evaluate_scalar(self, double y_true, double y_pred)
     cpdef double grad_scalar   (self, double y_true, double y_pred)
-    cpdef double evaluate_array(self, double[::1] y_true, double[::1] y_pred)
-    cpdef double[::1] grad_array(self, double[::1] y_true, double[::1] y_pred)
-
-
-cdef class MSELoss(LossFunction):
-    cpdef double evaluate_scalar(self, double y_true, double y_pred)
-    cpdef double grad_scalar   (self, double y_true, double y_pred)
+    cpdef double evaluate_array(self, cnp.ndarray[cnp.float64_t, ndim=1] y_true, cnp.ndarray[cnp.float64_t, ndim=1] y_pred)
+    cpdef cnp.ndarray[cnp.float64_t, ndim=1] grad_array(self, cnp.ndarray[cnp.float64_t, ndim=1] y_true, cnp.ndarray[cnp.float64_t, ndim=1] y_pred)
 
 
 cdef class MAELoss(LossFunction):
@@ -43,4 +38,4 @@ cdef class HuberLoss(LossFunction):
     cpdef double grad_scalar   (self, double y_true, double y_pred)
 
 
-cdef double[::1] _as_f64(arr)
+cdef cnp.ndarray[cnp.float64_t, ndim=1] _as_f64(arr)

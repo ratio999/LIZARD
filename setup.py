@@ -48,7 +48,8 @@ extensions = [
     #Extension("samplerC", sources=["samplerC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     #Extension("num_wrapC", sources=["num_wrapC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
     Extension("mpi_worker", sources=["mpi_worker.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    
+    Extension("loss_function", sources=["loss_function.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
+   
     Extension("utils.pointer_utils", 
               sources=["utils/pointer_utils.pyx"], 
               include_dirs=[np.get_include(), os.path.abspath(".")],
