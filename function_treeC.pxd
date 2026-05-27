@@ -13,7 +13,6 @@ cdef class Node:
     cdef public cnp.float64_t value    
     cdef reinit_to_par(self, list existent_pars, str user_prefix=?, double value=?) 
     cdef _rebuild_ancestor_functions(self, Node node)
-    
     cpdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
     cdef object fitness
@@ -99,6 +98,7 @@ cdef class Tree:
     cdef object fitness_tree
     cdef double alpha
     cdef object sigma
+    cdef bint bic_loss_is_param_loss
     cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val)
     cpdef get_domain(self)
     cdef get_param_values(self)
@@ -136,7 +136,10 @@ cdef class Tree:
                                   bint optimize=?,
                                   bint use_gradients=?,
                                   str method_str=?)
+    cdef double _shortcut_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, double mse)
 
+    cdef double _update_parameters_and_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+	str method_str=?, bint use_gradients=?)
     cpdef is_defined(self, x=?)
 
     cpdef compute_fitness_tree(self, y)

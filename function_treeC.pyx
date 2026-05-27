@@ -11,6 +11,10 @@ from copy import copy, deepcopy
 import random
 import re
 
+cdef object _LOG = np.log
+cdef double _PI = np.pi
+cdef double _NAN = np.nan
+
 cdef class Node:
     '''Node of a Tree: either a leaf, or an operation on two other nodes'''    
     def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, 
@@ -669,13 +673,29 @@ cdef class Tree:
                            bint use_gradients=False,
                            str method_str='L-BFGS-B'):
         return self._log_marginal_bic(y, optimize, use_gradients, method_str)
-
+    cdef double _shortcut_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+			double mse):
+        cdef int N = y.shape[0]
+        cdef int k = len(self.name_values)
+        if self.sigma is None:
+            return -0.5 * N * (_LOG(2.0 * _PI * mse) + 1.0) - 0.5 * k * _LOG(N)
+        else:
+        
+            return -0.5 * N * mse - 0.5 *k * _LOG(N)
     cdef double _log_marginal_bic(self,
                                   cnp.ndarray[cnp.float64_t, ndim=1] y,
                                   bint optimize=True,
                                   bint use_gradients=False,
                                   str method_str='L-BFGS-B'):
-        
+        cdef double mse
+        self.bic_loss_is_param_loss = True #placeholder to remove when using custom defined loss functions
+        if self.bic_loss_is_param_loss and optimize and len(self.params)>0:
+            mse = self._update_parameters_and_fitness(self.domain, y,
+                                        method_str, use_gradients)
+            if self.sigma is not None and (not hasattr(self.sigma, '__len__')):
+                mse /= (<double>self.sigma*<double>self.sigma)
+            return self._shortcut_bic(y, mse) 
+
         if optimize and len(self.params) > 0:
             
             self._update_parameters(self.domain, y,
@@ -710,9 +730,37 @@ cdef class Tree:
             par.set_value(optimized_params[par.function.get_description()])
         
         self.param_values, self.name_values, self.penalty = self.get_param_values()
+	
         self.tree_update(self.root)
         #print('Updated parameters to: ', self.name_values) #comment out in production
+       
+    cdef double _update_parameters_and_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+        str method_str='L-BFGS-B', bint use_gradients=False):
+        '''Finds optimal parameters and sets them in the tree'''
         
+        cdef dict input_pars = self.name_values
+        cdef object result
+        cdef dict optimized_params
+        cdef Node par
+        #print(f'EXPR: {self.tree_get_description()}')
+        #print(f'input_pars id: {id(input_pars)}, value: {input_pars}')
+        #print(f'self.name_values id: {id(self.name_values)}')
+        if not hasattr(self.sigma, '__len__'): 
+            result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
+        else:
+            result = self.root.optimize_sigma(x_data, y_data, 
+            input_pars, method_str, use_gradients, self.sigma)
+        optimized_params = dict(zip(input_pars.keys(), result.x))
+        #print(self.tree_get_description(), result)
+        cdef double mse=result.fun
+        for par in self.params:
+            par.set_value(optimized_params[par.function.get_description()])
+        
+        self.param_values, self.name_values, self.penalty = self.get_param_values()
+        self.tree_update(self.root)
+        return mse
+
     cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         str method_str='L-BFGS-B', bint use_gradients=False):
