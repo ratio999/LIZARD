@@ -8,9 +8,30 @@ cimport real_functionC
 cimport numpy as cnp
 
 
-cdef double _LOG_G_PLACEHOLDER = 0.0
-cdef double _KIND_CROSS_PROB = 0.5      # mixture weight for sub-move B
-cdef double _NEW_PARAM_INIT_VALUE = 1.0  # TODO[g-placeholder]: draw from g
+# --- Phase 2.1.PM: birth density g for new parameters ---------------------
+# g(theta) = Normal(0, _G_TAU^2). Set per-run via set_g_tau(std(y)).
+# Tree-level plumbing of tau (analogous to sigma) is deferred; this module
+# global is the temporary single source of truth.
+cdef double _G_TAU = 1.0
+cdef double _KIND_CROSS_PROB = 0.5      # mixture weight for sub-move B (BIRTH/DEATH)
+
+cpdef void set_g_tau(double tau) except *:
+    global _G_TAU
+    if tau <= 0.0:
+        raise ValueError("set_g_tau: tau must be > 0")
+    _G_TAU = tau
+
+cpdef double get_g_tau():
+    return _G_TAU
+
+cdef inline double _sample_g():
+    """Draw theta ~ N(0, _G_TAU^2)."""
+    return random.gauss(0.0, _G_TAU)
+
+cdef inline double _log_g(double theta):
+    """log N(theta; 0, _G_TAU^2)."""
+    cdef double t2 = _G_TAU * _G_TAU
+    return -0.5 * np.log(2.0 * np.pi * t2) - 0.5 * theta * theta / t2
 
 
 # --- Phase 2.1.PR: Adaptive-Metropolis parameter refresh -------------------
@@ -111,13 +132,18 @@ cdef double _eval_build_density(function_treeC.Node S, int d,
     Caller must verify _is_perfect_binary(S, d) before calling.
 
     Per-leaf Bernoulli(p_par) for parameter-vs-function, uniform from F
-    for function leaves, uniform from O for ops, log g(.) per parameter
-    value (placeholder)."""
+    for function leaves, uniform from O for ops, and log g(theta_i) per
+    parameter leaf evaluated at its current value."""
     cdef int n_leaves = 1 << d           # 2^d
     cdef int n_int    = n_leaves - 1     # 2^d - 1
-    cdef int K_S = len(_collect_parameter_leaves(S, []))
+    cdef list param_leaves = _collect_parameter_leaves(S, [])
+    cdef int K_S = len(param_leaves)
+    cdef double log_g_sum = 0.0
+    cdef function_treeC.Node leaf
+    for leaf in param_leaves:
+        log_g_sum += _log_g(<double> leaf.value)
     return (
-        (<double> K_S) * (np.log(p_par) + _LOG_G_PLACEHOLDER)
+        (<double> K_S) * np.log(p_par) + log_g_sum
         + (<double> (n_leaves - K_S)) * (np.log(1.0 - p_par) - np.log(<double> M))
         - (<double> n_int) * np.log(<double> O)
     )
@@ -140,9 +166,9 @@ cdef function_treeC.Node _build_subtree_with_params(
             leaf.function = real_functionC.RealFunctionC.from_string(
                 new_name, domain, compute_grad=False)
             leaf.bis_param = leaf.is_param()
-            # TODO[g-placeholder]: draw v ~ g; for now use the deterministic
-            # init. Same convention as point_mutation v2 case (c).
-            leaf.set_value(_NEW_PARAM_INIT_VALUE)
+            # Phase 2.1.PM: birth from g = N(0, tau^2). Same draw is what
+            # _eval_build_density(...) reads back via leaf.value.
+            leaf.set_value(_sample_g())
     function_treeC._post_order_update(root)
     return root
 
@@ -667,16 +693,16 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
           - prob (1 - p_cross): sub-move A, pick uniform from F (size M).
             Symmetric. (0, 0).
           - prob p_cross: sub-move B, case (c) BIRTH. Replace with a fresh
-            parameter leaf a_new, value = _NEW_PARAM_INIT_VALUE.
-              log_q_fwd contribution =  _LOG_G_PLACEHOLDER
+            parameter leaf a_new, value theta_new ~ g = N(0, tau^2).
+              log_q_fwd contribution =  log g(theta_new)
               log_q_rev contribution = -log M
       * v parameter leaf:
           - prob (1 - p_cross): identity. Parameter relabel/refresh is
             handled by the dedicated parameter-refresh move (Phase 2.1.PR).
           - prob p_cross: sub-move B, case (d) DEATH. Pick a new function
-            uniform from F; the parameter value is discarded.
+            uniform from F; the parameter value theta_j is discarded.
               log_q_fwd contribution = -log M
-              log_q_rev contribution =  _LOG_G_PLACEHOLDER
+              log_q_rev contribution =  log g(theta_j)
 
     The selection factor 1/|N(T)| and the mixture weight log p are common
     to forward and reverse and therefore omitted.
@@ -736,9 +762,13 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         return (0.0, 0.0)
 
     # 4. Sub-move B: kind-crossing.
+    cdef double theta_dying
+    cdef double theta_new
     if v.is_param():
         # Case (d): DEATH of theta_j. Replace with a function leaf.
-        # TODO[g-placeholder]: replace _LOG_G_PLACEHOLDER with log g(v.value).
+        # Capture the dying value BEFORE swapping the leaf, since the
+        # reverse move is a BIRTH at exactly this value: log q_rev = log g(theta_j).
+        theta_dying = <double> v.value
         new_func_str = random.choice(functions)
         v.function = real_functionC.RealFunctionC.from_string(
             new_func_str, tree.domain, compute_grad=False)
@@ -748,7 +778,7 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         else:
             tree.tree_update(parent)
         log_q_fwd += -np.log(<double> M)
-        log_q_rev += _LOG_G_PLACEHOLDER
+        log_q_rev += _log_g(theta_dying)
         return (log_q_fwd, log_q_rev)
 
     # Function leaf -> parameter leaf: case (c) BIRTH of theta_new.
@@ -758,14 +788,15 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         new_name, tree.domain, compute_grad=False)
     # set_value gates on bis_param; flip flag BEFORE assigning the value.
     v.bis_param = v.is_param()
-    # TODO[g-placeholder]: draw v_init ~ g and use the SAME draw both as
-    # the stored value here AND as the argument to log g(.) below.
-    v.set_value(_NEW_PARAM_INIT_VALUE)
+    # Phase 2.1.PM: draw theta_new ~ g and store the SAME draw as the leaf
+    # value AND as the argument to log g(.) in log_q_fwd.
+    theta_new = _sample_g()
+    v.set_value(theta_new)
     if parent is None:
         tree.tree_update(tree.root)
     else:
         tree.tree_update(parent)
-    log_q_fwd += _LOG_G_PLACEHOLDER
+    log_q_fwd += _log_g(theta_new)
     log_q_rev += -np.log(<double> M)
     return (log_q_fwd, log_q_rev)
 

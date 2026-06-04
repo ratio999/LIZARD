@@ -755,6 +755,7 @@ cdef class Tree:
         optimized_params = dict(zip(input_pars.keys(), result.x))
         #print(self.tree_get_description(), result)
         cdef double mse=result.fun
+        print(mse)
         for par in self.params:
             par.set_value(optimized_params[par.function.get_description()])
         
