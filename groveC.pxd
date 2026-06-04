@@ -38,6 +38,11 @@ cdef class Grove:
     #cdef public double sigma
     # PR mixture weight (Phase 2.1.PR D3, default 0.02).
     cdef public double pr_prob
+    # Phase 2.7(f): per-topology BIC cache.
+    # Maps tree_get_description() -> (log_evidence, dict(name_values)).
+    # Invalidated whenever the y reference changes between _step calls.
+    cdef public dict _bic_cache
+    cdef public object _cache_y
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)

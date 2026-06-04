@@ -104,7 +104,12 @@ cdef class Grove:
         self.move_accepts = dict.fromkeys(self.move_proposals, 0)
         self.cache = {}
         self._am_states = {}
-        self.sigma = 1.0
+        # Phase 2.7(f) BIC topology cache (key: tree_get_description();
+        # value: (log_evidence, dict(name_values))). _cache_y holds the
+        # y reference the cache was built against; if `_step` sees a
+        # different y, the cache is cleared.
+        self._bic_cache = {}
+        self._cache_y = None
         self.pr_prob = 0.02
         if self.burn_in:
             # Run two-stage burn-in procedure to initialize trees
@@ -468,15 +473,44 @@ cdef class Grove:
         '''    
         cdef double new_post
         cdef bint optim_need = len(cand.param_values) > 0
+        cdef str cand_key
+        cdef object cached
+        cdef dict cached_nv
+        cdef function_treeC.Node par_node
+        cdef str pname
         if not cand.is_valid(self.domain):
             return False
 
-        new_post = cand._log_marginal_bic(
-            y, optimize=optim_need,
-            use_gradients=self.use_gradients if optim_need else False,
-            method_str=self.method_str,
-        )
-        
+        # Phase 2.7(f): BIC topology cache.
+        # Reset cache when y reference changes between calls (different
+        # dataset => stored log_evidence and theta_hat are invalid).
+        if self._cache_y is not y:
+            self._bic_cache.clear()
+            self._cache_y = y
+
+        cand_key = cand.tree_get_description()
+        cached = self._bic_cache.get(cand_key)
+        if cached is not None:
+            # Hit: reuse stored log_evidence and install cached theta_hat
+            # so the candidate inherits the MLE on accept (warm-starts
+            # subsequent moves and keeps name_values consistent).
+            new_post  = <double> cached[0]
+            cached_nv = <dict>   cached[1]
+            for par_node in cand.params:
+                pname = par_node.get_fun().get_description()
+                if pname in cached_nv:
+                    par_node.set_value(<double> cached_nv[pname])
+            if cand.params:
+                cand.tree_update(cand.get_root())
+        else:
+            new_post = cand._log_marginal_bic(
+                y, optimize=optim_need,
+                use_gradients=self.use_gradients if optim_need else False,
+                method_str=self.method_str,
+            )
+            if np.isfinite(new_post):
+                self._bic_cache[cand_key] = (new_post, dict(cand.name_values))
+
         if not np.isfinite(new_post):
             return False
 
