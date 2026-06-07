@@ -2,8 +2,6 @@ cimport numpy as cnp
 cimport real_functionC
 cimport function_treeC
 
-cpdef void set_g_tau(double tau) except *
-cpdef double get_g_tau()
 
 cdef list _flatten_nodes(function_treeC.Node node, list out)
 cpdef list flatten_nodes(function_treeC.Node node, list out=?)
@@ -31,10 +29,10 @@ cdef tuple _sample_truncated_geometric(double rho, int d_max)
 cdef double _truncated_geometric_log_pmf(int d, double rho, int d_max)
 cdef int _count_nodes(function_treeC.Node node)
 cdef double _eval_build_density(function_treeC.Node S, int d,
-                                int M, int O, double p_par)
+                                int M, int O, double p_par, double g_tau)
 cdef function_treeC.Node _build_subtree_with_params(
         int d, list functions, list operations, object domain,
-        double p_par, list existing_param_names)
+        double p_par, list existing_param_names, double g_tau)
 cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations)
 cpdef tuple add_node(function_treeC.Tree tree, list functions=?, list operations=?,
                      random_depth=?)

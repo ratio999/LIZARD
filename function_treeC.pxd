@@ -88,6 +88,7 @@ cdef class Tree:
     cdef str current_description
     cdef object domain
     cdef object value
+    cdef public double g_tau
     cdef int depth
     cdef list functions
     cdef int Npars
@@ -101,6 +102,7 @@ cdef class Tree:
     cdef bint bic_loss_is_param_loss
     cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val)
     cpdef get_domain(self)
+    cpdef void set_g_tau(self, double tau) except *
     cdef get_param_values(self)
     cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
         cnp.ndarray[cnp.float64_t, ndim=1] y_data,  
@@ -181,7 +183,7 @@ cdef _post_order_update(Node node)
 cpdef build_tree(int depth, list functions, 
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
     int Npars=?, object leaves_count=?, object arr_indices=?,
-    dict params_used=?, object value=?, double T=?, double alpha=?, object sigma=?)
+    dict params_used=?, object value=?, double T=?, double alpha=?, object sigma=?, double g_tau=?)
 
 cdef parameter_parser(int Npars)
 

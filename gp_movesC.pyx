@@ -12,25 +12,16 @@ cimport numpy as cnp
 # g(theta) = Normal(0, _G_TAU^2). Set per-run via set_g_tau(std(y)).
 # Tree-level plumbing of tau (analogous to sigma) is deferred; this module
 # global is the temporary single source of truth.
-cdef double _G_TAU = 1.0
+
 cdef double _KIND_CROSS_PROB = 0.5      # mixture weight for sub-move B (BIRTH/DEATH)
 
-cpdef void set_g_tau(double tau) except *:
-    global _G_TAU
-    if tau <= 0.0:
-        raise ValueError("set_g_tau: tau must be > 0")
-    _G_TAU = tau
-
-cpdef double get_g_tau():
-    return _G_TAU
-
-cdef inline double _sample_g():
+cdef inline double _sample_g(double g_tau):
     """Draw theta ~ N(0, _G_TAU^2)."""
-    return random.gauss(0.0, _G_TAU)
+    return random.gauss(0.0, g_tau)
 
-cdef inline double _log_g(double theta):
+cdef inline double _log_g(double theta, double g_tau):
     """log N(theta; 0, _G_TAU^2)."""
-    cdef double t2 = _G_TAU * _G_TAU
+    cdef double t2 = g_tau * g_tau
     return -0.5 * np.log(2.0 * np.pi * t2) - 0.5 * theta * theta / t2
 
 
@@ -127,7 +118,7 @@ cdef int _count_nodes(function_treeC.Node node):
 
 
 cdef double _eval_build_density(function_treeC.Node S, int d,
-                                int M, int O, double p_par):
+                                int M, int O, double p_par, double g_tau):
     """log q_build(S | d) for a perfect-binary subtree of height d.
     Caller must verify _is_perfect_binary(S, d) before calling.
 
@@ -141,7 +132,7 @@ cdef double _eval_build_density(function_treeC.Node S, int d,
     cdef double log_g_sum = 0.0
     cdef function_treeC.Node leaf
     for leaf in param_leaves:
-        log_g_sum += _log_g(<double> leaf.value)
+        log_g_sum += _log_g(<double> leaf.value, g_tau)
     return (
         (<double> K_S) * np.log(p_par) + log_g_sum
         + (<double> (n_leaves - K_S)) * (np.log(1.0 - p_par) - np.log(<double> M))
@@ -151,7 +142,7 @@ cdef double _eval_build_density(function_treeC.Node S, int d,
 
 cdef function_treeC.Node _build_subtree_with_params(
         int d, list functions, list operations, object domain,
-        double p_par, list existing_param_names):
+        double p_par, list existing_param_names, double g_tau):
     """Build a perfect-binary subtree of height d with per-leaf Bernoulli
     parameter assignment. Parameter names extend `existing_param_names`."""
     cdef function_treeC.Node root = function_treeC.build_tree(d, functions, domain)
@@ -168,7 +159,7 @@ cdef function_treeC.Node _build_subtree_with_params(
             leaf.bis_param = leaf.is_param()
             # Phase 2.1.PM: birth from g = N(0, tau^2). Same draw is what
             # _eval_build_density(...) reads back via leaf.value.
-            leaf.set_value(_sample_g())
+            leaf.set_value(_sample_g(g_tau))
     function_treeC._post_order_update(root)
     return root
 
@@ -722,7 +713,7 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
     cdef str new_func_str, new_name
     #cdef int new_idx
     cdef bint do_cross
-
+    cdef double g_tau = tree.g_tau
     if tree.root is None:
         return (0.0, 0.0)
     if O <= 0 or M <= 0:
@@ -778,7 +769,7 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         else:
             tree.tree_update(parent)
         log_q_fwd += -np.log(<double> M)
-        log_q_rev += _log_g(theta_dying)
+        log_q_rev += _log_g(theta_dying, g_tau)
         return (log_q_fwd, log_q_rev)
 
     # Function leaf -> parameter leaf: case (c) BIRTH of theta_new.
@@ -790,13 +781,13 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
     v.bis_param = v.is_param()
     # Phase 2.1.PM: draw theta_new ~ g and store the SAME draw as the leaf
     # value AND as the argument to log g(.) in log_q_fwd.
-    theta_new = _sample_g()
+    theta_new = _sample_g(g_tau)
     v.set_value(theta_new)
     if parent is None:
         tree.tree_update(tree.root)
     else:
         tree.tree_update(parent)
-    log_q_fwd += _log_g(theta_new)
+    log_q_fwd += _log_g(theta_new, g_tau)
     log_q_rev += -np.log(<double> M)
     return (log_q_fwd, log_q_rev)
 
@@ -1020,13 +1011,13 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
             return (log_q_fwd, -np.inf)
         log_select_rev = -np.log(<double> n_int_Tnew)
 
-
+    cdef double g_tau = tree.g_tau
     log_q_rev = (log_select_rev
                  - np.log(<double> O)
                  + _truncated_geometric_log_pmf(d_S, _ADD_NODE_DEPTH_RHO,
                                                 _ADD_NODE_DEPTH_MAX)
                  - np.log(2.0)
-                 + _eval_build_density(sibling, d_S, M, O, _ADD_NODE_PARAM_PROB))
+                 + _eval_build_density(sibling, d_S, M, O, _ADD_NODE_PARAM_PROB, g_tau))
 
     return (log_q_fwd, log_q_rev)
 
@@ -1196,6 +1187,7 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
     cdef double log_q_rev = 0.0
     cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
     cdef bint side_left
+    cdef double g_tau = tree.g_tau
 
     if n_leaves_T == 0 or M <= 0 or O <= 0:
         return (0.0, 0.0)
@@ -1212,7 +1204,7 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 2. build subtree S ----
     S = _build_subtree_with_params(d, functions, operations, tree.domain,
-                                   _ADD_NODE_PARAM_PROB, existing_names)
+                                   _ADD_NODE_PARAM_PROB, existing_names, g_tau)
 
     # ---- 3. wrap L ----
     parent = tree.root.find_parent(L)   # None iff L is the root (single-node T)
@@ -1240,12 +1232,12 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 4. proposal densities ----
     n_nodes_Tp = _count_nodes(tree.root)
-
+    
     log_q_fwd = (-np.log(<double> n_leaves_T)
                  - np.log(<double> O)
                  + log_p_d
                  - np.log(2.0)
-                 + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB))
+                 + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB, g_tau))
 
     # Reverse: leaf-hoist of L on T'. Uniform over non-root nodes of T'.
     if n_nodes_Tp <= 1:
@@ -1320,6 +1312,7 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
     cdef double log_q_rev = 0.0
     cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
     cdef bint side_left
+    cdef double g_tau = tree.g_tau
 
     if n_int_T == 0 or M <= 0 or O <= 0:
         return (0.0, 0.0)
@@ -1333,7 +1326,7 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 2. build subtree S ----
     S = _build_subtree_with_params(d, functions, operations, tree.domain,
-                                   _ADD_NODE_PARAM_PROB, existing_names)
+                                   _ADD_NODE_PARAM_PROB, existing_names, g_tau)
 
     # ---- 3. wrap u with a fresh internal node ----
     parent = tree.root.find_parent(u)   # None iff u is the root
@@ -1359,12 +1352,12 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 4. proposal densities ----
     n_nodes_Tp = _count_nodes(tree.root)
-
+    
     log_q_fwd = (-np.log(<double> n_int_T)
                  - np.log(<double> O)
                  + log_p_d
                  - np.log(2.0)
-                 + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB))
+                 + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB, g_tau))
 
     # Reverse: hoist of (the former) u on T'. The chosen node in the
     # reverse is the new_internal's child that corresponds to u; selecting

@@ -438,7 +438,8 @@ cdef class Tree:
     def __init__(self, int depth, list functions, 
             cnp.ndarray[cnp.float64_t, ndim=1] x, 
             Node node=None, int Npars = 0, object value=1, 
-            double T=0, double alpha=0.01, object sigma = 1.0):
+            double T=0, double alpha=0.01, object sigma = 1.0,
+            double g_tau=1.0):
         '''Tree class initialization'''
         self.T = T
         self.domain = real_functionC._domain_fixer(x)
@@ -447,9 +448,11 @@ cdef class Tree:
         self.Npars=Npars
         self.alpha = alpha
         self.sigma = sigma
-        self.value = value   
+        self.value = value
+        self.g_tau = g_tau  
         if node==None:
-            self.root = build_tree(depth, functions, self.domain, Npars=Npars, value=value, alpha=self.alpha, sigma=self.sigma)
+            self.root = build_tree(depth, functions, self.domain, Npars=Npars, 
+                        value=value, alpha=self.alpha, sigma=self.sigma,  g_tau = self.g_tau)
         else:
             self.root = node
             self.depth = node.depth()
@@ -475,7 +478,11 @@ cdef class Tree:
         memo[id(self)] = copy_tree
         return copy_tree
     
-    
+    cpdef void set_g_tau(self, double tau) except *:
+        
+        if tau <= 0.0:
+            raise ValueError("set_g_tau: tau must be > 0")
+        self.g_tau = tau
     
     cdef get_param_values(self):
         '''Builds parameters' dictionaries: one with memory locations and values 
@@ -835,13 +842,13 @@ cdef class Tree:
             else:    
                 self.root = build_tree(max(0, min(new_depth, self.depth)), self.functions, self.domain,
                             Npars=self.Npars, value=self.value,
-                            alpha=self.alpha, sigma=self.sigma) #riguardare per distribuire depth e Npars (specialmente Npars)
+                            alpha=self.alpha, sigma=self.sigma, g_tau = self.g_tau) #riguardare per distribuire depth e Npars (specialmente Npars)
         elif replace_all==1:
             if kwargs is not None:
                 self.root.left = Node(**kwargs)
             else:
                 self.root.left = build_tree(max(0, new_depth), self.functions, 
-                        self.domain, Npars=random.choice((0,1)))
+                        self.domain, Npars=random.choice((0,1)), g_tau = self.g_tau)
             if op is not None:
                 self.root.assign_operation(op)
         elif replace_all==2:
@@ -849,7 +856,7 @@ cdef class Tree:
                 self.root.right = Node(**kwargs)
             else:
                 self.root.right = build_tree(max(0, new_depth), self.functions, 
-                        self.domain, Npars=random.choice((0,1)))
+                        self.domain, Npars=random.choice((0,1)), g_tau = self.g_tau)
             if op is not None:    
                 self.root.assign_operation(op)
         self.tree_update(self.root)
@@ -872,7 +879,8 @@ cdef _post_order_update(Node node):
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
         str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None, 
-             dict params_used=None, object value = 1.0, double T=0, double alpha=0.01, object sigma=1.00):
+             dict params_used=None, object value = 1.0, double T=0, double alpha=0.01, object sigma=1.00,
+             double g_tau = 1.0):
         '''Builds a Tree from scratch'''
         if isinstance(value, (float, int)):
             assign_value = np.full((Npars,), value, dtype=np.float64)
@@ -949,10 +957,10 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
         #Recursion needed
         cdef Node left = build_tree(depth - 1, functions, x,
                 'node', Npars, leaves_count,  arr_indices, params_used, value=value,
-                alpha = alpha, sigma = sigma)
+                alpha = alpha, sigma = sigma, g_tau = g_tau)
         cdef Node right = build_tree(depth - 1, functions, x, 
                 'node', Npars, leaves_count, arr_indices, params_used, value=value,
-                alpha = alpha, sigma = sigma)
+                alpha = alpha, sigma = sigma, g_tau = g_tau)
        
         
         cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
