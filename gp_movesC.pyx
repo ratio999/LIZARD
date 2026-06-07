@@ -8,6 +8,35 @@ cimport real_functionC
 cimport numpy as cnp
 
 
+# --- Phase 2.5: per-Grove RNG plumbing ------------------------------------
+# _PY_RNG / _NP_RNG are module-level handles read by every move that
+# needs randomness. Defaulting to the bare `random` and `np.random`
+# modules keeps the pre-2.5 behaviour bit-exact when no caller invokes
+# set_rng (the module-level functions are just methods on the global
+# random.Random / numpy default Generator). Grove.__init__ calls
+# set_rng(self._py_rng, self._np_rng) at construction; tests can call
+# set_rng directly with their own seeded handles.
+_PY_RNG = random
+_NP_RNG = np.random
+
+cpdef void set_rng(object py_rng, object np_rng) except *:
+    """Install the (Python, NumPy) RNG handles consumed by every move.
+
+    Both arguments must expose the same call surface as `random` /
+    `np.random` respectively (i.e. `random.Random` / `numpy.random.Generator`
+    instances are the canonical choices). Pass `random` / `np.random`
+    themselves to restore the unseeded global behaviour.
+    """
+    global _PY_RNG, _NP_RNG
+    if py_rng is None or np_rng is None:
+        raise ValueError("set_rng: py_rng and np_rng must both be non-None")
+    _PY_RNG = py_rng
+    _NP_RNG = np_rng
+
+cpdef tuple get_rng():
+    return (_PY_RNG, _NP_RNG)
+
+
 # --- Phase 2.1.PM: birth density g for new parameters ---------------------
 # g(theta) = Normal(0, _G_TAU^2). Set per-run via set_g_tau(std(y)).
 # Tree-level plumbing of tau (analogous to sigma) is deferred; this module
@@ -17,7 +46,7 @@ cdef double _KIND_CROSS_PROB = 0.5      # mixture weight for sub-move B (BIRTH/D
 
 cdef inline double _sample_g(double g_tau):
     """Draw theta ~ N(0, _G_TAU^2)."""
-    return random.gauss(0.0, g_tau)
+    return _PY_RNG.gauss(0.0, g_tau)
 
 cdef inline double _log_g(double theta, double g_tau):
     """log N(theta; 0, _G_TAU^2)."""
@@ -66,7 +95,7 @@ cpdef list flatten_nodes(function_treeC.Node node, list out=None):
 cdef function_treeC.Node _select_uniform_node(function_treeC.Tree tree):
     """Pick one node of `tree` uniformly at random over all nodes."""
     cdef list all_nodes = _flatten_nodes(tree.root, [])
-    return all_nodes[random.randrange(len(all_nodes))]
+    return all_nodes[_PY_RNG.randrange(len(all_nodes))]
 
 
 cdef bint _is_perfect_binary(function_treeC.Node node, int h):
@@ -89,7 +118,7 @@ cdef tuple _sample_truncated_geometric(double rho, int d_max):
     """Sample d ~ truncated Geom(rho) on {1,...,d_max}.
     Returns (d, log_p_d(d))."""
     cdef double Z = (1.0 - rho ** d_max) / (1.0 - rho)
-    cdef double u = random.random()
+    cdef double u = _PY_RNG.random()
     cdef double cdf = 0.0
     cdef double pmf
     cdef int d
@@ -151,7 +180,7 @@ cdef function_treeC.Node _build_subtree_with_params(
     cdef function_treeC.Node leaf
     cdef str new_name
     for leaf in leaves:
-        if random.random() < p_par:
+        if _PY_RNG.random() < p_par:
             new_name = function_treeC.new_par(pool, "a")
             pool.append(new_name)
             leaf.function = real_functionC.RealFunctionC.from_string(
@@ -261,7 +290,7 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
         new_leaves = new_subtree.get_leaves(leaves_list=[])
         n_leaves = len(new_leaves)
         # K <= 2^d_max == n_leaves always (build_tree returns perfect binary).
-        chosen_slots = sorted(random.sample(range(n_leaves), K))
+        chosen_slots = sorted(_PY_RNG.sample(range(n_leaves), K))
         old_param_nodes_sorted = sorted(
             old_param_nodes,
             key=lambda n: n.get_fun().get_description(),
@@ -342,7 +371,7 @@ cpdef legacy_subtree_mutation( function_treeC.Tree tree, functions, random_depth
         max_depth = node_to_replace.depth()
     else:
         #max_depth = max(1, int(random.expovariate(1/2)))
-        max_depth = random.choice(list(np.arange(1, node_to_replace.depth()+2)))
+        max_depth = _PY_RNG.choice(list(np.arange(1, node_to_replace.depth()+2)))
     cdef function_treeC.Node new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
 
     if parent_node is None:
@@ -448,8 +477,8 @@ cdef tuple _subtree_crossover(function_treeC.Tree parent1,
     n_int_b = len(nodes_b)
     if n_int_a == 0 or n_int_b == 0:
         return (0.0, 0.0)
-    v = nodes_a[random.randrange(n_int_a)]
-    w = nodes_b[random.randrange(n_int_b)]
+    v = nodes_a[_PY_RNG.randrange(n_int_a)]
+    w = nodes_b[_PY_RNG.randrange(n_int_b)]
 
     parent_v = parent1.root.find_parent(v)   # None iff v is parent1.root
     parent_w = parent2.root.find_parent(w)   # None iff w is parent2.root
@@ -725,7 +754,7 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
 
     # 2. Internal node -> op resample (symmetric).
     if not v.is_leaf():
-        v.op_symbol = random.choice(operations)
+        v.op_symbol = _PY_RNG.choice(operations)
         v.update_func()
         if parent is None:
             tree.tree_update(tree.root)
@@ -734,7 +763,7 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         return (0.0, 0.0)
 
     # 3. Leaf node. Decide kind-cross vs kind-preserving.
-    do_cross = (random.random() < _KIND_CROSS_PROB)
+    do_cross = (_PY_RNG.random() < _KIND_CROSS_PROB)
 
     if not do_cross:
         # Sub-move A.
@@ -742,7 +771,7 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
             # Identity for parameter leaves (refresh is its own move).
             return (0.0, 0.0)
         # Function leaf: pick uniform from F. Symmetric.
-        new_func_str = random.choice(functions)
+        new_func_str = _PY_RNG.choice(functions)
         v.function = real_functionC.RealFunctionC.from_string(
             new_func_str, tree.domain, compute_grad=False)
         v.bis_param = v.is_param()
@@ -760,7 +789,7 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         # Capture the dying value BEFORE swapping the leaf, since the
         # reverse move is a BIRTH at exactly this value: log q_rev = log g(theta_j).
         theta_dying = <double> v.value
-        new_func_str = random.choice(functions)
+        new_func_str = _PY_RNG.choice(functions)
         v.function = real_functionC.RealFunctionC.from_string(
             new_func_str, tree.domain, compute_grad=False)
         v.bis_param = v.is_param()
@@ -817,10 +846,10 @@ cpdef legacy_point_mutation(function_treeC.Tree tree, functions, operations=None
     cdef str new_func_str
     cdef function_treeC.Node parent = tree.root.find_parent(node_to_mutate)
     if node_to_mutate.is_leaf():
-        new_func_str= random.choice(functions)
+        new_func_str= _PY_RNG.choice(functions)
         node_to_mutate.function = real_functionC.RealFunctionC.from_string(new_func_str, tree.domain, compute_grad = False)
     else:
-        node_to_mutate.op_symbol = random.choice(operations)
+        node_to_mutate.op_symbol = _PY_RNG.choice(operations)
         node_to_mutate.update_func()
     '''
     if parent is None:
@@ -894,7 +923,7 @@ cpdef legacy_hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_t
         if not subtree.is_leaf():
             #print('subtree node: ', subtree.get_fun().get_description(), 'left:', subtree.left.get_fun().get_description(),
             # 'right: ', subtree.right.get_fun().get_description())
-            choice = random.choice([True, False])
+            choice = _PY_RNG.choice([True, False])
             if choice:
                 try:
                     parent_node.assign_left(subtree.get_left())
@@ -959,7 +988,7 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
     n_nodes_T = len(non_root_nodes) + 1   # |N(T)|; hoist selects from |N(T)|-1
     if n_nodes_T <= 1:
         return (0.0, 0.0)
-    v = non_root_nodes[random.randrange(n_nodes_T - 1)]
+    v = non_root_nodes[_PY_RNG.randrange(n_nodes_T - 1)]
     parent = tree.root.find_parent(v)     # never None: v != root
     v_is_leaf = v.is_leaf()
     if parent.get_left() is v:
@@ -1052,7 +1081,7 @@ def size_fair_mutation(function_treeC.Tree tree, list functions, cnp.ndarray[cnp
 def replace_with_subtree(function_treeC.Tree tree, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Replaces a subtree with a random generated subtree GONNA BE DELETED PROBABLY"""
     cdef function_treeC.Node node_to_replace = tree.root.select_random_node()
-    cdef function_treeC.Node new_subtree = function_treeC.build_tree(random.randint(1, 3), functions, x)
+    cdef function_treeC.Node new_subtree = function_treeC.build_tree(_PY_RNG.randint(1, 3), functions, x)
     node_to_replace.left = new_subtree.left
     node_to_replace.right = new_subtree.right
 '''
@@ -1098,7 +1127,7 @@ cpdef legacy_add_node( function_treeC.Tree tree, functions, operations=None, ran
     """
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    cdef str op = random.choice(operations)
+    cdef str op = _PY_RNG.choice(operations)
     if not tree.root.is_leaf():
         parent_node = None
         while parent_node is None:
@@ -1109,9 +1138,9 @@ cpdef legacy_add_node( function_treeC.Tree tree, functions, operations=None, ran
             #max_depth = tree.root.depth()
             max_depth = 2
         else:
-            max_depth = random.choice(list(np.arange(1, tree.root.depth()+1)))
+            max_depth = _PY_RNG.choice(list(np.arange(1, tree.root.depth()+1)))
         new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
-        if random.choice([True, False]):
+        if _PY_RNG.choice([True, False]):
             node_to_replace.assign_left(node_to_replace)
             node_to_replace.assign_right(new_subtree)
         else:
@@ -1136,9 +1165,9 @@ cpdef legacy_add_node( function_treeC.Tree tree, functions, operations=None, ran
     #print('nuova descr: ', tree.tree_get_description())
     else:
         parent_node = function_treeC.Node(function=tree.root.get_fun())
-        max_depth = random.choice([1,2])
+        max_depth = _PY_RNG.choice([1,2])
         new_subtree = function_treeC.build_tree(max_depth, functions, tree.domain)
-        if random.choice([True, False]):
+        if _PY_RNG.choice([True, False]):
             tree.root.assign_right(parent_node)
             tree.root.assign_left(new_subtree)
         else:
@@ -1198,9 +1227,9 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
     L = tree.root.select_random_leaf()
     parent = tree.root.find_parent(L)
     #L = leaves[random.randrange(n_leaves_T)]
-    op = random.choice(operations)
+    op = _PY_RNG.choice(operations)
     d, log_p_d = _sample_truncated_geometric(_ADD_NODE_DEPTH_RHO, _ADD_NODE_DEPTH_MAX)
-    side_left = (random.random() < 0.5)
+    side_left = (_PY_RNG.random() < 0.5)
 
     # ---- 2. build subtree S ----
     S = _build_subtree_with_params(d, functions, operations, tree.domain,
@@ -1318,11 +1347,11 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
         return (0.0, 0.0)
 
     # ---- 1. pick wrap target u, op, depth, side ----
-    u = internal_nodes[random.randrange(n_int_T)]
-    op = random.choice(operations)
+    u = internal_nodes[_PY_RNG.randrange(n_int_T)]
+    op = _PY_RNG.choice(operations)
     d, log_p_d = _sample_truncated_geometric(_ADD_NODE_DEPTH_RHO,
                                              _ADD_NODE_DEPTH_MAX)
-    side_left = (random.random() < 0.5)
+    side_left = (_PY_RNG.random() < 0.5)
 
     # ---- 2. build subtree S ----
     S = _build_subtree_with_params(d, functions, operations, tree.domain,
@@ -1469,17 +1498,17 @@ cdef class AMState:
         cdef cnp.ndarray scale
         if self.n_visits < self.K + 1:
             scale = np.maximum(self.eps, np.abs(theta) * self.rel)
-            return theta + np.random.normal(0.0, scale)
+            return theta + _NP_RNG.normal(0.0, scale)
         cdef cnp.ndarray cov, L
         cov = np.exp(2.0 * self.log_lambda) * (self.C + self.jitter * np.eye(self.K))
         try:
             L = np.linalg.cholesky(cov)
-            return theta + L @ np.random.standard_normal(self.K)
+            return theta + L @ _NP_RNG.standard_normal(self.K)
         except np.linalg.LinAlgError:
             # Defensive fallback: use the diagonal of cov if C drifted
             # non-PSD (shouldn't happen with the jitter, but cheap to guard).
             scale = np.maximum(self.eps, np.sqrt(np.diag(cov)))
-            return theta + np.random.normal(0.0, scale)
+            return theta + _NP_RNG.normal(0.0, scale)
     
     cpdef cnp.ndarray propose(self, cnp.ndarray theta):
         return self._propose(theta)
@@ -1567,7 +1596,7 @@ cdef tuple _parameter_refresh(function_treeC.Tree tree,
     else:
         alpha_obs = float(np.exp(log_acc))
 
-    cdef bint accepted = (random.random() < alpha_obs)
+    cdef bint accepted = (_PY_RNG.random() < alpha_obs)
 
     if accepted:
         tree._apply_param_values(cand_nv)

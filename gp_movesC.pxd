@@ -3,6 +3,12 @@ cimport real_functionC
 cimport function_treeC
 
 
+
+# Phase 2.5(c): per-Grove RNG handles
+cpdef void set_rng(object py_rng, object np_rng) except *
+cpdef tuple get_rng()
+
+
 cdef list _flatten_nodes(function_treeC.Node node, list out)
 cpdef list flatten_nodes(function_treeC.Node node, list out=?)
 cdef function_treeC.Node _select_uniform_node(function_treeC.Tree tree)

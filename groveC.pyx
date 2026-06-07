@@ -120,6 +120,11 @@ cdef class Grove:
         # trajectory bit-for-bit (modulo scipy/BLAS optimizer noise).
         self._py_rng = random.Random(seed)
         self._np_rng = np.random.default_rng(seed)
+        # Install once for any move calls reachable from burn-in / user
+        # code before the first _step. _step / legacy_step re-install
+        # before every step so multiple Groves in the same process keep
+        # their trajectories independent.
+        gp_movesC.set_rng(self._py_rng, self._np_rng)
         if self.burn_in:
             # Run two-stage burn-in procedure to initialize trees
             # Stage 1: Generate all depth-1 combinations (primitive op primitive)
@@ -239,7 +244,7 @@ cdef class Grove:
                         dtype=np.float64)
         
         probs = probs / probs.sum()
-        idx = int(np.random.choice(np.arange(6), p=probs))
+        idx = int(self._np_rng.choice(np.arange(6), p=probs))
         #random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
             return ("point_mutation", {"operations": self.operations})
@@ -291,7 +296,7 @@ cdef class Grove:
                 if self.size > 1:
                     donor_idx = i
                     while donor_idx == i:
-                        donor_idx = random.randrange(self.size)
+                        donor_idx = self._py_rng.randrange(self.size)
                     donor = deepcopy(self.trees[donor_idx])
                     lqf, lqr = gp_movesC.subtree_crossover(cand, donor)
                 else:
@@ -353,7 +358,7 @@ cdef class Grove:
         """
         if self.size == 0:
             return False
-        cdef int i = random.randrange(self.size)
+        cdef int i = self._py_rng.randrange(self.size)
         cdef function_treeC.Tree tree = self.trees[i]
         cdef int K = len(tree.params)
 
@@ -433,13 +438,17 @@ cdef class Grove:
         with beta = 1/T tempering the target only. The proposal correction
         is applied at face value (see Phase 1.3, Phase 2.2 derivation).
         """
-        
+        # Phase 2.5: install this Grove's RNGs on gp_movesC for the
+        # duration of this step. Required because multiple Groves in the
+        # same process share gp_movesC's module-level _PY_RNG/_NP_RNG
+        # (e.g. non-MPI Forest with several temperatures).
+        gp_movesC.set_rng(self._py_rng, self._np_rng)
                 # Front-of-queue PR branch: PR is self-accepting (it runs its own
         # tempered MH internally with the AM kernel) and must NOT go
         # through the structural _propose / log_alpha path.
-        if random.random() < self.pr_prob:
+        if self._py_rng.random() < self.pr_prob:
             return self._step_parameter_refresh(y)
-        cdef int i = random.randrange(self.size)
+        cdef int i = self._py_rng.randrange(self.size)
         cdef function_treeC.Tree cand
         cdef double lqf, lqr
         cdef str move_name
@@ -558,7 +567,7 @@ cdef class Grove:
         elif log_alpha == -np.inf:
             accepted = False
         else:
-            u = random.random()
+            u = self._py_rng.random()
             # u == 0 would give log(u) = -inf; accept (probability-zero edge).
             accepted = (u <= 0.0) or (np.log(u) < log_alpha)
 
@@ -594,6 +603,9 @@ cdef class Grove:
         """
         if self.size == 0:
             return False
+        # Phase 2.5: install this Grove's RNGs on gp_movesC for the duration
+        # of this step (same rationale as _step).
+        gp_movesC.set_rng(self._py_rng, self._np_rng)
         cdef int i = 0 #random.randrange(self.size)
 
         # ensure current posterior is available
@@ -626,7 +638,7 @@ cdef class Grove:
 
         cdef double acc_p = _accept_prob(dlogpost, self.T)
         self.proposal_count += 1.0
-        if random.random() < acc_p:
+        if self._py_rng.random() < acc_p:
             self.trees[i] = cand
             self.root_posteriors[i] = new_post
             self.acceptance_count += 1.0
