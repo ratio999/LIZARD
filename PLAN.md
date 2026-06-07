@@ -121,10 +121,19 @@ the Jacobian = 1 argument.
 
 ### 2.4 Fix or remove fake gradient in real_functionC.
 ### 2.5 Determinism & reproducibility
-- Plumb a `seed` argument through Grove/Forest/moves down to numpy.random and python.random.
+'''- Plumb a `seed` argument through Grove/Forest/moves down to numpy.random and python.random.
 - Document scipy optimizer non-determinism. Note: per-tree warm-start of θ
   is handled by Phase 2.7(e) (implicit via `self.name_values` inheritance
-  + Phase 2.7(f) caching).
+  + Phase 2.7(f) caching).'''
+  
+2.5(a) — Grove.__init__ accepts seed=None; store _py_rng = random.Random(seed) and _np_rng = np.random.default_rng(seed); add the two fields to groveC.pxd. No call-site changes yet.
+2.5(b) — parallel with 2.5(c). Inside groveC.pyx replace global RNG calls with self._py_rng.* / self._np_rng.*. Targets: _choose_move (groveC.pyx:233), _step PR coin and u-draw (groveC.pyx:431, groveC.pyx:552), _step_parameter_refresh, _propose donor pick, legacy_step, parallel-tempering swap.
+2.5(c) — parallel with 2.5(b). Add set_rng(py_rng, np_rng) module setter + _PY_RNG, _NP_RNG globals to gp_movesC.pyx (mirrors set_g_tau). Grove calls it once at construction.
+2.5(d) — depends on 2.5(c). Replace random.* / np.random.* inside gp_movesC.pyx with the module RNGs. Targets: _select_uniform_node, _sample_g, _sample_truncated_geometric, _build_subtree_with_params, _point_mutation (kind-cross coin + picks), _subtree_mutation (slot sample), _subtree_crossover (selection), _hoist_mutation, _add_node, _split, AMState._propose (np.random.normal / standard_normal), any reachable legacy_*.
+2.5(e) — Forest derives per-Grove seeds via np.random.SeedSequence(seed).spawn(n_groves).
+2.5(f) — Audit polya_treeC.pyx for any RNG use (likely no-op since extract_path / update_path are deterministic). Route via same setter if found.
+2.5(g) — Docstring on Grove: "Seed controls the structural-MCMC trajectory. Continuous-θ optimization is reproducible only up to scipy/BLAS noise; for bit-exact runs set OMP_NUM_THREADS=1 and pin BLAS."
+2.5(h) — depends on (a)–(g); test file creation deferred per freeze. Smoke test: two Groves, same seed, same n_steps → identical tree_get_description() per slot AND identical move_stats(). This is the canonical correctness check for the seed plumbing.
 
 ### 2.6 Pólya tree v2 (recommended after Phase 1.1 decision)
 - If kind-conditional Dirichlets are chosen: refactor PolyaNode to have separate (α_op, α_prim) blocks; descent and predictive use only the relevant block according to the GP grammar context (which kind is required at this position).

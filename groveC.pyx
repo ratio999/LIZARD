@@ -56,7 +56,8 @@ cdef class Grove:
                  bint burn_in=False,
                  int use_mpi=0,
                  bint use_spawn=False,
-                 object polya=None):
+                 object polya=None,
+                 object seed=None):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -111,6 +112,14 @@ cdef class Grove:
         self._bic_cache = {}
         self._cache_y = None
         self.pr_prob = 0.02
+        # Phase 2.5(a): per-Grove RNGs. Both seeded from a single user
+        # `seed` (None -> non-deterministic). _py_rng drives Python-side
+        # random.* call sites; _np_rng drives NumPy call sites. Forest
+        # will spawn child seeds via SeedSequence in 2.5(e); for now any
+        # standalone Grove built with the same seed reproduces its own
+        # trajectory bit-for-bit (modulo scipy/BLAS optimizer noise).
+        self._py_rng = random.Random(seed)
+        self._np_rng = np.random.default_rng(seed)
         if self.burn_in:
             # Run two-stage burn-in procedure to initialize trees
             # Stage 1: Generate all depth-1 combinations (primitive op primitive)

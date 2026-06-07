@@ -17,6 +17,8 @@ cdef class Grove:
     cdef public object root_posteriors
     cdef public list trees
     cdef double lambda_reg
+    cdef object _py_rng
+    cdef object _np_rng
     cdef double base_temp
     cdef object domain
     cdef double acceptance_count
