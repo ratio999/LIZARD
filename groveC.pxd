@@ -14,6 +14,7 @@ cdef class Grove:
     cdef int n_pars
     cdef double T
     cdef public object sigma
+    cdef public double g_tau
     cdef public object root_posteriors
     cdef public list trees
     cdef double lambda_reg

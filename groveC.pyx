@@ -69,7 +69,8 @@ cdef class Grove:
                  int use_mpi=0,
                  bint use_spawn=False,
                  object polya=None,
-                 object seed=None):
+                 object seed=None,
+                 object g_tau=None):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -80,6 +81,17 @@ cdef class Grove:
             operations = ["+", "-", "*", "/", "**", "o"]
         self.operations = operations
         self.sigma = sigma if sigma is not None else 1.0
+        # Phase 2.1.PM birth density g(theta) = N(0, g_tau^2).
+        # Default to std(y) when caller doesn't pass one explicitly;
+        # fall back to 1.0 if y is degenerate / empty.
+        if g_tau is None:
+            _y_arr = np.asarray(self.data)
+            _std_y = float(_y_arr.std()) if _y_arr.size > 0 else 1.0
+            self.g_tau = _std_y if _std_y > 0.0 else 1.0
+        else:
+            self.g_tau = float(g_tau)
+            if self.g_tau <= 0.0:
+                raise ValueError("Grove: g_tau must be > 0")
         self.funcs = funcs
         self.domain = real_functionC._domain_fixer(x)
         self.use_gradients = use_gradients
@@ -187,10 +199,12 @@ cdef class Grove:
         for i in range(self.size):
             if node_list is not None and len(node_list)>i:
                     trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
-                                               node_list[i], Npars, init_value, self.T, sigma=self.sigma)
+                                               node_list[i], Npars, init_value, self.T,
+                                               sigma=self.sigma, g_tau=self.g_tau)
             else:
                 trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
-                                               Npars=Npars, value=init_value, T=self.T, sigma = self.sigma)
+                                               Npars=Npars, value=init_value, T=self.T,
+                                               sigma=self.sigma, g_tau=self.g_tau)
         return trees
 
     cpdef set_trees(self, list new_trees):
@@ -725,7 +739,9 @@ cdef class Grove:
                     x=self.domain, 
                     Npars=0,  # will add params manually
                     value=1.0, 
-                    T=self.T
+                    T=self.T,
+                    sigma=self.sigma,
+                    g_tau=self.g_tau,
                 )
                 
                 # Build left child
@@ -855,7 +871,8 @@ cdef class Grove:
                     )
             primitive_tree = function_treeC.Tree(
                 depth=root_node.node_depth, functions=self.funcs, x=self.domain, node=root_node,
-                Npars=len(root_node.function.params), value=1.0, T=self.T
+                Npars=len(root_node.function.params), value=1.0, T=self.T,
+                sigma=self.sigma, g_tau=self.g_tau
             )
             primitive_tree.name_values = deepcopy(primitive_tree.name_values)
             
@@ -908,7 +925,8 @@ cdef class Grove:
                 #print('root built', root_tree.function.get_description())                
                 tree = function_treeC.Tree(
                     depth=root_tree.depth(), functions=self.funcs, x=self.domain, node=root_tree,
-                    Npars=len(root_tree.function.params), T=self.T
+                    Npars=len(root_tree.function.params), T=self.T,
+                    sigma=self.sigma, g_tau=self.g_tau
                 )
                 tree.name_values = deepcopy(tree.name_values)
                 print(f"  Just created tree: id(name_values)={id(tree.name_values.keys())}, content={tree.name_values}")
@@ -1088,7 +1106,8 @@ cdef class Grove:
 
         cdef function_treeC.Tree preliminary_tree = function_treeC.Tree(
             depth=right_copy.node_depth, functions=self.funcs,
-            x=self.domain, node=right_copy)
+            x=self.domain, node=right_copy,
+            sigma=self.sigma, g_tau=self.g_tau)
         left_tree.tree_update(left_tree.root)
         preliminary_tree.tree_update(preliminary_tree.root)
     
@@ -1100,7 +1119,8 @@ cdef class Grove:
                                             symbol=op )
         cdef function_treeC.Tree tree = function_treeC.Tree(depth=root_node.node_depth, functions=self.funcs,
                                     x=self.domain, node = root_node,
-                                    Npars=len(root_node.function.params), T=self.T)
+                                    Npars=len(root_node.function.params), T=self.T,
+                                    sigma=self.sigma, g_tau=self.g_tau)
         tree.name_values = deepcopy(tree.name_values)
         gp_movesC.refresh_params(tree)
         #print(tree.name_values)
@@ -1119,14 +1139,16 @@ cdef class Grove:
         #cdef function_treeC.Node right_node = deepcopy(right)
         cdef function_treeC.Node right_copy = deepcopy(right)   # <-- FIX: deepcopy right too
         cdef function_treeC.Tree preliminary_tree = function_treeC.Tree(depth = right_copy.node_depth, functions = self.funcs,
-                x = self.domain, node = right_copy)
+                x = self.domain, node = right_copy,
+                sigma=self.sigma, g_tau=self.g_tau)
         gp_movesC.rename_prefix(preliminary_tree)
         cdef function_treeC.Node right_node = deepcopy(preliminary_tree.root)
         cdef function_treeC.Node root_node = function_treeC.Node(function=None,
                                             left=left_node, right=right_node, symbol=op )
         cdef function_treeC.Tree tree = function_treeC.Tree(depth=root_node.node_depth, functions=self.funcs,
                                     x=self.domain, node = root_node,
-                                    Npars=len(root_node.function.params), value=1.0, T=self.T)
+                                    Npars=len(root_node.function.params), value=1.0, T=self.T,
+                                    sigma=self.sigma, g_tau=self.g_tau)
         gp_movesC.refresh_params(tree)
         #print(tree.name_values)
         del preliminary_tree
@@ -1637,7 +1659,8 @@ cdef class Forest:
                  list operations=None,
                  double base_temp=1.0,
                  int n_procs=0,
-                 object seed=None):
+                 object seed=None,
+                 object g_tau=None):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
@@ -1658,7 +1681,8 @@ cdef class Forest:
                 Grove(x, self.temperatures[g], size_per_grove, depth, funcs,
                       node_list=nodes_g, Npars=Npars, init_value=init_value,
                       operations=operations, base_temp=base_temp,
-                      seed=int(child_seeds[g].generate_state(1)[0]))
+                      seed=int(child_seeds[g].generate_state(1)[0]),
+                      g_tau=g_tau)
             )
 
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove):

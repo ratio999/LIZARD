@@ -217,7 +217,58 @@ Requirements (must all be met):
 ## Phase 3 — Code: hygiene, structure, tests
 ### 3.1 Remove dead code.
 ### 3.2 API documentation.
-### 3.3 Test suite (blocks Phase 4).
+### 3.3 Test suite (blocks Phase 4). ← CURRENT FOCUS
+All new tests go in tests/test_phase23.py. Work one sub-task at a time.
+Existing coverage in test_cython4.py: add_node/hoist/split smoke,
+crossover symmetric swap, grove_smoke_test. New file extends this with
+correctness assertions tied directly to the Phase 2 math.
+
+Sub-tasks:
+  (a) Determinism smoke test (closes 2.5(h)).
+      Two Groves, same seed, same n_steps, same y:
+      assert tree_get_description() per slot matches, move_stats() matches
+      exactly, root_posteriors matches within 1e-9.
+
+  (b) Birth density g unit test.
+      - get_g_tau() reflects set_g_tau().
+      - For a seeded BIRTH: lqf == log N(theta_new; 0, tau^2) analytically.
+      - BIRTH/DEATH time-reversal symmetry:
+        force BIRTH at known theta, force DEATH at same theta;
+        lqf_birth + lqr_birth == lqf_death + lqr_death.
+
+  (c) Per-move proposal log-density checks.
+      For each of subtree_mutation, hoist, add_node, split,
+      point_mutation symmetric cases:
+      - On-support: lqr != -inf for small well-formed trees.
+      - Off-support: lqr == -inf when precondition not met.
+      - subtree_mutation ratio: lqr - lqf == log(size_T) - log(size_Tp).
+      - add_node/split: reconstruct expected density from (K, M, O, d)
+        and compare.
+
+  (d) BIC scorer unit test.
+      On y = a*x + b (analytic optimum):
+      - _log_marginal_bic is finite.
+      - More parameters → lower log_evidence (BIC penalises complexity).
+      - sigma=None vs sigma=fixed give different penalties, both finite.
+
+  (e) MH acceptance rule unit test.
+      Known T, T', (lqf, lqr): verify
+      - dtarget >> 0 and q_corr >= 0 → always accepted.
+      - lqr == -inf → always rejected (hard reject path).
+      - T=0 (greedy) → accept iff dtarget > 0.
+
+  (f) Grove integration test (extends grove_smoke_test).
+      Seeded Grove, 200 steps, y = sin(x):
+      - Acceptance rate in [0.05, 0.95].
+      - move_stats() non-zero proposals for every move type.
+      - best_tree() has finite root_posteriors.
+      - Same seed → same final state (inherits (a)).
+
+  (g) Pólya prior unit test.
+      Known ops+primitives, hand-constructed tree:
+      - log_prior matches analytic Dirichlet-Multinomial predictive.
+      - update_path changes log_prior on next call.
+      - auto_register=True: unknown leaf doesn't raise, log_prior stays finite.
 ### 3.4 MPI: decide keep vs drop for paper version.
 
 ---
