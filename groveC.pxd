@@ -5,7 +5,7 @@ cimport polya_treeC
 
 cdef class Grove:
     cdef list operations
-    cdef cnp.float64_t[::1] data
+    cdef object data
     cdef public int size
     cdef int depth
     cdef public list funcs

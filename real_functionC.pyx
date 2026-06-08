@@ -753,7 +753,7 @@ cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept:
     return realf._cfunc(x, w, ndim)
     
 
-cdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer( 
+cpdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer( 
                     cnp.ndarray[cnp.float64_t, ndim=1] domain):
         """Ensure domain is a 1D numpy array of float64."""
         #cdef double[:] arrview = np.ascontiguousarray(domain, dtype=np.float64).ravel()

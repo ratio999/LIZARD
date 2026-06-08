@@ -10,10 +10,42 @@ from cython.parallel cimport prange
 from copy import copy, deepcopy
 import random
 import re
+import warnings
+
+# NumPy emits RuntimeWarnings whenever evaluate() walks parameters through
+# bad regions (negative base for fractional power, log of non-positive,
+# divide-by-zero, overflow in exp, etc.). Every such case is caught
+# downstream by is_valid / by the try/except in _log_likelihood_at, which
+# turn the resulting NaN/Inf into a hard rejection. The warnings carry no
+# diagnostic value during MCMC; filter the exact patterns so unrelated
+# RuntimeWarnings still surface.
+warnings.filterwarnings('ignore', message=r'invalid value encountered.*', category=RuntimeWarning)
+warnings.filterwarnings('ignore', message=r'divide by zero encountered.*', category=RuntimeWarning)
+warnings.filterwarnings('ignore', message=r'overflow encountered.*', category=RuntimeWarning)
+warnings.filterwarnings('ignore', message=r'underflow encountered.*', category=RuntimeWarning)
 
 cdef object _LOG = np.log
 cdef double _PI = np.pi
 cdef double _NAN = np.nan
+
+# Per-process RNG handles used by every randomized routine in this module
+# (build_tree, select_random_leaf/node, _root_replacement). Default to the
+# stdlib `random` module and the numpy legacy module so unseeded callers
+# behave as before. Grove installs its own (random.Random, default_rng)
+# pair via set_rng() to make tree construction reproducible per the
+# Grove's seed -- without this hook, build_tree would silently pull from
+# Python's global RNG and break determinism even when gp_movesC is
+# correctly seeded.
+cdef object _PY_RNG = random
+cdef object _NP_RNG = np.random
+
+cpdef void set_rng(object py_rng, object np_rng) except *:
+    global _PY_RNG, _NP_RNG
+    _PY_RNG = py_rng if py_rng is not None else random
+    _NP_RNG = np_rng if np_rng is not None else np.random
+
+cpdef tuple get_rng():
+    return (_PY_RNG, _NP_RNG)
 
 cdef class Node:
     '''Node of a Tree: either a leaf, or an operation on two other nodes'''    
@@ -236,7 +268,7 @@ cdef class Node:
         if self.is_leaf():
             return self
         else:
-            if random.choice([True, False]):
+            if _PY_RNG.choice([True, False]):
                 return self.left.select_random_leaf()
             else:
                 return self.right.select_random_leaf()
@@ -248,14 +280,14 @@ cdef class Node:
 
         cdef float selection_prob = max(1.0 - fitness, threshold)
         
-        if random.random() < selection_prob:
+        if _PY_RNG.random() < selection_prob:
             return self
         
         if self.is_leaf():
             return self
         
         
-        if random.random() < 0.5:
+        if _PY_RNG.random() < 0.5:
             return self.left.select_random_node(threshold)
         else: 
             return self.right.select_random_node(threshold)
@@ -848,7 +880,7 @@ cdef class Tree:
                 self.root.left = Node(**kwargs)
             else:
                 self.root.left = build_tree(max(0, new_depth), self.functions, 
-                        self.domain, Npars=random.choice((0,1)), g_tau = self.g_tau)
+                        self.domain, Npars=_PY_RNG.choice((0,1)), g_tau = self.g_tau)
             if op is not None:
                 self.root.assign_operation(op)
         elif replace_all==2:
@@ -856,7 +888,7 @@ cdef class Tree:
                 self.root.right = Node(**kwargs)
             else:
                 self.root.right = build_tree(max(0, new_depth), self.functions, 
-                        self.domain, Npars=random.choice((0,1)), g_tau = self.g_tau)
+                        self.domain, Npars=_PY_RNG.choice((0,1)), g_tau = self.g_tau)
             if op is not None:    
                 self.root.assign_operation(op)
         self.tree_update(self.root)
@@ -901,7 +933,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
         cdef Node return_node
         if arr_indices is None:
             raw_indices = np.linspace(0, max_leaves - 1, Npars, dtype = float)
-            noise = np.random.uniform(-0.5, 0.5)
+            noise = _NP_RNG.uniform(-0.5, 0.5)
             arr_indices = np.floor(raw_indices + noise).astype(int)
             arr_indices = np.sort(np.where(arr_indices<0, arr_indices + max_leaves, arr_indices))
             arr_indices = np.unique(arr_indices)
@@ -932,7 +964,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
                     return return_node 
                 else:
                     print('ParamsError')
-            func_str = random.choice(functions)
+            func_str = _PY_RNG.choice(functions)
             return_node =Node(real_functionC.RealFunctionC.from_string(func_str, x, compute_grad = False),
                               alpha=alpha, sigma=sigma) 
             return return_node 
@@ -963,7 +995,7 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
                 alpha = alpha, sigma = sigma, g_tau = g_tau)
        
         
-        cdef str operation = random.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
+        cdef str operation = _PY_RNG.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
         cdef real_functionC.RealFunctionC func  
         cdef str op_symbol
 
@@ -1030,7 +1062,7 @@ cdef new_par(list existing_params, str user_choice=None):
         
         #unique_prefixes = set(param_names)
         if user_choice not in param_names or user_choice is None:
-            user_choice = random.choice(param_names)
+            user_choice = _PY_RNG.choice(param_names)
        
 
 

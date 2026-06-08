@@ -1,5 +1,6 @@
 # cython: language_level=3
 import random
+import warnings
 import numpy as np
 cimport numpy as cnp
 cimport function_treeC
@@ -17,6 +18,16 @@ from mpi4py import MPI
 #from mpi4py cimport MPI as cMPI
 #from mpi4py.libmpi cimport *
 cdef str _DEFAULT_OPTIM = str("L-BFGS-B")
+
+# Mirror the function_treeC warning filters here so users importing groveC
+# directly (without first touching function_treeC) get the same quiet
+# behaviour. Same rationale: every triggering arithmetic case is gated by
+# is_valid downstream and converted into a hard reject; the warning is
+# noise.
+warnings.filterwarnings('ignore', message=r'invalid value encountered.*', category=RuntimeWarning)
+warnings.filterwarnings('ignore', message=r'divide by zero encountered.*', category=RuntimeWarning)
+warnings.filterwarnings('ignore', message=r'overflow encountered.*', category=RuntimeWarning)
+warnings.filterwarnings('ignore', message=r'underflow encountered.*', category=RuntimeWarning)
 
 cdef inline double _safe_exp(double x) nogil:
     # mild guard for very negative x
@@ -149,6 +160,12 @@ cdef class Grove:
         # before every step so multiple Groves in the same process keep
         # their trajectories independent.
         gp_movesC.set_rng(self._py_rng, self._np_rng)
+        # function_treeC owns the tree-construction RNG used by build_tree
+        # (called from Tree.__init__ in _init_trees, and from every
+        # K-changing move that spawns a fresh subtree). Must be installed
+        # BEFORE _init_trees / burn-in fires, otherwise build_tree picks
+        # from Python's global random.* and determinism is lost.
+        function_treeC.set_rng(self._py_rng, self._np_rng)
         if self.burn_in:
             # Run two-stage burn-in procedure to initialize trees
             # Stage 1: Generate all depth-1 combinations (primitive op primitive)
@@ -195,6 +212,7 @@ cdef class Grove:
         
     cdef _init_trees(self, list node_list, int Npars, object init_value):
         cdef list trees = [None] * self.size
+        self.root_posteriors = [None] * self.size
         cdef int i
         for i in range(self.size):
             if node_list is not None and len(node_list)>i:
@@ -205,6 +223,13 @@ cdef class Grove:
                 trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
                                                Npars=Npars, value=init_value, T=self.T,
                                                sigma=self.sigma, g_tau=self.g_tau)
+
+
+                self.root_posteriors[i] = trees[i].log_marginal_bic(
+                    self.data, optimize=True,
+                    use_gradients=self.use_gradients,
+                    method_str=self.method_str,
+                        )
         return trees
 
     cpdef set_trees(self, list new_trees):
@@ -469,6 +494,7 @@ cdef class Grove:
         # same process share gp_movesC's module-level _PY_RNG/_NP_RNG
         # (e.g. non-MPI Forest with several temperatures).
         gp_movesC.set_rng(self._py_rng, self._np_rng)
+        function_treeC.set_rng(self._py_rng, self._np_rng)
                 # Front-of-queue PR branch: PR is self-accepting (it runs its own
         # tempered MH internally with the AM kernel) and must NOT go
         # through the structural _propose / log_alpha path.
@@ -632,6 +658,7 @@ cdef class Grove:
         # Phase 2.5: install this Grove's RNGs on gp_movesC for the duration
         # of this step (same rationale as _step).
         gp_movesC.set_rng(self._py_rng, self._np_rng)
+        function_treeC.set_rng(self._py_rng, self._np_rng)
         cdef int i = 0 #random.randrange(self.size)
 
         # ensure current posterior is available

@@ -2,6 +2,9 @@ cimport numpy as cnp
 #import sympy as sp
 cimport real_functionC
 
+cpdef void set_rng(object py_rng, object np_rng) except *
+cpdef tuple get_rng()
+
 cdef class Node:
     cdef real_functionC.RealFunctionC function
     cdef object left
