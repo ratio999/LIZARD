@@ -35,7 +35,19 @@ cdef inline double _accept_prob(double dlogpost, double T) nogil:
 cdef class Grove:
     """
     A set of Trees evolving at a single temperature T (Metropolis-Hastings).
-    Higher T broader proposals; lower T conservative proposals.
+    Higher T → broader proposals; lower T → conservative proposals.
+
+    Reproducibility
+    ---------------
+    Pass `seed` (int or None) to make the structural-MCMC trajectory
+    bit-reproducible. With a fixed seed, two Grove instances constructed
+    identically and run for the same number of steps will produce the same
+    sequence of accepted trees and identical `move_stats()` output.
+
+    The sole exception is the continuous-θ optimizer (`update_parameters`
+    calls `scipy.optimize`), which is reproducible only up to BLAS/OpenMP
+    non-determinism. For bit-exact runs, set `OMP_NUM_THREADS=1` and pin
+    a single BLAS implementation (e.g. OpenBLAS single-threaded).
     """
     
     def __init__(self,
@@ -1624,13 +1636,20 @@ cdef class Forest:
                  object init_value=1.0,
                  list operations=None,
                  double base_temp=1.0,
-                 int n_procs=0):
+                 int n_procs=0,
+                 object seed=None):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
         self.use_mpi = self.n_procs >= 2
         cdef int G = self.temperatures.shape[0]
         cdef int g
+        # Phase 2.5(e): derive one independent seed per grove from the
+        # Forest-level seed via SeedSequence so all grove trajectories are
+        # independent yet fully reproducible from a single top-level seed.
+        # When seed=None each SeedSequence spawn is non-deterministic.
+        seed_seq = np.random.SeedSequence(seed)
+        child_seeds = seed_seq.spawn(G)
         for g in range(G):
             nodes_g = None
             if node_lists is not None:
@@ -1638,7 +1657,8 @@ cdef class Forest:
             self.groves.append(
                 Grove(x, self.temperatures[g], size_per_grove, depth, funcs,
                       node_list=nodes_g, Npars=Npars, init_value=init_value,
-                      operations=operations, base_temp=base_temp)
+                      operations=operations, base_temp=base_temp,
+                      seed=int(child_seeds[g].generate_state(1)[0]))
             )
 
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove):
@@ -1664,7 +1684,7 @@ cdef class Forest:
         cdef int sizeB = B.size
         if sizeA == 0 or sizeB == 0:
             return False
-        cdef int i = random.randrange(min(sizeA, sizeB))
+        cdef int i = self._py_rng.randrange(min(sizeA, sizeB))
         # ensure posteriors
         if np.isnan(A.root_posteriors[i]):
             #A.root_posteriors[i] = A.trees[i].get_superficial_posterior(y)
@@ -1684,7 +1704,7 @@ cdef class Forest:
         cdef double delta = (1.0 / (Ta if Ta > 0.0 else 1e-12) -
                              1.0 / (Tb if Tb > 0.0 else 1e-12)) * (postB - postA)
         cdef double acc_p = _safe_exp(delta)
-        if random.random() < min(1.0, acc_p):
+        if A._py_rng.random() < min(1.0, acc_p):
             # swap trees and their posteriors
             tmp_tree = A.trees[i]; A.trees[i] = B.trees[i]; B.trees[i] = tmp_tree
             tmp_post = A.root_posteriors[i]; A.root_posteriors[i] = B.root_posteriors[i]; B.root_posteriors[i] = tmp_post
