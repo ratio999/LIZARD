@@ -268,12 +268,15 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
     parent_node = None
     cdef bint is_par = True
     # ---- 1. Uniform node selection (root allowed) ------------------------
-    
-    while parent_node is None:
+    # Reject only parameter leaves (the build/recycle math is undefined for
+    # them); the root is a legal target -- step 5 handles its splice. The
+    # previous loop used `parent_node is None` as the exit condition, which
+    # silently excluded the root and produced an infinite loop on any tree
+    # whose only non-parameter node is the root (e.g. `a0 + a1`).
+    v = _select_uniform_node(tree)
+    while v.is_param():
         v = _select_uniform_node(tree)
-        is_par = v.is_param()
-        if not is_par:
-            parent_node = tree.root.find_parent(v)   # None iff v is tree.root
+    parent_node = tree.root.find_parent(v)   # None iff v is tree.root
     size_T = _count_selectable(tree.root)
 
     # ---- 2. Inspect OLD subtree -----------------------------------------
