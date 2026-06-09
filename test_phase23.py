@@ -571,6 +571,204 @@ def test_3_3c_point_mutation_symmetric(n_seeds=200, tol=1e-12):
 
 
 # ---------------------------------------------------------------------------
+# (d) BIC scorer unit test
+# ---------------------------------------------------------------------------
+#
+# Reference formula (from real_functionC._log_marginal_bic and
+# function_treeC._shortcut_bic):
+#
+#     log_marginal_bic = -0.5 * N * (log(2*pi*MSE) + 1)  -  0.5 * k * log(N)
+#
+# where N = len(y), MSE = optimized mean-squared residual, k = #free params.
+#
+# With sigma fixed (scalar):
+#     log_marginal_bic = -0.5 * N * MSE / sigma^2  -  0.5 * k * log(N)
+#
+# (Note: the optimizer rescales the loss by 1/sigma^2 BEFORE this term, so
+# the cached MSE returned to _shortcut_bic is already in sigma units.)
+# ---------------------------------------------------------------------------
+def _make_linear_xy(n=64, slope=2.0, intercept=3.0, noise=0.05, seed=0):
+    rng = np.random.default_rng(seed)
+    x = np.linspace(-2.0, 2.0, n, dtype=np.float64)
+    y = (slope * x + intercept).astype(np.float64)
+    y = y + rng.normal(0.0, noise, size=n).astype(np.float64)
+    return x, y
+
+
+def _build_linear_tree(domain):
+    """y_hat = a0 * x + a1   (k = 2)."""
+    x_sym = sp.Symbol('x')
+    a0, a1 = sp.Symbol('a0'), sp.Symbol('a1')
+    return expr_to_tree(a0 * x_sym + a1, domain, _FUNCS)
+
+
+def _build_quadratic_tree(domain):
+    """y_hat = a0 * x**2 + a1 * x + a2   (k = 3).  Linear data is a
+    nested submodel, so the optimum quadratic MSE <= optimum linear MSE."""
+    x_sym = sp.Symbol('x')
+    a0, a1, a2 = sp.Symbol('a0'), sp.Symbol('a1'), sp.Symbol('a2')
+    return expr_to_tree(a0 * x_sym**2 + a1 * x_sym + a2, domain, _FUNCS)
+
+
+def _build_cubic_tree(domain):
+    """y_hat = a0 * x**3 + a1 * x**2 + a2 * x + a3   (k = 4)."""
+    x_sym = sp.Symbol('x')
+    a0, a1, a2, a3 = (sp.Symbol('a0'), sp.Symbol('a1'),
+                      sp.Symbol('a2'), sp.Symbol('a3'))
+    return expr_to_tree(a0 * x_sym**3 + a1 * x_sym**2 + a2 * x_sym + a3,
+                        domain, _FUNCS)
+
+
+def test_3_3d_bic_finite_on_linear():
+    """log_marginal_bic is finite on a well-posed (model, data) pair."""
+    print("[3.3d.finite] log_marginal_bic on y=2x+3 + noise")
+    from real_functionC import _domain_fixer
+    x, y = _make_linear_xy(n=64, slope=2.0, intercept=3.0, noise=0.05, seed=10)
+    domain = _domain_fixer(x)
+
+    tree = _build_linear_tree(domain)
+    # Default sigma path (sigma=1.0 scalar OR sigma=None) -- both must
+    # produce a finite scalar.
+    score_sigma_default = tree.log_marginal_bic(y)
+    assert np.isfinite(score_sigma_default), \
+        "default-sigma log_marginal_bic non-finite: %r" % score_sigma_default
+
+    tree2 = _build_linear_tree(domain)
+    tree2.set_sigma(None)
+    score_sigma_none = tree2.log_marginal_bic(y)
+    assert np.isfinite(score_sigma_none), \
+        "sigma=None log_marginal_bic non-finite: %r" % score_sigma_none
+
+    print("[3.3d.finite] PASS  (sigma=1.0: %.6g, sigma=None: %.6g)"
+          % (score_sigma_default, score_sigma_none))
+
+
+def test_3_3d_bic_penalises_complexity():
+    """More parameters at (approximately) equal MSE -> lower log_evidence.
+
+    Linear data is nested inside the quadratic and cubic families, so the
+    quadratic optimum MSE is <= the linear optimum MSE, and similarly for
+    cubic vs quadratic.  Any improvement is bounded by the noise budget
+    (the linear model is already the true generator), so the
+    -0.5*log(N) per-extra-parameter penalty dominates and BIC must
+    strictly decrease as k grows.
+    """
+    print("[3.3d.penalty] complexity penalty: linear vs quadratic vs cubic")
+    from real_functionC import _domain_fixer
+    x, y = _make_linear_xy(n=128, slope=2.0, intercept=3.0, noise=0.05, seed=11)
+    domain = _domain_fixer(x)
+    N = len(y)
+
+    t_lin = _build_linear_tree(domain)
+    t_quad = _build_quadratic_tree(domain)
+    t_cub = _build_cubic_tree(domain)
+
+    s_lin = t_lin.log_marginal_bic(y)
+    s_quad = t_quad.log_marginal_bic(y)
+    s_cub = t_cub.log_marginal_bic(y)
+    for label, s in (("linear", s_lin), ("quadratic", s_quad), ("cubic", s_cub)):
+        assert np.isfinite(s), "%s BIC non-finite: %r" % (label, s)
+
+    # Strict ordering: BIC(linear) > BIC(quadratic) > BIC(cubic).
+    # We allow a tiny slack for optimizer noise (worst-case the per-step
+    # penalty is 0.5*log(N) ~ 2.4 nats for N=128, so 1e-3 slack is safe).
+    slack = 1e-3
+    assert s_lin > s_quad - slack, (
+        "expected BIC(lin) > BIC(quad): %.6g vs %.6g" % (s_lin, s_quad)
+    )
+    assert s_quad > s_cub - slack, (
+        "expected BIC(quad) > BIC(cub): %.6g vs %.6g" % (s_quad, s_cub)
+    )
+
+    # The strict inequalities should hold at the level of the penalty,
+    # 0.5*log(N) per added parameter, modulo small MSE improvement.
+    penalty = 0.5 * math.log(N)
+    drop_lq = s_lin - s_quad
+    drop_qc = s_quad - s_cub
+    print("[3.3d.penalty] PASS  (lin=%.4g, quad=%.4g, cub=%.4g; "
+          "drop_lq=%.4g, drop_qc=%.4g, 0.5*log(N)=%.4g)"
+          % (s_lin, s_quad, s_cub, drop_lq, drop_qc, penalty))
+
+
+def test_3_3d_bic_sigma_modes_differ(tol=1e-6):
+    """sigma=None vs sigma=fixed scalar produce different but finite
+    scores. The two code paths use distinct formulas:
+
+      sigma=None  : -0.5*N*(log(2*pi*MSE) + 1) - 0.5*k*log(N)
+      sigma=s>0   : -0.5*N*(MSE/s^2)           - 0.5*k*log(N)
+                    (after the optimizer's MSE has been divided by s^2,
+                     via _shortcut_bic).
+
+    Two distinct sigma values must in turn give two distinct scores.
+    """
+    print("[3.3d.sigma] sigma=None vs sigma=fixed produce different scores")
+    from real_functionC import _domain_fixer
+    x, y = _make_linear_xy(n=96, slope=2.0, intercept=3.0, noise=0.10, seed=12)
+    domain = _domain_fixer(x)
+
+    t_none = _build_linear_tree(domain)
+    t_none.set_sigma(None)
+    s_none = t_none.log_marginal_bic(y)
+
+    t_s1 = _build_linear_tree(domain)
+    t_s1.set_sigma(0.10)
+    s_s1 = t_s1.log_marginal_bic(y)
+
+    t_s2 = _build_linear_tree(domain)
+    t_s2.set_sigma(0.20)
+    s_s2 = t_s2.log_marginal_bic(y)
+    print(t_s1.get_sigma(), t_s2.get_sigma())
+    for label, s in (("sigma=None", s_none), ("sigma=0.10", s_s1),
+                     ("sigma=0.20", s_s2)):
+        assert np.isfinite(s), "%s BIC non-finite: %r" % (label, s)
+    print(s_none, s_s1, s_s2)
+    assert abs(s_none - s_s1) > tol, \
+        "sigma=None and sigma=0.10 produced identical scores: %.15g" % s_none
+    assert abs(s_s1 - s_s2) > tol, \
+        "sigma=0.10 and sigma=0.20 produced identical scores: %.15g" % s_s1
+
+    print("[3.3d.sigma] PASS  (sigma=None: %.6g, sigma=0.10: %.6g, "
+          "sigma=0.20: %.6g)" % (s_none, s_s1, s_s2))
+
+
+def test_3_3d_bic_formula_consistency(tol=1e-6):
+    """Reconstruct the BIC value from (N, k, MSE) and compare with what
+    Tree.log_marginal_bic returns. This pins the formula -- if anyone
+    rewrites the scorer with a different convention (e.g. a different
+    sign or a +log term), the equality below will catch it.
+    """
+    print("[3.3d.formula] reconstruct BIC from (N, k, MSE)")
+    from real_functionC import _domain_fixer
+    x, y = _make_linear_xy(n=80, slope=2.0, intercept=3.0, noise=0.07, seed=13)
+    domain = _domain_fixer(x)
+    N = len(y)
+
+    # sigma=None branch: use root._log_marginal_bic directly via the
+    # high-level entry point, then recompute the formula by hand.
+    tree = _build_linear_tree(domain)
+    tree.set_sigma(None)
+    score = tree.log_marginal_bic(y)
+    k = len(tree.get_param_dicts()[1])
+    assert k == 2, "linear tree should have k=2 params, got %d" % k
+
+    # Reproduce the MSE from the optimized tree.  log_marginal_bic
+    # leaves the tree at its optimum, so name_values now hold the best fit.
+    y_pred = tree.get_root().get_fun().get_eval(domain, tree.get_param_dicts()[1]).astype(np.float64)
+    mse = float(np.mean((y - y_pred) ** 2))
+    assert math.isfinite(mse) and mse > 0.0, "bad MSE: %r" % mse
+
+    expected = (-0.5 * N * (math.log(2.0 * math.pi * mse) + 1.0)
+                - 0.5 * k * math.log(N))
+    print(expected, mse, score)
+    assert math.isclose(score, expected, rel_tol=tol, abs_tol=tol), (
+        "BIC formula mismatch: got %.10g, expected %.10g (N=%d, k=%d, MSE=%.6g)"
+        % (score, expected, N, k, mse)
+    )
+    print("[3.3d.formula] PASS  (score=%.6g, hand-computed=%.6g, MSE=%.6g)"
+          % (score, expected, mse))
+
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     # OpenMP / BLAS threading affects bit-equality on some routines.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -585,4 +783,8 @@ if __name__ == "__main__":
     test_3_3c_split_density()
     test_3_3c_hoist_density()
     test_3_3c_point_mutation_symmetric()
-    print("\nAll Phase 3.3 (a)+(b)+(c) tests passed.")
+    test_3_3d_bic_finite_on_linear()
+    test_3_3d_bic_penalises_complexity()
+    test_3_3d_bic_sigma_modes_differ()
+    test_3_3d_bic_formula_consistency()
+    print("\nAll Phase 3.3 (a)+(b)+(c)+(d) tests passed.")

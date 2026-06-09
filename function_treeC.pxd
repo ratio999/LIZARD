@@ -55,7 +55,7 @@ cdef class Node:
 
     cdef set_sigma(self, object newsigma)
 
-    cdef void set_sigma_recursive(self, object new_sigma)
+    cpdef void set_sigma_recursive(self, object new_sigma)
 
     cdef set_posterior(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict parameters, double penalty=?)
 
@@ -101,6 +101,7 @@ cdef class Tree:
     cdef double penalty
     cdef object fitness_tree
     cdef double alpha
+    #cdef public object sigma
     cdef object sigma
     cdef bint bic_loss_is_param_loss
     cdef init_params(self, cnp.ndarray[cnp.float64_t, ndim=1] init_val)
@@ -119,7 +120,7 @@ cdef class Tree:
     
     cdef build_fitness_tree(self, Node node, str prefix=?, bint is_left=?)
     #cpdef build_tree(self, depth, functions, x )
-
+    cpdef get_sigma(self)
     
     cdef replace_constants_with_pars(self)
 
