@@ -769,6 +769,179 @@ def test_3_3d_bic_formula_consistency(tol=1e-6):
 
 
 # ---------------------------------------------------------------------------
+# (e) Metropolis-Hastings acceptance rule unit test
+# ---------------------------------------------------------------------------
+#
+# The structural-move acceptance rule is implemented inline inside
+# Grove._propose_* (groveC.pyx). It is not exposed as a Python-callable
+# function, so we mirror it here as a reference and check the three
+# properties listed in PLAN.md (3.3(e)).
+#
+# Reference rule (lifted verbatim from groveC.pyx ~ lines 580-625):
+#
+#   1. If lqr is -inf (or any non-finite): hard reject (upstream guard).
+#   2. Compute  dtarget = (new_post + new_prior) - (old_post + old_prior),
+#               q_corr  = lqr - lqf.
+#   3. If T <= 0  (greedy):
+#        - dtarget > 0                       -> log_alpha = 0     (accept)
+#        - dtarget == 0  and q_corr >= 0     -> log_alpha = 0     (accept)
+#        - else                              -> log_alpha = -inf  (reject)
+#      If T > 0:
+#        log_alpha = dtarget / T + q_corr
+#   4. Decision:
+#        log_alpha >= 0       -> accept
+#        log_alpha == -inf    -> reject
+#        else                 -> sample u in (0,1); accept iff log(u) < log_alpha.
+# ---------------------------------------------------------------------------
+def _mh_decide(dtarget, lqf, lqr, T, u):
+    """Pure-Python mirror of Grove's MH structural-move rule.
+
+    Returns
+    -------
+    (accepted, log_alpha) : (bool, float)
+        log_alpha is the saturated MH log-acceptance ratio used to decide.
+    """
+    # Upstream guard inside Grove._propose_*: if lqr is not finite, the
+    # structural step short-circuits to reject before MH is even called.
+    if not math.isfinite(lqr):
+        return False, -math.inf
+
+    q_corr = lqr - lqf
+    if T <= 0.0:
+        if dtarget > 0.0:
+            log_alpha = 0.0
+        elif dtarget == 0.0 and q_corr >= 0.0:
+            log_alpha = 0.0
+        else:
+            log_alpha = -math.inf
+    else:
+        log_alpha = dtarget / T + q_corr
+
+    if log_alpha >= 0.0:
+        return True, log_alpha
+    if log_alpha == -math.inf:
+        return False, log_alpha
+    accepted = (u <= 0.0) or (math.log(u) < log_alpha)
+    return accepted, log_alpha
+
+
+def test_3_3e_mh_always_accept_when_target_dominates(n_u=50):
+    """dtarget >> 0 and q_corr >= 0 -> log_alpha >= 0 -> always accepted,
+    independently of u in [0, 1).  Covers the 'free lunch' regime where
+    both target and Jacobian point the same way."""
+    print("[3.3e.always_accept] dtarget >> 0, q_corr >= 0")
+    rng = np.random.default_rng(31)
+    us = rng.uniform(0.0, 1.0, size=n_u)
+
+    dtarget = 1.0e6      # arbitrarily large positive target shift
+    for T in (0.0, 1.0, 5.0):
+        for q_corr_value in (0.0, 0.5, 10.0):
+            lqf = 0.0
+            lqr = q_corr_value  # so lqr - lqf = q_corr_value >= 0
+            for u in us:
+                accepted, la = _mh_decide(dtarget, lqf, lqr, T, float(u))
+                assert accepted, (
+                    "expected accept at T=%g, q_corr=%g, u=%g; got "
+                    "log_alpha=%.6g" % (T, q_corr_value, u, la)
+                )
+                assert la >= 0.0, "log_alpha must saturate >= 0; got %.6g" % la
+    print("[3.3e.always_accept] PASS  (T in {0, 1, 5}, q_corr in {0, 0.5, 10})")
+
+
+def test_3_3e_mh_always_reject_when_lqr_minus_inf(n_u=50):
+    """lqr == -inf is the upstream off-support signal: the structural
+    step rejects before the MH ratio is even formed.  The condition must
+    hold for every (T, dtarget, lqf, u)."""
+    print("[3.3e.always_reject] lqr == -inf -> hard reject")
+    rng = np.random.default_rng(32)
+    us = rng.uniform(0.0, 1.0, size=n_u)
+    lqr = -math.inf
+
+    for T in (0.0, 0.5, 1.0, 5.0):
+        for dtarget in (-1e6, -1.0, 0.0, 1.0, 1e6):
+            for lqf in (-3.0, 0.0, 4.5):
+                for u in us:
+                    accepted, la = _mh_decide(dtarget, lqf, lqr, T, float(u))
+                    assert not accepted, (
+                        "expected reject at T=%g, dtarget=%g, lqf=%g, u=%g"
+                        % (T, dtarget, lqf, u)
+                    )
+                    assert la == -math.inf, \
+                        "log_alpha must be -inf; got %.6g" % la
+    print("[3.3e.always_reject] PASS  (any T, any dtarget, any lqf)")
+
+
+def test_3_3e_mh_greedy_at_zero_temperature(n_u=50):
+    """T == 0 (greedy): accept iff dtarget > 0, independent of u.
+    Tie-breaker: dtarget == 0 accepts iff q_corr >= 0.
+    This is the ablation knob used to exercise the deterministic limit
+    of the kernel."""
+    print("[3.3e.greedy] T == 0 greedy regime")
+    rng = np.random.default_rng(33)
+    us = rng.uniform(0.0, 1.0, size=n_u)
+
+    # Non-tie regime: q_corr is irrelevant.
+    for dtarget in (-5.0, -1e-9, 1e-9, 5.0):
+        expected = dtarget > 0.0
+        for q_corr_value in (-10.0, -1.0, 0.0, 1.0, 10.0):
+            lqf = 0.0
+            lqr = q_corr_value
+            for u in us:
+                accepted, la = _mh_decide(dtarget, lqf, lqr, 0.0, float(u))
+                assert accepted == expected, (
+                    "T=0 greedy decision wrong at dtarget=%g, q_corr=%g: "
+                    "got %s, expected %s" % (dtarget, q_corr_value,
+                                             accepted, expected)
+                )
+
+    # Tie regime: dtarget == 0 -> accept iff q_corr >= 0.
+    for q_corr_value in (-1.0, -1e-12, 0.0, 1e-12, 1.0):
+        expected = q_corr_value >= 0.0
+        lqf = 0.0
+        lqr = q_corr_value
+        for u in us:
+            accepted, la = _mh_decide(0.0, lqf, lqr, 0.0, float(u))
+            assert accepted == expected, (
+                "T=0 tie decision wrong at q_corr=%g: got %s, expected %s"
+                % (q_corr_value, accepted, expected)
+            )
+    print("[3.3e.greedy] PASS")
+
+
+def test_3_3e_mh_random_branch_consistency(n_seeds=2000, tol=0.05):
+    """At T > 0 with finite dtarget and q_corr giving log_alpha < 0, the
+    accept rate over uniform u must approach exp(log_alpha).  This pins
+    the random branch of the rule (the actual MCMC kernel needs this to
+    obey detailed balance)."""
+    print("[3.3e.stochastic] empirical accept rate matches exp(log_alpha)")
+    rng = np.random.default_rng(34)
+
+    # Choose (T, dtarget, q_corr) so log_alpha is a known negative number.
+    T = 1.0
+    dtarget = -1.0
+    lqf = 0.0
+    lqr = -0.5             # q_corr = -0.5
+    expected_log_alpha = dtarget / T + (lqr - lqf)  # -1.5
+    expected_rate = math.exp(expected_log_alpha)    # ~0.2231
+
+    accepted = 0
+    for _ in range(n_seeds):
+        u = float(rng.uniform(0.0, 1.0))
+        ok, la = _mh_decide(dtarget, lqf, lqr, T, u)
+        assert math.isclose(la, expected_log_alpha, rel_tol=0.0, abs_tol=1e-12)
+        if ok:
+            accepted += 1
+
+    empirical_rate = accepted / n_seeds
+    assert abs(empirical_rate - expected_rate) < tol, (
+        "stochastic accept rate off: got %.4f, expected %.4f (tol=%.3f)"
+        % (empirical_rate, expected_rate, tol)
+    )
+    print("[3.3e.stochastic] PASS  (rate=%.4f, expected=%.4f)"
+          % (empirical_rate, expected_rate))
+
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     # OpenMP / BLAS threading affects bit-equality on some routines.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -787,4 +960,8 @@ if __name__ == "__main__":
     test_3_3d_bic_penalises_complexity()
     test_3_3d_bic_sigma_modes_differ()
     test_3_3d_bic_formula_consistency()
-    print("\nAll Phase 3.3 (a)+(b)+(c)+(d) tests passed.")
+    test_3_3e_mh_always_accept_when_target_dominates()
+    test_3_3e_mh_always_reject_when_lqr_minus_inf()
+    test_3_3e_mh_greedy_at_zero_temperature()
+    test_3_3e_mh_random_branch_consistency()
+    print("\nAll Phase 3.3 (a)+(b)+(c)+(d)+(e) tests passed.")
