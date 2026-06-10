@@ -46,6 +46,7 @@ from gp_movesC import (point_mutation, subtree_mutation, add_node,
                        split, hoist_mutation)
 from groveC import Grove
 from function_treeC import Tree, expr_to_tree
+from polya_treeC import PolyaTree
 
 
 # ---------------------------------------------------------------------------
@@ -1037,6 +1038,218 @@ def test_3_3f_grove_integration(n_steps=200, seed=20260610):
 
 
 # ---------------------------------------------------------------------------
+# 3.3(g) Polya prior unit test
+# ---------------------------------------------------------------------------
+# These checks pin down three contracts of `PolyaTree`:
+#   1) `log_prior_from_tree` matches the analytic Dirichlet-Multinomial
+#      predictive value for a hand-built tree on a freshly-initialised
+#      Polya tree (all alphas = alpha_0, no children yet -> every step
+#      contributes -log(n_total)).
+#   2) Driving accepted MCMC moves through a Grove causes the Polya state
+#      to evolve (`polya.t` advances, alphas leave the symmetric prior),
+#      and `log_prior_from_tree` returns a value different from what a
+#      freshly-initialised Polya would give on the same tree.
+#   3) With `auto_register=True`, encountering a primitive that was not
+#      pre-registered grows the Polya vocabulary in-place and yields a
+#      finite log_prior. With `auto_register=False`, the same call raises.
+# ---------------------------------------------------------------------------
+
+_POLYA_OPS_FIXED = ["+", "-", "*", "/", "o", "**"]  # PolyaTree hard-codes these
+
+
+def _polya_path_from_tree_py(polya, root_node):
+    """Pure-Python pre-order DFS yielding the same (kind, idx) path as
+    PolyaTree._extract_recursive, without registering unknown leaves.
+
+    Used by the analytic test to predict the expected log_prior. Mirrors
+    polya_treeC.pyx semantics: unknown ops raise (we never call this with
+    unknown ops); unknown primitives are skipped (this helper is only used
+    when the vocab is known to cover the tree).
+    """
+    out = []
+    op_idx = polya._op_to_idx
+    prim_idx = polya._prim_to_idx
+
+    def visit(node):
+        if node is None:
+            return
+        if node.is_leaf():
+            desc = node.get_fun().get_description()
+            j = prim_idx.get(desc, -1)
+            if j >= 0:
+                out.append(("prim", j))
+            return
+        op = node.get_op()
+        i = op_idx.get(op, -1)
+        if i >= 0:
+            out.append(("op", i))
+        visit(node.get_left())
+        visit(node.get_right())
+
+    visit(root_node)
+    return out
+
+
+def test_3_3g_polya_log_prior_analytic():
+    """Fresh PolyaTree + hand-built tree: log_prior matches the analytic
+    Dirichlet-Multinomial predictive.
+
+    On a fresh tree, every node has alphas = alpha_0 * ones(n_total), so
+    each visited step contributes log(alpha_0 / (n_total * alpha_0))
+    = -log(n_total). Unvisited subregions (no children created yet) also
+    fall back to -log(n_total). Hence log_prior = -|path| * log(n_total).
+    """
+    domain = np.linspace(0.001, 10.0, 64).astype(np.float64)
+    functions = ["sin(x)", "cos(x)", "x"]
+    polya = PolyaTree(_POLYA_OPS_FIXED, functions, alpha_0=1.0,
+                      auto_register=False, strict_ops=True)
+
+    # Tree:  sin(x) + cos(x)
+    #   pre-order path: [('op', '+'), ('prim', 'sin(x)'), ('prim', 'cos(x)')]
+    x_sym = sp.Symbol('x')
+    tree = expr_to_tree(sp.sin(x_sym) + sp.cos(x_sym), domain, functions)
+
+    path = polya.extract_path(tree.get_root())
+    expected_path = _polya_path_from_tree_py(polya, tree.get_root())
+    assert path == expected_path, (
+        "extract_path mismatch:\n  C: %r\n  Py: %r" % (path, expected_path))
+
+    # Spot-check: the path has length 3 ('+' / 'sin(x)' / 'cos(x)').
+    assert len(path) == 3, "expected 3-step path, got %r" % (path,)
+
+    n_total = polya.n_ops + polya.n_prims  # 6 + 3 = 9
+    expected_lp = -len(path) * math.log(n_total)
+    got_lp = polya.log_prior_from_tree(tree.get_root())
+    assert math.isfinite(got_lp), "log_prior_from_tree is not finite: %r" % got_lp
+    assert abs(got_lp - expected_lp) < 1e-12, (
+        "log_prior_from_tree mismatch: got %.12g, expected %.12g (= -%d * log %d)"
+        % (got_lp, expected_lp, len(path), n_total))
+
+    # log_prior is READ-ONLY: calling it twice gives the same value, and
+    # polya.t stays at 0 (no updates triggered).
+    got_lp2 = polya.log_prior_from_tree(tree.get_root())
+    assert got_lp == got_lp2, "log_prior_from_tree is not deterministic"
+    assert polya.t == 0, "log_prior_from_tree must not advance polya.t"
+
+    print("[3.3g.analytic] PASS  log_prior=%.6f  expected=%.6f  n_total=%d"
+          % (got_lp, expected_lp, n_total))
+
+
+def test_3_3g_polya_update_changes_prior(n_steps=40, seed=20260610):
+    """Drive a short Grove run; verify update_path mutates Polya state.
+
+    Contract: every accepted structural MH step calls polya.update_path(),
+    which (a) reinforces the visited path's alphas with gamma_t=1/(1+t),
+    and (b) increments polya.t. Therefore the post-run log_prior of a
+    surviving tree must differ from the prior a freshly-initialised Polya
+    would assign to that same tree.
+    """
+    x, y = _make_xy(n=64, seed=seed)
+
+    functions = ["sin(x)", "cos(x)", "x"]
+    operations = ["+", "-", "*", "/"]
+
+    polya = PolyaTree(_POLYA_OPS_FIXED, functions, alpha_0=1.0,
+                      auto_register=True, strict_ops=True)
+
+    random.seed(seed)
+    np.random.seed(seed)
+    g = Grove(x, y, T=1.0, size=2, depth=2, funcs=functions,
+              operations=operations, Npars=2, init_value=1.0,
+              base_temp=1.0, use_gradients=False, burn_in=False,
+              use_mpi=0, use_spawn=False, lambda_reg=0.0,
+              polya=polya, seed=seed)
+
+    g.run(y, n_steps=n_steps)
+
+    # Some accepted move must have called update_path. On y=sin(x)+noise
+    # with size=2 / depth=2 trees this is essentially guaranteed in 40
+    # steps; if it ever became flaky we'd raise the step count.
+    assert polya.t > 0, (
+        "Polya.t did not advance over %d steps; update_path was never called"
+        % n_steps)
+
+    # Alpha mass on at least one root slot must have moved off alpha_0=1.
+    root_alphas = np.asarray(polya.root.alphas, dtype=np.float64)
+    assert np.any(np.abs(root_alphas - 1.0) > 1e-12), (
+        "Polya root alphas unchanged after %d updates: %r" % (polya.t, root_alphas))
+
+    # Compare log_prior on a surviving tree against a fresh Polya: they
+    # must differ, since the trained Polya has non-uniform alphas along
+    # the visited subtree.
+    survivor = g.best_tree()
+    fresh = PolyaTree(_POLYA_OPS_FIXED, functions, alpha_0=1.0,
+                      auto_register=True, strict_ops=True)
+    lp_trained = polya.log_prior_from_tree(survivor.get_root())
+    lp_fresh = fresh.log_prior_from_tree(survivor.get_root())
+    assert math.isfinite(lp_trained) and math.isfinite(lp_fresh), \
+        "log_prior must be finite after update (got trained=%r, fresh=%r)" \
+        % (lp_trained, lp_fresh)
+    assert abs(lp_trained - lp_fresh) > 1e-9, (
+        "log_prior did not change after update_path: trained=%.12g fresh=%.12g"
+        % (lp_trained, lp_fresh))
+
+    print("[3.3g.update] PASS  polya.t=%d  lp_trained=%.4f  lp_fresh=%.4f  "
+          "delta=%+.4f" % (polya.t, lp_trained, lp_fresh, lp_trained - lp_fresh))
+
+
+def test_3_3g_polya_auto_register_unknown_leaf():
+    """auto_register=True: encountering a primitive outside the initial
+    vocabulary grows the vocab, returns a finite log_prior, and does NOT
+    raise. auto_register=False: same call raises KeyError.
+    """
+    domain = np.linspace(0.001, 10.0, 32).astype(np.float64)
+    functions = ["sin(x)", "cos(x)", "x"]
+
+    # Build a tree that uses cos(x); we'll create a Polya with primitives
+    # = ['x'] only so cos(x) and sin(x) are both unknown.
+    x_sym = sp.Symbol('x')
+    tree = expr_to_tree(sp.sin(x_sym) + sp.cos(x_sym), domain, functions)
+    root = tree.get_root()
+
+    # --- auto_register=True: silent vocab growth -------------------------
+    polya_auto = PolyaTree(_POLYA_OPS_FIXED, ["x"], alpha_0=1.0,
+                           auto_register=True, strict_ops=True)
+    n_prims_before = polya_auto.n_prims
+    root_n_choices_before = polya_auto.root.n_choices
+    assert n_prims_before == 1 and "sin(x)" not in polya_auto.primitives, \
+        "fixture broken: expected vocab=['x']"
+
+    lp = polya_auto.log_prior_from_tree(root)
+    assert math.isfinite(lp), "auto-register path produced non-finite log_prior: %r" % lp
+
+    # Both sin(x) and cos(x) should have been registered.
+    assert "sin(x)" in polya_auto.primitives, \
+        "sin(x) was not auto-registered: %r" % polya_auto.primitives
+    assert "cos(x)" in polya_auto.primitives, \
+        "cos(x) was not auto-registered: %r" % polya_auto.primitives
+    assert polya_auto.n_prims == n_prims_before + 2, (
+        "n_prims should have grown by 2, got %d -> %d"
+        % (n_prims_before, polya_auto.n_prims))
+
+    # _grow_all_nodes must have extended every Dirichlet, so root.alphas
+    # now has +2 slots, all initialised to alpha_0.
+    assert polya_auto.root.n_choices == root_n_choices_before + 2, (
+        "root.n_choices not grown: %d -> %d"
+        % (root_n_choices_before, polya_auto.root.n_choices))
+    assert polya_auto.root.alphas.shape[0] == polya_auto.root.n_choices, \
+        "alphas length out of sync with n_choices"
+
+    # --- auto_register=False: must raise KeyError ------------------------
+    polya_strict = PolyaTree(_POLYA_OPS_FIXED, ["x"], alpha_0=1.0,
+                             auto_register=False, strict_ops=True)
+    raised = False
+    try:
+        polya_strict.log_prior_from_tree(root)
+    except KeyError:
+        raised = True
+    assert raised, "auto_register=False should raise KeyError on unknown leaf"
+
+    print("[3.3g.auto_register] PASS  vocab %d -> %d, lp=%.4f"
+          % (n_prims_before, polya_auto.n_prims, lp))
+
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     # OpenMP / BLAS threading affects bit-equality on some routines.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -1060,4 +1273,7 @@ if __name__ == "__main__":
     test_3_3e_mh_greedy_at_zero_temperature()
     test_3_3e_mh_random_branch_consistency()
     test_3_3f_grove_integration()
-    print("\nAll Phase 3.3 (a)+(b)+(c)+(d)+(e)+(f) tests passed.")
+    test_3_3g_polya_log_prior_analytic()
+    test_3_3g_polya_update_changes_prior()
+    test_3_3g_polya_auto_register_unknown_leaf()
+    print("\nAll Phase 3.3 (a)+(b)+(c)+(d)+(e)+(f)+(g) tests passed.")
