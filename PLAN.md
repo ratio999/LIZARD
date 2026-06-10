@@ -69,8 +69,11 @@ Pick venue (methods journal vs ML conf vs astro), headline claim (recommend astr
   of height d_max), -inf off support.
 - K is preserved by this move (recycling discipline, Phase 2.1-only).
 
-#### 2.1.PM (point_mutation v2 — RJMCMC kind-crossing — NEXT ⏳)
+#### 2.1.PM (point_mutation v2 — RJMCMC kind-crossing — DONE ✅)
 - Commits to v2 from the start (kind-crossing allowed: function ↔ parameter).
+- Implemented in `gp_movesC._point_mutation`: BIRTH adds `log g(theta_new)`
+  to log_q_fwd and `-log M` to log_q_rev; DEATH is the mirror. Mixture
+  weight `_KIND_CROSS_PROB = 0.5`. Validated by test_phase23 3.3(b)/(c).
 - Four sub-cases:
   (a) internal → internal: resample op ω' ∈ Ω uniformly. Symmetric (returns 0,0).
   (b) fun leaf → fun leaf: resample f' ∈ F uniformly. Symmetric (returns 0,0).
@@ -110,10 +113,13 @@ These items are DEFERRED from v1 of hoist/add_node/crossover (Phase 2.1 v1 uses
 simplified bookkeeping). Phase 2.3 will centralize vocabulary; Phase 1.3 documents
 the Jacobian = 1 argument.
 
-### 2.2 groveC._step consumes log_q correction; tempering only on (post+prior).
-- Wire (log_q_fwd, log_q_rev) returned by each move into the acceptance computation.
-- log α = β * [log π(T') - log π(T)] + [log q_rev - log q_fwd].
-- Proposal correction is NOT tempered.
+### 2.2 groveC._step consumes log_q correction; tempering only on (post+prior). ✅ DONE
+- Wire (log_q_fwd, log_q_rev) returned by each move into the acceptance computation. ✅
+- log α = β * [log π(T') - log π(T)] + [log q_rev - log q_fwd]. ✅
+- Proposal correction is NOT tempered. ✅
+- Implemented in `groveC._step`: `q_corr = lqr - lqf`,
+  `log_alpha = dtarget / self.T + q_corr`; non-finite lqr -> hard reject.
+  Validated by test_phase23 3.3(e)/(f).
 
 ### 2.3 Single source of truth for vocabulary; auto-register fresh symbols.
 - Pólya structural prior ✅ done (integrated).
@@ -187,10 +193,11 @@ Requirements (must all be met):
       copy needed in v1. Multi-start / explicit cross-tree warm-start
       deferred to future work.
 
-  (f) **BIC topology cache (PENDING ⏳)**
+  (f) **BIC topology cache ✅ DONE**
       Cache {topology_key → (log_evidence, θ̂)} keyed on `tree_get_description()`.
       Invalidate only on new y. Avoids redundant optimize calls for re-visited topologies.
-      TODO markers at groveC.pyx lines ~361, 393, 398, 459, 533.
+      Implemented in `groveC._step` via `self._bic_cache` / `self._cache_y`;
+      on a hit the cached θ̂ is re-installed on the candidate so accepts warm-start.
 
   (g) **Numerical guards.** ✅ (implemented in _log_marginal_bic):
       - Ignore NaN/inf from evaluate (bad lambdify expressions).
@@ -200,9 +207,9 @@ Requirements (must all be met):
   Implementation order (6 steps):
     1. _log_marginal_bic in real_functionC.pyx ✅ DONE.
     2. Thread sigma through Node → Tree → Grove ✅ DONE.
-    3. Wire _log_marginal_bic into groveC._step ← PENDING (replace get_superficial_posterior).
-    4. Add Pólya prior term (log π_Pólya) to log-target ← PENDING.
-    5. Implement BIC cache (item f) ← PENDING.
+    3. Wire _log_marginal_bic into groveC._step ✅ DONE (replaces get_superficial_posterior).
+    4. Add Pólya prior term (log π_Pólya) to log-target ✅ DONE (extract_path/log_prior/update_path in _step).
+    5. Implement BIC cache (item f) ✅ DONE (_bic_cache keyed on tree_get_description(), reset on new y).
     6. Update test_cython4 grove_smoke_test ✅ DONE (sigma=sigma_data, Npars=2, use_mpi=0).
 
   Future-work flags (not v1): full Laplace with -0.5 log|H|; pseudo-marginal MCMC
@@ -217,11 +224,11 @@ Requirements (must all be met):
 ## Phase 3 — Code: hygiene, structure, tests
 ### 3.1 Remove dead code.
 ### 3.2 API documentation.
-### 3.3 Test suite (blocks Phase 4). ← CURRENT FOCUS
-All new tests go in tests/test_phase23.py. Work one sub-task at a time.
-Existing coverage in test_cython4.py: add_node/hoist/split smoke,
-crossover symmetric swap, grove_smoke_test. New file extends this with
-correctness assertions tied directly to the Phase 2 math.
+### 3.3 Test suite (blocks Phase 4). ✅ DONE (a)–(g)
+All new tests in tests/test_phase23.py (runnable as a plain script, no pytest).
+Sub-tasks (a) determinism, (b) birth density, (c) per-move densities,
+(d) BIC scorer, (e) MH rule, (f) Grove integration, (g) Pólya prior — all
+implemented and passing. Existing coverage in test_cython4.py retained.
 
 Sub-tasks:
   (a) Determinism smoke test (closes 2.5(h)).
@@ -311,15 +318,21 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 
 ## Current status summary (as of this session)
 - ✅ 2.1.SM subtree_mutation
+- ✅ 2.1.PM point_mutation v2 (kind-crossing RJMCMC, BIRTH/DEATH)
+- ✅ 2.1.K hoist_mutation, add_node, split, subtree_crossover (all return (lqf, lqr))
 - ✅ 2.1.PR parameter_refresh / AMState
-- ✅ 2.3 Pólya structural prior integration
+- ✅ 2.2 (log_q_fwd, log_q_rev) wired into groveC._step; tempering on target only
+- ✅ 2.3 Pólya structural prior integration (auto-register)
+- ✅ 2.5 determinism / seed plumbing (Grove + gp_movesC + function_treeC set_rng)
 - ✅ 2.7(a) σ-aware BIC (_log_marginal_bic in real_functionC.pyx)
 - ✅ 2.7(b) Laplace identification (documented)
+- ✅ 2.7(c/d) total log-target + MH rule wired into groveC._step
+- ✅ 2.7(f) BIC topology cache (_bic_cache)
 - ✅ 2.7(g) Numerical guards (RuntimeWarning suppression, NaN-safe BIC)
+- ✅ 3.3 test suite (a)–(g)
 - ✅ test_cython4 grove_smoke_test fixes
-- ⏳ 2.1.PM point_mutation v2 (kind-crossing RJMCMC) — NEXT
-- ⏳ 2.7(f) BIC topology cache
-- ⏳ 2.2 wire (log_q_fwd, log_q_rev) into groveC._step
-- ⏳ 2.7(c/d) wire total log-target + MH rule into groveC._step
-- ⏳ 2.1.K hoist, add_node, crossover (K-changing)
-- ⏳ 2.8 Move-rate calibration
+- ✅ perf: lambdify caching in real_functionC.from_string; vectorised conversion
+- ⏳ 2.8 Move-rate calibration — NEXT (in progress)
+- ⏳ 3.1 dead-code removal (legacy_* moves, root_replacement, replace_with_subtree)
+- ⏳ 3.4 MPI keep/drop decision
+- ⏳ Phase 4 experiments (4.1 sanity → 4.3 ablations → 4.2 hero) — gate now open after verification

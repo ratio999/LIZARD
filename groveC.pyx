@@ -130,7 +130,8 @@ cdef class Grove:
         self.proposal_count = 0.0
         self.move_proposals = {
             "point_mutation":     0,
-            "hoist_mutation":     0,
+            "leaf_hoist":         0,
+            "internal_hoist":     0,
             "add_node":           0,
             "split":              0,
             "subtree_mutation":   0,
@@ -284,31 +285,55 @@ cdef class Grove:
         #     return ("parameter_refresh", {})
         # normalize temperature to [0, +inf): higher → more disruptive moves
         cdef double tau = self.T / self.base_temp
-        # probabilities
-        # small/local moves favored when tau << 1
-        p_point = 0.30 * (1.0 / (1.0 + tau)) + 0.05
-        p_hoist = 0.15 * (1.0 / (1.0 + tau)) + 0.05
-        p_add   = 0.15 * (1.0 / (1.0 + tau)) + 0.05
-        # mid-scale: split is birth-from-internal, useful at all T
-        p_split = 0.10
-        # global moves favored when tau >> 1
-        p_subtree = 0.15 * (tau / (1.0 + tau)) + 0.10
-        p_cross   = 0.10 * (tau / (1.0 + tau)) + 0.05
-        probs = np.array([p_point, p_hoist, p_add, p_split, p_subtree, p_cross],
+        # Temperature shape factors:
+        #   f -> 1 when cold (tau << 1), 0 when hot (tau >> 1)
+        #   g -> 0 when cold,             1 when hot   (g == 1 - f)
+        f = 1.0 / (1.0 + tau)
+        g = tau / (1.0 + tau)
+
+        # --- Birth/Death balanced pairs (RJMCMC move-selection term = 0) ---
+        # The cross-move reverse pairs are now EXACT and one-to-one:
+        #   add_node  <-> leaf_hoist      (death of an added leaf)
+        #   split     <-> internal_hoist  (death of a split internal node)
+        # The Green (1995) move-selection correction  log p(m'|T') - log p(m|T)
+        # vanishes for each pair independently iff its forward and reverse
+        # selection probabilities are equal:  p_add == p_leaf_hoist  AND
+        # p_split == p_internal_hoist. Tie each pair to one expression so the
+        # balance cannot silently drift. Splitting the old unified hoist into
+        # two death moves also removes the former 2:1 birth:death proposal
+        # asymmetry (now 2 births vs 2 deaths). DO NOT break a pair apart
+        # without adding the selection term to _step's log_alpha.
+        p_birth = 0.15 * f + 0.05
+        p_add            = p_birth
+        p_leaf_hoist     = p_birth   # exact reverse of add_node
+        p_split          = p_birth
+        p_internal_hoist = p_birth   # exact reverse of split
+
+        # --- Self-inverse moves (m' == m): correction is 0 for ANY value ---
+        # p(m|.) depends only on tau (constant across a grove), so these
+        # weights are free to shape the kernel without breaking detailed
+        # balance. Local refinement favored cold; global rebuild/swap hot.
+        p_point   = 0.30 * f + 0.05
+        p_subtree = 0.15 * g + 0.10
+        p_cross   = 0.10 * g + 0.05
+        probs = np.array([p_point, p_leaf_hoist, p_internal_hoist,
+                          p_add, p_split, p_subtree, p_cross],
                         dtype=np.float64)
         
         probs = probs / probs.sum()
-        idx = int(self._np_rng.choice(np.arange(6), p=probs))
+        idx = int(self._np_rng.choice(np.arange(7), p=probs))
         #random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
             return ("point_mutation", {"operations": self.operations})
         elif idx == 1:
-            return ("hoist_mutation", {})
+            return ("leaf_hoist", {})
         elif idx == 2:
-            return ("add_node", {"operations": self.operations})
+            return ("internal_hoist", {})
         elif idx == 3:
-            return ("split", {"operations": self.operations})
+            return ("add_node", {"operations": self.operations})
         elif idx == 4:
+            return ("split", {"operations": self.operations})
+        elif idx == 5:
             return ("subtree_mutation", {})
         else:
             return ("subtree_crossover", {})
@@ -332,8 +357,11 @@ cdef class Grove:
             if move_name == "point_mutation":
                 lqf, lqr = gp_movesC.point_mutation(
                     cand, self.funcs, kwargs.get("operations", None))
-            elif move_name == "hoist_mutation":
-                lqf, lqr = gp_movesC.hoist_mutation(
+            elif move_name == "leaf_hoist":
+                lqf, lqr = gp_movesC.leaf_hoist(
+                    cand, self.funcs, self.operations)
+            elif move_name == "internal_hoist":
+                lqf, lqr = gp_movesC.internal_hoist(
                     cand, self.funcs, self.operations)
             elif move_name == "add_node":
                 lqf, lqr = gp_movesC.add_node(

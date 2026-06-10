@@ -14,9 +14,10 @@ Phase 3.3 tests.
     by each public move:
       * subtree_mutation: lqr - lqf == log(size_T) - log(size_Tp),
         where size_T = #non-parameter-leaf nodes (selection density).
-      * add_node, split:  lqr == -log(|N(T')| - 1)
-        (paired hoist selects uniformly over non-root nodes of T').
-      * hoist_mutation:    lqf == -log(|N(T)|  - 1).
+      * add_node:  lqr == -log n_leaves(T')   (reverse is leaf_hoist).
+      * split:     lqr == -log(n_int(T') - 1) (reverse is internal_hoist).
+      * leaf_hoist:     lqf == -log n_leaves(T).
+      * internal_hoist: lqf == -log(n_int(T) - 1).
       * point_mutation:    symmetric branches return (0, 0) exactly;
         kind-crossing branches obey the BIRTH/DEATH formulas already
         validated in (b).
@@ -43,7 +44,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, os.pardir)))
 import sympy as sp
 import gp_movesC
 from gp_movesC import (point_mutation, subtree_mutation, add_node,
-                       split, hoist_mutation)
+                       split, leaf_hoist, internal_hoist)
 from groveC import Grove
 from function_treeC import Tree, expr_to_tree
 from polya_treeC import PolyaTree
@@ -313,6 +314,25 @@ def _count_selectable_py(node):
                _count_selectable_py(node.get_right())
 
 
+def _count_leaves_py(node):
+    """Number of leaf nodes in the subtree rooted at `node`."""
+    if node is None:
+        return 0
+    if node.is_leaf():
+        return 1
+    return _count_leaves_py(node.get_left()) + _count_leaves_py(node.get_right())
+
+
+def _count_internal_py(node):
+    """Number of internal (non-leaf) nodes in the subtree rooted at `node`."""
+    if node is None:
+        return 0
+    if node.is_leaf():
+        return 0
+    return 1 + _count_internal_py(node.get_left()) + \
+               _count_internal_py(node.get_right())
+
+
 def _seed_rngs(s):
     """Pin both module RNGs from a single integer seed."""
     gp_movesC.set_rng(random.Random(s), np.random.default_rng(s))
@@ -335,6 +355,17 @@ def _make_no_param_tree(domain):
     point_mutation onto its symmetric branches."""
     x_sym = sp.Symbol('x')
     return expr_to_tree(sp.sin(x_sym) + sp.cos(x_sym), domain, _FUNCS)
+
+
+def _make_balanced_tree(domain):
+    """(sin(x) + cos(x)) * (exp(x) + a0)  -> 7 nodes, 3 internal (root + two
+    inner ops), 4 leaves.  Both non-root internal nodes have a sibling that
+    is a perfect-binary height-1 subtree, so internal_hoist lands on-support
+    (its reverse split is finite)."""
+    x_sym, a0 = sp.Symbol('x'), sp.Symbol('a0')
+    return expr_to_tree(
+        (sp.sin(x_sym) + sp.cos(x_sym)) * (sp.exp(x_sym) + a0),
+        domain, _FUNCS)
 
 
 def test_3_3c_subtree_mutation_density(n_seeds=200):
@@ -393,8 +424,9 @@ def test_3_3c_subtree_mutation_density(n_seeds=200):
 
 
 def test_3_3c_add_node_density(n_seeds=200):
-    """add_node: paired reverse move is leaf-hoist whose selection density
-    is uniform over non-root nodes of T'.  So lqr == -log(|N(T')| - 1)."""
+    """add_node: paired reverse move is leaf_hoist, whose selection density is
+    uniform over the LEAVES of T' (every leaf is non-root).  The added leaf L
+    is a leaf of T', so lqr == -log n_leaves(T')."""
     print("[3.3c.add_node] reverse selection density")
     from real_functionC import _domain_fixer
     x, _ = _make_xy(n=24, seed=12)
@@ -416,10 +448,11 @@ def test_3_3c_add_node_density(n_seeds=200):
         assert math.isfinite(lqf), "add_node lqf must be finite"
         assert math.isfinite(lqr), "add_node lqr must be finite (always on-support)"
 
-        expected_lqr = -math.log(n_after - 1)
+        n_leaves_after = _count_leaves_py(tree.get_root())
+        expected_lqr = -math.log(n_leaves_after)
         assert math.isclose(lqr, expected_lqr, rel_tol=0.0, abs_tol=tol), (
             "[seed=%d] add_node lqr mismatch: got %.15g, expected %.15g "
-            "(|N(T')|=%d)" % (s, lqr, expected_lqr, n_after)
+            "(n_leaves(T')=%d)" % (s, lqr, expected_lqr, n_leaves_after)
         )
         n_checked += 1
 
@@ -427,8 +460,9 @@ def test_3_3c_add_node_density(n_seeds=200):
 
 
 def test_3_3c_split_density(n_seeds=200):
-    """split: same reverse-density formula as add_node (paired internal-hoist
-    selects uniformly over non-root nodes of T')."""
+    """split: paired reverse move is internal_hoist, which selects uniformly
+    over the NON-ROOT internal nodes of T'.  The split node u is internal and
+    non-root in T', so lqr == -log(n_int(T') - 1)."""
     print("[3.3c.split] reverse selection density")
     from real_functionC import _domain_fixer
     x, _ = _make_xy(n=24, seed=13)
@@ -451,21 +485,22 @@ def test_3_3c_split_density(n_seeds=200):
         assert math.isfinite(lqf), "split lqf must be finite"
         assert math.isfinite(lqr), "split lqr must be finite"
 
-        expected_lqr = -math.log(n_after - 1)
+        n_int_after = _count_internal_py(tree.get_root())
+        expected_lqr = -math.log(n_int_after - 1)
         assert math.isclose(lqr, expected_lqr, rel_tol=0.0, abs_tol=tol), (
             "[seed=%d] split lqr mismatch: got %.15g, expected %.15g "
-            "(|N(T')|=%d)" % (s, lqr, expected_lqr, n_after)
+            "(n_int(T')-1=%d)" % (s, lqr, expected_lqr, n_int_after - 1)
         )
         n_checked += 1
 
     print("[3.3c.split] PASS  (%d/%d checked)" % (n_checked, n_seeds))
 
 
-def test_3_3c_hoist_density(n_seeds=300, tol=1e-10):
-    """hoist_mutation: forward move picks uniformly over non-root nodes of
-    T, so lqf == -log(|N(T)| - 1).  lqr may be -inf when the lifted
-    sibling is not a valid `add_node` reverse (off-support)."""
-    print("[3.3c.hoist] forward selection density + off-support handling")
+def test_3_3c_leaf_hoist_density(n_seeds=300, tol=1e-10):
+    """leaf_hoist: forward move picks uniformly over the LEAVES of T (every
+    leaf is non-root), so lqf == -log n_leaves(T).  lqr may be -inf when the
+    dropped sibling is not a valid `add_node` reverse (off-support)."""
+    print("[3.3c.leaf_hoist] forward selection density + off-support handling")
     from real_functionC import _domain_fixer
     x, _ = _make_xy(n=24, seed=14)
     domain = _domain_fixer(x)
@@ -475,31 +510,74 @@ def test_3_3c_hoist_density(n_seeds=300, tol=1e-10):
     for s in range(n_seeds):
         tree = _make_deeper_tree(domain)
         n_before = _count_nodes_py(tree.get_root())
+        n_leaves_before = _count_leaves_py(tree.get_root())
 
         _seed_rngs(s)
-        lqf, lqr = hoist_mutation(tree, _FUNCS, _OPS)
+        lqf, lqr = leaf_hoist(tree, _FUNCS, _OPS)
 
         n_after = _count_nodes_py(tree.get_root())
         assert n_after < n_before, \
-            "hoist failed to shrink: %d -> %d (seed=%d)" % (n_before, n_after, s)
-        assert math.isfinite(lqf), "hoist lqf must be finite"
+            "leaf_hoist failed to shrink: %d -> %d (seed=%d)" % (n_before, n_after, s)
+        assert math.isfinite(lqf), "leaf_hoist lqf must be finite"
 
-        expected_lqf = -math.log(n_before - 1)
+        expected_lqf = -math.log(n_leaves_before)
         assert math.isclose(lqf, expected_lqf, rel_tol=0.0, abs_tol=tol), (
-            "[seed=%d] hoist lqf mismatch: got %.15g, expected %.15g "
-            "(|N(T)|=%d)" % (s, lqf, expected_lqf, n_before)
+            "[seed=%d] leaf_hoist lqf mismatch: got %.15g, expected %.15g "
+            "(n_leaves(T)=%d)" % (s, lqf, expected_lqf, n_leaves_before)
         )
         if math.isinf(lqr):
-            assert lqr == -math.inf, "hoist off-support lqr must be -inf"
+            assert lqr == -math.inf, "leaf_hoist off-support lqr must be -inf"
             n_off += 1
         else:
             n_on += 1
 
-    # Both branches must be exercised in 300 seeds for our depth-2 fixture.
-    # If one side is empty, the kernel is misclassifying targets and
-    # something is wrong upstream.
-    assert n_on > 0, "hoist never landed on-support in %d seeds" % n_seeds
-    print("[3.3c.hoist] PASS  (on=%d, off=%d)" % (n_on, n_off))
+    # The depth-2 fixture exercises both branches: lifting the leaf whose
+    # sibling is a height-1 subtree is on-support; lifting a leaf whose
+    # sibling is a bare leaf is off-support.
+    assert n_on > 0, "leaf_hoist never landed on-support in %d seeds" % n_seeds
+    print("[3.3c.leaf_hoist] PASS  (on=%d, off=%d)" % (n_on, n_off))
+
+
+def test_3_3c_internal_hoist_density(n_seeds=300, tol=1e-10):
+    """internal_hoist: forward move picks uniformly over the NON-ROOT
+    internal nodes of T, so lqf == -log(n_int(T) - 1).  lqr may be -inf when
+    the dropped sibling is not a valid `split` reverse (off-support)."""
+    print("[3.3c.internal_hoist] forward selection density + off-support handling")
+    from real_functionC import _domain_fixer
+    x, _ = _make_xy(n=24, seed=14)
+    domain = _domain_fixer(x)
+
+    n_on = 0
+    n_off = 0
+    for s in range(n_seeds):
+        # The balanced fixture has two non-root internal nodes, each with a
+        # height-1 perfect-binary sibling, so internal_hoist always fires and
+        # lands on-support.
+        tree = _make_balanced_tree(domain)
+        n_before = _count_nodes_py(tree.get_root())
+        n_int_before = _count_internal_py(tree.get_root())
+
+        _seed_rngs(s)
+        lqf, lqr = internal_hoist(tree, _FUNCS, _OPS)
+
+        n_after = _count_nodes_py(tree.get_root())
+        assert n_after < n_before, \
+            "internal_hoist failed to shrink: %d -> %d (seed=%d)" % (n_before, n_after, s)
+        assert math.isfinite(lqf), "internal_hoist lqf must be finite"
+
+        expected_lqf = -math.log(n_int_before - 1)
+        assert math.isclose(lqf, expected_lqf, rel_tol=0.0, abs_tol=tol), (
+            "[seed=%d] internal_hoist lqf mismatch: got %.15g, expected %.15g "
+            "(n_int(T)-1=%d)" % (s, lqf, expected_lqf, n_int_before - 1)
+        )
+        if math.isinf(lqr):
+            n_off += 1
+        else:
+            n_on += 1
+
+    assert n_on > 0, "internal_hoist never landed on-support in %d seeds" % n_seeds
+    print("[3.3c.internal_hoist] PASS  (on=%d, off=%d)" % (n_on, n_off))
+
 
 
 def test_3_3c_point_mutation_symmetric(n_seeds=200, tol=1e-12):
@@ -997,7 +1075,7 @@ def test_3_3f_grove_integration(n_steps=200, seed=20260610):
 
     # --- 2. Every structural move was proposed at least once ---------------
     stats = g.move_stats()
-    structural = ["point_mutation", "hoist_mutation", "add_node",
+    structural = ["point_mutation", "leaf_hoist", "internal_hoist", "add_node",
                   "split", "subtree_mutation", "subtree_crossover"]
     for name in structural:
         assert name in stats, "move_stats missing %r" % name
@@ -1262,7 +1340,8 @@ if __name__ == "__main__":
     test_3_3c_subtree_mutation_density()
     test_3_3c_add_node_density()
     test_3_3c_split_density()
-    test_3_3c_hoist_density()
+    test_3_3c_leaf_hoist_density()
+    test_3_3c_internal_hoist_density()
     test_3_3c_point_mutation_symmetric()
     test_3_3d_bic_finite_on_linear()
     test_3_3d_bic_penalises_complexity()

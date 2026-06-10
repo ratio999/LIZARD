@@ -1057,14 +1057,233 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
 @cython.boundscheck(True)
 @cython.wraparound(True)
 cpdef tuple hoist_mutation(function_treeC.Tree tree, list functions=None, list operations=None):
-    """Phase 2.1.K public entry point. Returns (log_q_fwd, log_q_rev).
-    `functions`/`operations` are required to compute the reverse-add_node
-    density; they default to the standard sets if omitted (legacy callers)."""
+    """DEPRECATED (Phase 3.3 split). Unified hoist kept only for the legacy
+    `test_cython4.py` smoke test. The Grove sampler now uses the two exact
+    death moves `leaf_hoist` (reverse of add_node) and `internal_hoist`
+    (reverse of split) instead. Returns (log_q_fwd, log_q_rev)."""
     if functions is None:
         functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
     return _hoist_mutation(tree, list(functions), list(operations))
+
+
+@cython.boundscheck(True)
+@cython.wraparound(True)
+cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations):
+    """
+    leaf_hoist (Phase 3.3). Lift a uniformly-chosen non-root LEAF v; v takes
+    its parent's place; the sibling subtree S is dropped. Exact reverse of
+    `add_node`.
+
+    On-support iff the dropped sibling S is perfect-binary of depth in
+    [1, _ADD_NODE_DEPTH_MAX] (otherwise add_node could not have produced it).
+
+    Densities
+    ---------
+    Every leaf of a non-trivial tree is non-root (the root is internal), so
+    the forward selection is uniform over all n_leaves(T) leaves:
+        log_q_fwd = -log n_leaves(T).
+    The reverse add_node selects leaf v among the n_leaves(T') leaves of the
+    lifted tree T', then op ~ U(O), depth ~ TruncGeom, side ~ U{L,R} and
+    rebuilds S:
+        log_q_rev = -log n_leaves(T')
+                    - log O
+                    + truncgeom_logpmf(d_S)
+                    - log 2
+                    + build_density(S).
+
+    Returns (log_q_fwd, log_q_rev).
+    """
+    cdef function_treeC.Node v, parent, sibling, granpa
+    cdef list non_root_leaves
+    cdef int n_leaves_T, M, O, d_S
+    cdef double log_q_fwd = 0.0
+    cdef double log_q_rev = 0.0
+
+    if tree.root is None or tree.root.is_leaf():
+        return (0.0, 0.0)
+    M = len(functions)
+    O = len(operations)
+
+    # ---- 1. uniform pick of a non-root LEAF v (all leaves are non-root) ----
+    non_root_leaves = tree.root.get_leaves(leaves_list=[])
+    n_leaves_T = len(non_root_leaves)
+    if n_leaves_T <= 0:
+        return (0.0, 0.0)
+    v = non_root_leaves[_PY_RNG.randrange(n_leaves_T)]
+    parent = tree.root.find_parent(v)     # never None: a leaf is never the root
+    if parent.get_left() is v:
+        sibling = parent.right
+    else:
+        sibling = parent.left
+
+    # ---- 2. perform the lift (parent <- v) ----
+    granpa = tree.root.find_parent(parent)
+    if granpa is None:
+        # parent IS the root; v becomes the new root.
+        tree.root.assign_left(None)
+        tree.root.assign_right(None)
+        tree.root.assign_operation(None)
+        tree.root = v
+        tree.tree_update(tree.root)
+    else:
+        if granpa.left is parent:
+            granpa.assign_left(v)
+        else:
+            granpa.assign_right(v)
+        tree.tree_update(granpa)
+
+    # ---- 3. proposal densities ----
+    log_q_fwd = -np.log(<double> n_leaves_T)
+
+    cdef int n_leaves_Tnew
+    cdef double log_select_rev
+    d_S = sibling.depth()
+    if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
+        log_q_rev = -np.inf
+        return (log_q_fwd, log_q_rev)
+
+    n_leaves_Tnew = len(tree.root.get_leaves(leaves_list=[]))
+    if n_leaves_Tnew <= 0:
+        log_q_rev = -np.inf
+        return (log_q_fwd, log_q_rev)
+    log_select_rev = -np.log(<double> n_leaves_Tnew)
+
+    cdef double g_tau = tree.g_tau
+    log_q_rev = (log_select_rev
+                 - np.log(<double> O)
+                 + _truncated_geometric_log_pmf(d_S, _ADD_NODE_DEPTH_RHO,
+                                                _ADD_NODE_DEPTH_MAX)
+                 - np.log(2.0)
+                 + _eval_build_density(sibling, d_S, M, O, _ADD_NODE_PARAM_PROB, g_tau))
+
+    return (log_q_fwd, log_q_rev)
+
+
+@cython.boundscheck(True)
+@cython.wraparound(True)
+cpdef tuple leaf_hoist(function_treeC.Tree tree, list functions=None, list operations=None):
+    """Phase 3.3 public entry point (leaf branch). Exact reverse of add_node.
+    Returns (log_q_fwd, log_q_rev)."""
+    if functions is None:
+        functions = tree.functions
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _leaf_hoist(tree, list(functions), list(operations))
+
+
+@cython.boundscheck(True)
+@cython.wraparound(True)
+cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operations):
+    """
+    internal_hoist (Phase 3.3). Lift a uniformly-chosen non-root INTERNAL
+    node v; v takes its parent's place; the sibling subtree S is dropped.
+    Exact reverse of `split`.
+
+    On-support iff the dropped sibling S is perfect-binary of depth in
+    [1, _ADD_NODE_DEPTH_MAX] (otherwise split could not have produced it).
+
+    Densities
+    ---------
+    The forward selection is uniform over the NON-ROOT internal nodes of T.
+    With n_int(T) internal nodes (root included) there are n_int(T) - 1
+    non-root internal nodes:
+        log_q_fwd = -log (n_int(T) - 1).
+    The reverse split selects an internal node v among ALL n_int(T')
+    internal nodes of T' (split may wrap the root), then op ~ U(O),
+    depth ~ TruncGeom, side ~ U{L,R} and rebuilds S:
+        log_q_rev = -log n_int(T')
+                    - log O
+                    + truncgeom_logpmf(d_S)
+                    - log 2
+                    + build_density(S).
+
+    Returns (log_q_fwd, log_q_rev).
+    """
+    cdef function_treeC.Node v, parent, sibling, granpa
+    cdef list non_root_internal
+    cdef int n_nonroot_int_T, M, O, d_S
+    cdef double log_q_fwd = 0.0
+    cdef double log_q_rev = 0.0
+
+    if tree.root is None or tree.root.is_leaf():
+        return (0.0, 0.0)
+    M = len(functions)
+    O = len(operations)
+
+    # ---- 1. uniform pick of a non-root INTERNAL node v ----
+    # Pre-order flatten lists the root first; the root is internal here, so
+    # filtering it out leaves exactly the non-root internal nodes.
+    non_root_internal = [n for n in _flatten_nodes(tree.root, [])
+                         if (not n.is_leaf()) and (n is not tree.root)]
+    n_nonroot_int_T = len(non_root_internal)
+    if n_nonroot_int_T <= 0:
+        # No non-root internal node (e.g. a depth-1 tree); nothing to lift.
+        return (0.0, 0.0)
+    v = non_root_internal[_PY_RNG.randrange(n_nonroot_int_T)]
+    parent = tree.root.find_parent(v)     # never None: v != root
+    if parent.get_left() is v:
+        sibling = parent.right
+    else:
+        sibling = parent.left
+
+    # ---- 2. perform the lift (parent <- v) ----
+    granpa = tree.root.find_parent(parent)
+    if granpa is None:
+        # parent IS the root; v becomes the new root.
+        tree.root.assign_left(None)
+        tree.root.assign_right(None)
+        tree.root.assign_operation(None)
+        tree.root = v
+        tree.tree_update(tree.root)
+    else:
+        if granpa.left is parent:
+            granpa.assign_left(v)
+        else:
+            granpa.assign_right(v)
+        tree.tree_update(granpa)
+
+    # ---- 3. proposal densities ----
+    log_q_fwd = -np.log(<double> n_nonroot_int_T)
+
+    cdef list internal_Tnew
+    cdef int n_int_Tnew
+    cdef double log_select_rev
+    d_S = sibling.depth()
+    if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
+        log_q_rev = -np.inf
+        return (log_q_fwd, log_q_rev)
+
+    # Reverse is split: selects from ALL internal nodes of T' (root included).
+    internal_Tnew = [n for n in _flatten_nodes(tree.root, [])
+                     if not n.is_leaf()]
+    n_int_Tnew = len(internal_Tnew)
+    if n_int_Tnew <= 0:
+        return (log_q_fwd, -np.inf)
+    log_select_rev = -np.log(<double> n_int_Tnew)
+
+    cdef double g_tau = tree.g_tau
+    log_q_rev = (log_select_rev
+                 - np.log(<double> O)
+                 + _truncated_geometric_log_pmf(d_S, _ADD_NODE_DEPTH_RHO,
+                                                _ADD_NODE_DEPTH_MAX)
+                 - np.log(2.0)
+                 + _eval_build_density(sibling, d_S, M, O, _ADD_NODE_PARAM_PROB, g_tau))
+
+    return (log_q_fwd, log_q_rev)
+
+
+@cython.boundscheck(True)
+@cython.wraparound(True)
+cpdef tuple internal_hoist(function_treeC.Tree tree, list functions=None, list operations=None):
+    """Phase 3.3 public entry point (internal branch). Exact reverse of split.
+    Returns (log_q_fwd, log_q_rev)."""
+    if functions is None:
+        functions = tree.functions
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _internal_hoist(tree, list(functions), list(operations))
 
 #@cython.boundscheck(False)
 #@cython.wraparound(False)
@@ -1271,11 +1490,14 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
                  - np.log(2.0)
                  + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB, g_tau))
 
-    # Reverse: leaf-hoist of L on T'. Uniform over non-root nodes of T'.
-    if n_nodes_Tp <= 1:
+    # Reverse: leaf_hoist of L on T'. leaf_hoist selects uniformly over the
+    # LEAVES of T' (every leaf is non-root), so the reverse selection density
+    # is -log n_leaves(T'); L is a leaf of T' by construction.
+    cdef int n_leaves_Tp = len(tree.root.get_leaves(leaves_list=[]))
+    if n_leaves_Tp <= 0:
         log_q_rev = -np.inf
     else:
-        log_q_rev = -np.log(<double> (n_nodes_Tp - 1))
+        log_q_rev = -np.log(<double> n_leaves_Tp)
 
     return (log_q_fwd, log_q_rev)
 
@@ -1391,14 +1613,16 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
                  - np.log(2.0)
                  + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB, g_tau))
 
-    # Reverse: hoist of (the former) u on T'. The chosen node in the
-    # reverse is the new_internal's child that corresponds to u; selecting
-    # it requires picking it uniformly from the (n_nodes_Tp - 1) non-root
-    # nodes of T'. Hoist's reverse density is just the selection term.
-    if n_nodes_Tp <= 1:
+    # Reverse: internal_hoist of (the former) u on T'. internal_hoist selects
+    # uniformly over the NON-ROOT internal nodes of T'. u is internal and
+    # non-root in T' (new_internal is its parent), so the reverse selection
+    # density is -log(n_int(T') - 1).
+    cdef int n_int_Tp = sum(1 for n in _flatten_nodes(tree.root, [])
+                            if not n.is_leaf())
+    if n_int_Tp <= 1:
         log_q_rev = -np.inf
     else:
-        log_q_rev = -np.log(<double> (n_nodes_Tp - 1))
+        log_q_rev = -np.log(<double> (n_int_Tp - 1))
 
     return (log_q_fwd, log_q_rev)
 
