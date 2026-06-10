@@ -8,7 +8,8 @@ import time
 import numpy as np
 from function_treeC import Tree, expr_to_tree
 from gp_movesC import (subtree_mutation, subtree_crossover, point_mutation,
-                       hoist_mutation, add_node, replace_with_subtree, add_node,
+                       hoist_mutation, leaf_hoist, internal_hoist,
+                       add_node, replace_with_subtree, add_node,
                        AMState, parameter_refresh, flatten_nodes)
 from groveC import Grove
 import matplotlib.pyplot as plt
@@ -30,6 +31,14 @@ def _count_internal_py(node):
     if node is None or node.is_leaf():
         return 0
     return 1 + _count_internal_py(node.get_left()) + _count_internal_py(node.get_right())
+
+
+def _count_leaves_py(node):
+    if node is None:
+        return 0
+    if node.is_leaf():
+        return 1
+    return _count_leaves_py(node.get_left()) + _count_leaves_py(node.get_right())
 
 def crossover_smoke_test():
     print("[X] subtree_crossover symmetric swap")
@@ -132,7 +141,8 @@ def k_changing_smoke_test():
     for name, fn, mk in [
         ("add_node",       lambda t: add_node(t, functions, operations),       make_tree_simple),
         ("split",          lambda t: split(t, functions, operations),          make_tree_deeper),
-        ("hoist_mutation", lambda t: hoist_mutation(t, functions, operations), make_tree_deeper),
+        ("leaf_hoist",     lambda t: leaf_hoist(t, functions, operations),     make_tree_deeper),
+        ("internal_hoist", lambda t: internal_hoist(t, functions, operations), make_tree_deeper),
     ]:
         t = mk()
         n_before = _count_nodes_py(t.get_root())
@@ -186,66 +196,104 @@ def k_changing_smoke_test():
     print(f"    |S| min/median/max = "
           f"{sizes_s.min()}/{int(np.median(sizes_s))}/{sizes_s.max()}")
 
-    # --- 4. hoist x N -----------------------------------------------------
-    n_off = 0
-    deltas_h, branch_leaf, branch_int = [], 0, 0
+    # --- 4. leaf_hoist / internal_hoist x N -------------------------------
+    n_off_l = 0
+    deltas_l = []
     for _ in range(N):
-        # Use a richer seed tree so hoist has both leaf and internal targets.
         t = make_tree_deeper()
         n_before = _count_nodes_py(t.get_root())
-        lqf, lqr = hoist_mutation(t, functions, operations)
+        lqf, lqr = leaf_hoist(t, functions, operations)
         n_after = _count_nodes_py(t.get_root())
-        assert n_after < n_before, f"hoist failed to shrink tree: {n_before}->{n_after}"
-        assert np.isfinite(lqf), "hoist lqf must be finite"
+        assert n_after < n_before, f"leaf_hoist failed to shrink tree: {n_before}->{n_after}"
+        assert np.isfinite(lqf), "leaf_hoist lqf must be finite"
         if not np.isfinite(lqr):
-            n_off += 1
+            n_off_l += 1
         else:
-            deltas_h.append(lqr - lqf)
-    print(f"\n[4] hoist_mutation x{N}:")
-    print(f"    off-support (lqr=-inf): {n_off}/{N} = {n_off/N:.1%}")
-    if deltas_h:
-        print(f"    on-support mean lqr-lqf = {np.mean(deltas_h):+.3f}  "
-              f"std={np.std(deltas_h):.3f}")
+            deltas_l.append(lqr - lqf)
+    print(f"\n[4] leaf_hoist x{N}:")
+    print(f"    off-support (lqr=-inf): {n_off_l}/{N} = {n_off_l/N:.1%}")
+    if deltas_l:
+        print(f"    on-support mean lqr-lqf = {np.mean(deltas_l):+.3f}  "
+              f"std={np.std(deltas_l):.3f}")
+
+    n_off_i = 0
+    deltas_i = []
+    for _ in range(N):
+        t = make_tree_deeper()
+        n_before = _count_nodes_py(t.get_root())
+        n_int_before = _count_internal_py(t.get_root())
+        if n_int_before - 1 <= 0:
+            continue  # no non-root internal node to lift
+        lqf, lqr = internal_hoist(t, functions, operations)
+        n_after = _count_nodes_py(t.get_root())
+        assert n_after < n_before, f"internal_hoist failed to shrink tree: {n_before}->{n_after}"
+        assert np.isfinite(lqf), "internal_hoist lqf must be finite"
+        if not np.isfinite(lqr):
+            n_off_i += 1
+        else:
+            deltas_i.append(lqr - lqf)
+    print(f"\n[4] internal_hoist x{N}:")
+    print(f"    off-support (lqr=-inf): {n_off_i}/{N} = {n_off_i/N:.1%}")
+    if deltas_i:
+        print(f"    on-support mean lqr-lqf = {np.mean(deltas_i):+.3f}  "
+              f"std={np.std(deltas_i):.3f}")
 
     # --- 5. add_node detailed-balance spot check --------------------------
-    print("\n[5] add_node q_rev == -log(|N(T')|-1)  (paired leaf-hoist selection)")
+    print("\n[5] add_node q_rev == -log n_leaves(T')  (paired leaf_hoist selection)")
     n_pass = 0
     for _ in range(100):
         t = make_tree_simple()
         lqf, lqr = add_node(t, functions, operations)
-        n_Tp = _count_nodes_py(t.get_root())
-        expected = -np.log(n_Tp - 1)
+        n_leaves_Tp = _count_leaves_py(t.get_root())
+        expected = -np.log(n_leaves_Tp)
         if abs(lqr - expected) < 1e-10:
             n_pass += 1
     print(f"    {n_pass}/100 match")
     assert n_pass == 100
 
     # --- 6. split detailed-balance spot check -----------------------------
-    print("\n[6] split    q_rev == -log(|N(T')|-1)  (paired internal-hoist selection)")
+    print("\n[6] split    q_rev == -log(n_int(T')-1)  (paired internal_hoist selection)")
     n_pass = 0
     for _ in range(100):
         t = make_tree_deeper()
         lqf, lqr = split(t, functions, operations)
-        n_Tp = _count_nodes_py(t.get_root())
-        expected = -np.log(n_Tp - 1)
+        n_int_Tp = _count_internal_py(t.get_root())
+        expected = -np.log(n_int_Tp - 1)
         if abs(lqr - expected) < 1e-10:
             n_pass += 1
     print(f"    {n_pass}/100 match")
     assert n_pass == 100
 
-    # --- 7. hoist forward density spot check ------------------------------
-    # hoist's lqf must be -log(|N(T)|-1), the uniform pick over non-root nodes.
-    print("\n[7] hoist     q_fwd == -log(|N(T)|-1)  (uniform pick of v)")
+    # --- 7. hoist forward density spot checks -----------------------------
+    # leaf_hoist's lqf == -log n_leaves(T) (uniform over leaves, all non-root).
+    print("\n[7] leaf_hoist     q_fwd == -log n_leaves(T)")
     n_pass = 0
     for _ in range(100):
         t = make_tree_deeper()
-        n_T = _count_nodes_py(t.get_root())
-        lqf, _ = hoist_mutation(t, functions, operations)
-        expected = -np.log(n_T - 1)
+        n_leaves_T = _count_leaves_py(t.get_root())
+        lqf, _ = leaf_hoist(t, functions, operations)
+        expected = -np.log(n_leaves_T)
         if abs(lqf - expected) < 1e-10:
             n_pass += 1
     print(f"    {n_pass}/100 match")
     assert n_pass == 100
+
+    # internal_hoist's lqf == -log(n_int(T)-1) (uniform over non-root internal).
+    print("\n[7] internal_hoist q_fwd == -log(n_int(T)-1)")
+    n_pass = 0
+    n_eval = 0
+    for _ in range(100):
+        t = make_tree_deeper()
+        n_int_T = _count_internal_py(t.get_root())
+        if n_int_T - 1 <= 0:
+            continue
+        lqf, _ = internal_hoist(t, functions, operations)
+        expected = -np.log(n_int_T - 1)
+        n_eval += 1
+        if abs(lqf - expected) < 1e-10:
+            n_pass += 1
+    print(f"    {n_pass}/{n_eval} match")
+    assert n_pass == n_eval and n_eval > 0
 
     print("\n" + "=" * 60)
     print("Phase 2.1.K smoke test: ALL CHECKS PASSED")
