@@ -942,6 +942,101 @@ def test_3_3e_mh_random_branch_consistency(n_seeds=2000, tol=0.05):
 
 
 # ---------------------------------------------------------------------------
+# (f) Grove integration test
+# ---------------------------------------------------------------------------
+#
+# Hooks all earlier 3.3 layers together: per-move densities (c), BIC scorer
+# (d), and the MH rule (e) must compose into a Grove kernel that:
+#   - Runs without raising on a realistic target (y = sin(x) + noise).
+#   - Lands in a sensible acceptance band (PLAN.md: [0.05, 0.95]).
+#   - Exercises every *structural* move type at least once
+#     (parameter_refresh fires only with pr_prob=0.02 per step, so it
+#      may legitimately miss inside 200 steps -- we report it but do
+#      not assert).
+#   - Has a finite log_evidence on the returned best_tree.
+#   - Is fully deterministic across two runs from the same seed
+#     (this re-uses the (a) check on a longer trajectory).
+# ---------------------------------------------------------------------------
+def _grove_run_state(g):
+    """Snapshot of grove state used for cross-run equality."""
+    tops = [t.tree_get_description() for t in g.trees]
+    props = dict(g.move_proposals)
+    accs = dict(g.move_accepts)
+    posts = np.asarray(g.root_posteriors, dtype=np.float64).copy()
+    return tops, props, accs, posts
+
+
+def _make_sin_grove_xy(n=64, noise=0.05, seed=0):
+    """y = sin(x) + small noise on x in [-2, 2]."""
+    rng = np.random.default_rng(seed)
+    x = np.linspace(-2.0, 2.0, n, dtype=np.float64)
+    y = np.sin(x).astype(np.float64) + rng.normal(0.0, noise, size=n).astype(np.float64)
+    return x, y
+
+
+def test_3_3f_grove_integration(n_steps=200, seed=20260610):
+    """End-to-end Grove run on y = sin(x) + noise."""
+    print("[3.3f.integration] Grove on y=sin(x), n_steps=%d, seed=%d"
+          % (n_steps, seed))
+
+    x, y = _make_sin_grove_xy(n=64, noise=0.05, seed=seed)
+
+    # size=4 trees, depth=2 -- matches the (a) determinism fixture so the
+    # cross-run equality check is on identical territory.
+    g = _make_grove(x, y, seed=seed, g_tau=None, size=4, depth=2)
+    g.run(y, n_steps=n_steps)
+
+    # --- 1. Acceptance rate band -------------------------------------------
+    rate = float(g.acceptance_rate())
+    assert 0.05 <= rate <= 0.95, (
+        "acceptance rate out of PLAN-specified band [0.05, 0.95]: %.4f "
+        "(proposals=%d, accepts=%d)"
+        % (rate, int(g.proposal_count), int(g.acceptance_count))
+    )
+
+    # --- 2. Every structural move was proposed at least once ---------------
+    stats = g.move_stats()
+    structural = ["point_mutation", "hoist_mutation", "add_node",
+                  "split", "subtree_mutation", "subtree_crossover"]
+    for name in structural:
+        assert name in stats, "move_stats missing %r" % name
+        assert stats[name]["proposed"] > 0, (
+            "structural move %r had zero proposals in %d steps; check "
+            "_choose_move probabilities" % (name, n_steps)
+        )
+
+    # parameter_refresh is informational: pr_prob=0.02 per step means
+    # E[count] ~ 4 over 200 steps, so absence is not a failure.
+    pr_proposed = stats.get("parameter_refresh", {}).get("proposed", 0)
+
+    # --- 3. best_tree() has a finite log_evidence --------------------------
+    best_post = float(g.root_posteriors[g.best_index()])
+    assert math.isfinite(best_post), \
+        "best_tree() root posterior is not finite: %r" % best_post
+    best = g.best_tree()
+    assert best is not None, "best_tree() returned None"
+    assert best.is_valid(g.get_domain()), "best_tree() is not numerically valid"
+
+    # --- 4. Determinism over the longer trajectory -------------------------
+    g2 = _make_grove(x, y, seed=seed, g_tau=None, size=4, depth=2)
+    g2.run(y, n_steps=n_steps)
+
+    t1, p1, a1, post1 = _grove_run_state(g)
+    t2, p2, a2, post2 = _grove_run_state(g2)
+    assert t1 == t2, \
+        "tree topologies differ across same-seed runs:\n  g1=%s\n  g2=%s" % (t1, t2)
+    assert p1 == p2, "move_proposals differ across same-seed runs: %r vs %r" % (p1, p2)
+    assert a1 == a2, "move_accepts differ across same-seed runs: %r vs %r" % (a1, a2)
+    assert np.allclose(post1, post2, atol=1e-12, equal_nan=True), \
+        "root_posteriors differ across same-seed runs:\n  %s\n  %s" % (post1, post2)
+
+    print("[3.3f.integration] PASS  (rate=%.3f, best_post=%.3f, "
+          "PR_proposed=%d, structural_proposals=%s)"
+          % (rate, best_post, pr_proposed,
+             {n: stats[n]["proposed"] for n in structural}))
+
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     # OpenMP / BLAS threading affects bit-equality on some routines.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -964,4 +1059,5 @@ if __name__ == "__main__":
     test_3_3e_mh_always_reject_when_lqr_minus_inf()
     test_3_3e_mh_greedy_at_zero_temperature()
     test_3_3e_mh_random_branch_consistency()
-    print("\nAll Phase 3.3 (a)+(b)+(c)+(d)+(e) tests passed.")
+    test_3_3f_grove_integration()
+    print("\nAll Phase 3.3 (a)+(b)+(c)+(d)+(e)+(f) tests passed.")

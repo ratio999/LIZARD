@@ -720,7 +720,6 @@ cdef class Tree:
     cdef double _shortcut_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
 			double mse):
         cdef int N = y.shape[0]
-        print('using shortcut')
         cdef int k = len(self.name_values)
         if self.sigma is None:
             return -0.5 * N * (_LOG(2.0 * _PI * mse) + 1.0) - 0.5 * k * _LOG(N)
@@ -799,7 +798,6 @@ cdef class Tree:
         optimized_params = dict(zip(input_pars.keys(), result.x))
         #print(self.tree_get_description(), result)
         cdef double mse=result.fun
-        print(mse)
         for par in self.params:
             par.set_value(optimized_params[par.function.get_description()])
         

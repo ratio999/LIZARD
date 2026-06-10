@@ -210,6 +210,9 @@ cdef class Grove:
         # before (no prior term, no adaptation).
         self.polya = polya
         
+    def get_domain(self):
+        return self.domain
+
     cdef _init_trees(self, list node_list, int Npars, object init_value):
         cdef list trees = [None] * self.size
         self.root_posteriors = [None] * self.size

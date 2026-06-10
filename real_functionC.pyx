@@ -23,6 +23,24 @@ def safe_convert(value):
             #print('!\n!\n|\n!\n!')
             return np.nan
 
+
+cdef _to_float64_array(object out, cnp.ndarray[cnp.float64_t, ndim=1] like):
+    """Vectorised replacement for ``np.vectorize(safe_convert)``.
+
+    The old per-element Python loop ran on every evaluate() call. For the
+    common case (real numeric output) this is a single C-level cast. Only
+    complex / object dtypes fall back to the element-wise safe_convert,
+    preserving the original NaN-on-complex behaviour exactly.
+    """
+    cdef object arr = np.asarray(out)
+    if arr.dtype == np.float64:
+        return np.ascontiguousarray(arr, dtype=np.float64).ravel()
+    if arr.dtype.kind in ('f', 'i', 'u', 'b'):
+        return np.ascontiguousarray(arr, dtype=np.float64).ravel()
+    # Complex or object dtype: replicate safe_convert element-wise (rare).
+    cdef object vector_safe_convert = np.vectorize(safe_convert)
+    return np.ascontiguousarray(vector_safe_convert(arr), dtype=np.float64).ravel()
+
 cdef class RealFunctionC:
 
     def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time', bint compute_grad = False, double constant_value=1.0):
@@ -190,9 +208,7 @@ cdef class RealFunctionC:
         cdef object out = self.func(x, params=params)
         
         try:
-            vector_safe_convert = np.vectorize(safe_convert)
-            out_safe = vector_safe_convert(out)
-            return np.ascontiguousarray(out_safe, dtype=np.float64).ravel()
+            return _to_float64_array(out, x)
         except:
             return np.full_like(x,_NAN, dtype=np.float64)
         #return self.func(x, params=params)
@@ -629,28 +645,54 @@ cdef class RealFunctionC:
     @classmethod
     def from_string(cls, expr_str,  cnp.ndarray[cnp.float64_t, ndim=1] x, compute_grad=True):
         """Creates function class from string"""
-       
-      
-        
         cdef object x_sym = sp.symbols('x') 
         cdef object expr
         
         expr = sp.sympify(expr_str)
+        # Compile ONCE over (x, *params). lambdify is a code-generation
+        # call (~ms each) and expr.subs is symbolic; doing either on every
+        # evaluate() made parameter optimisation thousands of times slower
+        # than necessary (Powell calls the objective hundreds of times per
+        # candidate, and every leaf was re-lambdified on each call). The
+        # compiled callable is captured in the closure and reused, taking
+        # numeric parameter values as positional args.
+        cdef list param_syms = sorted(
+            (s for s in expr.free_symbols if str(s) != 'x'), key=str)
+        cdef list param_names = [str(s) for s in param_syms]
+        cdef object compiled = sp.lambdify([x_sym] + param_syms, expr, "numpy")
+
         def func(cnp.ndarray[cnp.float64_t, ndim=1] input_x, dict params = None):
             if params is None:
                 params = {}
-            expr_with_params = expr
-            for param_name, param_value in params.items():
-                expr_with_params = expr_with_params.subs(sp.symbols(param_name), param_value)
-            result = sp.lambdify(x_sym, expr_with_params, "numpy")(input_x)
-            
-            try: 
-                vector_safe_convert = np.vectorize(safe_convert)
-                result_safe = vector_safe_convert(result)
-                return np.array(result_safe, dtype=np.float64)
-            except:
+            # Fast path: all (if any) free parameters are supplied -> call the
+            # pre-compiled function directly. Non-parameter leaves (sin(x),
+            # x, ...) have no free params and hit this immediately.
+            if not param_names:
+                arg_vals = [input_x]
+            elif all(name in params for name in param_names):
+                arg_vals = [input_x]
+                for name in param_names:
+                    arg_vals.append(params[name])
+            else:
+                # Rare fallback: a needed parameter is missing. Preserve the
+                # original subs+lambdify semantics exactly (returns NaN on any
+                # leftover free symbol via the except below).
+                expr_with_params = expr
+                for param_name, param_value in params.items():
+                    expr_with_params = expr_with_params.subs(
+                        sp.symbols(param_name), param_value)
+                try:
+                    result = sp.lambdify(x_sym, expr_with_params, "numpy")(input_x)
+                    return _to_float64_array(result, input_x)
+                except Exception:
+                    return np.full_like(input_x, np.nan, dtype=np.float64)
+
+            try:
+                result = compiled(*arg_vals)
+                return _to_float64_array(result, input_x)
+            except Exception:
                 return np.full_like(input_x, np.nan, dtype=np.float64)
-           
+
         return cls(func, expr, x, compute_grad=compute_grad) 
 
     def get_description(self):
