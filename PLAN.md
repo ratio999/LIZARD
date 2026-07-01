@@ -246,26 +246,50 @@ Requirements (must all be met):
       (returns lqf, lqr; is its own inverse on the chosen pair). Design frozen in session
       memory /memories/session/plan.md.
 
-**Rigor requirements BEYOND the three operators (properties, not new moves) — OPEN, ask user:**
-  (R1) PROPER joint target actually including the prior. Forest currently builds groves
-       with `polya=None` ⇒ the tempered population samples the LIKELIHOOD-ONLY (BIC) target,
-       NOT the posterior. For a rigorous *Bayesian* EMC, wire a Pólya prior into EVERY
-       grove's U. Subtlety: one *adaptive* prior shared across temperatures couples the
-       chains and breaks Π = Π_k π_{T_k}. Clean fix: FREEZE the prior after burn-in
-       (diminishing adaptation → freeze), then it is a fixed function and swap/crossover
-       are exactly correct. Also confirm the Pólya prior is normalizable over tree space.
-  (R2) WITHIN-CHAIN irreducibility of the mutation move-set over the tree space (lemma +
-       test; cross-ref Phase 1.4). Crossover/exchange add cross-chain connectivity but do
-       NOT substitute for within-chain irreducibility.
-  (R3) Composition/scan: either random-scan pair selection (swap ONE random consecutive
-       pair per step) or document invariance of the fixed all-adjacent-sweep cycle.
+**Rigor requirements BEYOND the three operators (properties, not new moves):**
 
-**Non-required but standard PT/EMC hygiene — OPEN:**
-  - random consecutive-pair swap selection vs current all-adjacent sweep;
+  (R1) DECIDED — proper joint target that INCLUDES the prior, never frozen.
+       Forest is rewritten from scratch. It builds ONE SHARED PolyaTree and passes the
+       SAME instance to every grove (Grove.__init__ already accepts `polya=`). The prior
+       is NOT frozen: it keeps evolving via the existing `update_path` DIMINISHING
+       adaptation gamma_t = 1/(1+t) (Roberts & Rosenthal 2007 + Robbins-Monro), reinforced
+       by EVERY grove's accepted WITHIN-grove moves on a global counter. Because Theta is
+       shared, the population is a canonical tempered ladder of ONE self-consistent
+       posterior; the cold chain (beta=1) samples it. Formal note for the writeup: the
+       limit is the self-consistent (Polya-urn-reinforced) posterior, not the fixed-alpha0
+       posterior — a modeling statement, not a bug. Rejected alternatives: freeze-after-
+       burn-in (works but less elegant) and per-grove Theta_k (rigorous but throttles swap
+       acceptance via a prior-mismatch penalty and needs the non-cancelling acceptance
+       form + a joint proof).
+       - Acceptance form: general per-grove-prior MH; with shared Theta it REDUCES to
+         (beta_a - beta_b)(U_b - U_a) with U(x) = post(x) + log pi_Polya(x | Theta) (prior
+         now INCLUDED; the current post-only swap is therefore WRONG and is replaced).
+       - Reinforcement: within-grove moves reinforce (already in _step); the trans-grove
+         swap and trans-grove crossover are prior-preserving relabelings that DO NOT
+         reinforce. (Within-grove crossover is mutation-family and DOES reinforce; _step
+         already updates only slot i, donor untouched.)
+       - Confirm the Polya prior is normalizable over tree space (proper => proper posterior).
+
+  (R2) DECIDED — add a WITHIN-CHAIN irreducibility lemma + a small connectivity test.
+       The mutation move-set (point/subtree mutation, add_node/hoist, split, within-grove
+       crossover) must connect the whole tree space: from any tree, every other tree is
+       reachable in finitely many positive-probability moves. Crossover/exchange add
+       cross-chain connectivity but do NOT substitute for within-chain irreducibility.
+       Deliverable: (a) short proof sketch (birth/death pairs + subtree replacement span
+       the space up to any depth bound; cross-ref Phase 1.4 lazy-trie lemma); (b) a unit
+       test that, on a tiny vocabulary + shallow depth cap, empirically visits every tree
+       in the finite support within N steps from several seeds.
+
+  (R3) DECIDED — random-scan pair selection: ONE random consecutive temperature pair per
+       step, for BOTH swap and trans-grove crossover (reversible per step; matches the
+       reference PT). Replaces the current all-adjacent left-to-right sweep.
+
+**Non-required but standard PT/EMC hygiene (still open / later):**
   - principled geometric temperature ladder + swap/crossover acceptance monitoring;
   - burn-in-ONLY adaptive tempering / annealing to escape traps (rigor: never during the
     inference phase);
-  - extend θ̂ warm-start caching across the Forest (speed only; per-grove _bic_cache exists).
+  - extend theta-hat warm-start caching across the Forest (speed only; per-grove
+    _bic_cache exists).
 
 ---
 
@@ -369,12 +393,8 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 2. Hero application choice (Phase 4.2).
 3. Kind-conditional vs unified Pólya nodes (Phase 1.1 / 2.6).
 4. Keep MPI in the paper version or drop it (Phase 3.4).
-5. (Phase 2.9 R1) Wire a FROZEN Pólya prior into every grove's tempered target so the
-   population samples the posterior (recommended) vs keep likelihood-only tempering for now.
-6. (Phase 2.9 R3) Swap pair selection: one random consecutive pair per step vs all-adjacent
-   sweep. Same choice applies to cross-temperature crossover.
-7. (Phase 2.9 R2) Add a within-chain irreducibility lemma/test task now vs defer.
-8. (Phase 2.10) Prior-mass treatment for user atomic/opaque primitives.
+5. (Phase 2.10) Prior-mass treatment for user atomic/opaque primitives.
+6. (Phase 2.9 hygiene) Temperature-ladder policy + burn-in-only annealing (later).
 
 ## Decisions closed
 - **σ in BIC** (Phase 2.7(a)): both modes supported via `sigma=None` (profiled) vs `sigma>0` (fixed). User picks per dataset.
@@ -383,6 +403,13 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 - **K-changing freedom**: hoist, add_node, crossover, point_mut v2 are all allowed to change K. Fixed-K was only Phase 2.1.SM's recycling convention.
 - **point_mutation**: goes to v2 (kind-crossing) from the start (no v1-first step).
 - **Birth density g**: Normal(0, τ²) with τ = std(y). NOT Dirac/fixed-init (degenerate).
+- **EMC Pólya layout** (Phase 2.9 R1): SHARED single Pólya across all groves, NEVER frozen,
+  reinforced by ALL groves' accepted within-grove moves (diminishing γ_t=1/(1+t), global
+  counter). Rejected: freeze-after-burn-in and per-grove Θ_k. Swap/crossover use U=post+prior
+  and reduce to (β_a−β_b)(U_b−U_a); trans-grove moves do NOT reinforce.
+- **EMC pair selection** (Phase 2.9 R3): one random consecutive pair per step (swap + xover).
+- **EMC irreducibility** (Phase 2.9 R2): within-chain irreducibility lemma + connectivity
+  test added to the plan (Phase 3.3 extension).
 
 ## Current status summary (as of this session)
 - ✅ 2.1.SM subtree_mutation

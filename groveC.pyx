@@ -783,6 +783,53 @@ cdef class Grove:
             return True
         return False
 
+    cdef double _score_post(self, function_treeC.Tree cand,
+                            cnp.ndarray[cnp.float64_t, ndim=1] y,
+                            bint optimize=True):
+        """Score a candidate's BIC log-evidence, mirroring the scoring block
+        of `_step`: validity gate + Phase 2.7(f) topology cache + optimize.
+
+        Returns -1e300 for invalid / non-finite models (so any MH ratio that
+        consumes it rejects). On a cache hit the cached theta_hat is
+        re-installed on `cand` so an accept warm-starts subsequent moves.
+
+        Used by Forest's cross-temperature swap / crossover (Phase 2.9) so
+        trans-grove moves are scored exactly like within-grove ones.
+        """
+        cdef str cand_key
+        cdef object cached
+        cdef dict cached_nv
+        cdef function_treeC.Node par_node
+        cdef str pname
+        cdef double new_post
+        if not cand.is_valid(self.domain):
+            return -1.0e300
+        # Keep the per-topology cache coherent with the active y reference.
+        if self._cache_y is not y:
+            self._bic_cache.clear()
+            self._cache_y = y
+        cand_key = cand.tree_get_description()
+        cached = self._bic_cache.get(cand_key)
+        if cached is not None:
+            new_post  = <double> cached[0]
+            cached_nv = <dict>   cached[1]
+            for par_node in cand.params:
+                pname = par_node.get_fun().get_description()
+                if pname in cached_nv:
+                    par_node.set_value(<double> cached_nv[pname])
+            if cand.params:
+                cand.tree_update(cand.get_root())
+            return new_post
+        new_post = cand._log_marginal_bic(
+            y, optimize=optimize,
+            use_gradients=self.use_gradients if optimize else False,
+            method_str=self.method_str,
+        )
+        if np.isfinite(new_post):
+            self._bic_cache[cand_key] = (new_post, dict(cand.name_values))
+            return new_post
+        return -1.0e300
+
     cpdef dict move_stats(self):
         """Per-move (proposed, accepted, rate) summary. Feeds Phase 2.8."""
         cdef dict out = {}
@@ -1820,52 +1867,109 @@ cdef class Grove:
 
 cdef class Forest:
     """
-    A collection of Groves at different temperatures (parallel tempering scaffold).
-    Provides within-grove MH and optional adjacent-grove swaps.
+    Evolutionary Monte Carlo population of Groves at different temperatures
+    (Phase 2.9). Operators:
+      - mutation  : within-grove MH        (run_all -> Grove.run -> _step)
+      - exchange  : cross-temperature swap (attempt_swaps)
+      - crossover : trans-grove subtree crossover (attempt_crossovers)
+
+    Shared Pólya prior (R1)
+    -----------------------
+    ONE PolyaTree is built once and handed to EVERY grove, so the tempered
+    population is a canonical ladder of a single self-consistent posterior.
+    It is NEVER frozen: it keeps evolving through `update_path`'s diminishing
+    adaptation (gamma_t = 1/(1+t)), reinforced by every grove's accepted
+    WITHIN-grove moves. The trans-grove swap and trans-grove crossover are
+    prior-preserving relabelings and do NOT reinforce.
+
+    Acceptance (R1)
+    ---------------
+    With a shared Theta the general per-grove-prior MH ratio reduces to the
+    clean tempered form using U(x) = post(x) + log pi_Polya(x | Theta):
+      swap      : log_alpha = (1/Ta - 1/Tb) * (U_b - U_a)
+      crossover : log_alpha = (U_a' - U_a)/Ta + (U_b' - U_b)/Tb + (lqr - lqf)
+
+    Pair selection (R3)
+    -------------------
+    ONE random consecutive temperature pair per call, for both swap and
+    crossover (random-scan, reversible per step).
     """
 
     def __init__(self,
                  cnp.ndarray[cnp.float64_t, ndim=1] x,
+                 cnp.ndarray[cnp.float64_t, ndim=1] y,
                  cnp.ndarray[cnp.float64_t, ndim=1] temperatures,
                  int size_per_grove,
                  int depth,
                  list funcs,
-                 object node_lists=None,       # optional list of node_list per grove
+                 object sigma=1.0,
+                 object node_lists=None,
                  int Npars=0,
                  object init_value=1.0,
                  list operations=None,
                  double base_temp=1.0,
+                 double lambda_reg=0.0,
+                 bint use_gradients=True,
+                 bint burn_in=False,
                  int n_procs=0,
                  object seed=None,
-                 object g_tau=None):
+                 object g_tau=None,
+                 object polya=None,
+                 double alpha_0=1.0,
+                 bint adapt_moves=False):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
         self.use_mpi = self.n_procs >= 2
+        if operations is None:
+            operations = ["+", "-", "*", "/", "**", "o"]
         cdef int G = self.temperatures.shape[0]
         cdef int g
-        # Phase 2.5(e): derive one independent seed per grove from the
-        # Forest-level seed via SeedSequence so all grove trajectories are
-        # independent yet fully reproducible from a single top-level seed.
-        # When seed=None each SeedSequence spawn is non-deterministic.
+        cdef int cap
+        cdef list param_names
+        # --- Shared Pólya prior (R1) ---------------------------------------
+        # Build ONCE and hand the SAME instance to every grove. When the
+        # caller supplies `polya=`, respect it (they own vocabulary
+        # registration). Otherwise pre-register the parameter symbols that
+        # build_tree / crossover may emit (a0.., b0..), else extract_path
+        # silently drops those leaves from the prior.
+        if polya is None:
+            polya = polya_treeC.PolyaTree(
+                operations, list(funcs), alpha_0=alpha_0,
+                auto_register=True, strict_ops=True)
+            cap = Npars if Npars > 0 else 8
+            param_names = [f"a{k}" for k in range(cap)] + \
+                          [f"b{k}" for k in range(cap)]
+            polya.add_primitives(param_names)
+        self.polya = polya
+        # --- Forest-level RNGs ---------------------------------------------
+        # Fixes the previously-missing _py_rng (the old swap referenced it and
+        # would AttributeError) and drives the R3 random consecutive-pair
+        # selection. Independent of the per-grove RNGs, all reproducibly
+        # derived from a single top-level seed via SeedSequence.
         seed_seq = np.random.SeedSequence(seed)
-        child_seeds = seed_seq.spawn(G)
+        child_seeds = seed_seq.spawn(G + 1)
+        self._py_rng = random.Random(int(child_seeds[G].generate_state(1)[0]))
+        self._np_rng = np.random.default_rng(child_seeds[G])
         for g in range(G):
             nodes_g = None
             if node_lists is not None:
                 nodes_g = node_lists[g]
             self.groves.append(
-                Grove(x, self.temperatures[g], size_per_grove, depth, funcs,
-                      node_list=nodes_g, Npars=Npars, init_value=init_value,
+                Grove(x, y, float(self.temperatures[g]), size_per_grove,
+                      depth, funcs, sigma=sigma, node_list=nodes_g,
+                      Npars=Npars, init_value=init_value,
                       operations=operations, base_temp=base_temp,
+                      lambda_reg=lambda_reg, use_gradients=use_gradients,
+                      burn_in=burn_in, use_mpi=n_procs,
+                      polya=self.polya,
                       seed=int(child_seeds[g].generate_state(1)[0]),
-                      g_tau=g_tau)
+                      g_tau=g_tau, adapt_moves=adapt_moves)
             )
 
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove):
-        """
-        Run MH in each grove independently.
-        """
+        """Mutation phase: run within-grove MH in each grove independently."""
+        cdef Grove gr
         for gr in self.groves:
             gr.run(y, n_steps_per_grove)
 
@@ -1875,9 +1979,9 @@ cdef class Forest:
             gr.compute_posteriors(y, full=full)
 
     cdef bint _attempt_swap_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y):
-        """
-        Attempt a parallel-tempering swap between neighboring groves g_left and g_left+1.
-        Chooses the same index i in both (assumes same size).
+        """Exchange move between consecutive groves g_left, g_left+1 at the
+        same slot i. U = post + shared-Polya prior; with shared Theta the
+        acceptance is the clean (1/Ta - 1/Tb)(U_b - U_a). Does NOT reinforce.
         """
         cdef Grove A = self.groves[g_left]
         cdef Grove B = self.groves[g_left + 1]
@@ -1885,64 +1989,143 @@ cdef class Forest:
         cdef int sizeB = B.size
         if sizeA == 0 or sizeB == 0:
             return False
-        cdef int i = self._py_rng.randrange(min(sizeA, sizeB))
-        # ensure posteriors
-        if np.isnan(A.root_posteriors[i]):
-            #A.root_posteriors[i] = A.trees[i].get_superficial_posterior(y)
-            A.root_posteriors[i] = A.trees[i].root._log_marginal_bic(y)
-        if np.isnan(B.root_posteriors[i]):
-            #B.root_posteriors[i] = B.trees[i].get_superficial_posterior(y)
-            B.root_posteriors[i] = B.trees[i].root._log_marginal_bic(y)
-        cdef double postA = float(A.root_posteriors[i])
-        cdef double postB = float(B.root_posteriors[i])
         cdef double Ta = A.T
         cdef double Tb = B.T
-        if Ta <= 0.0 and Tb <= 0.0:
-            # both greedy: only swap if improves both (rare); default reject
+        # Both greedy: parallel tempering has no well-defined swap; skip.
+        if Ta <= 0.0 or Tb <= 0.0:
             return False
-        # Parallel tempering swap acceptance:
-        # acc = exp((1/Ta - 1/Tb) * (postB - postA))
-        cdef double delta = (1.0 / (Ta if Ta > 0.0 else 1e-12) -
-                             1.0 / (Tb if Tb > 0.0 else 1e-12)) * (postB - postA)
+        cdef int i = self._py_rng.randrange(min(sizeA, sizeB))
+        if A.root_posteriors[i] is None or np.isnan(A.root_posteriors[i]):
+            A.root_posteriors[i] = A._score_post(A.trees[i], y, False)
+        if B.root_posteriors[i] is None or np.isnan(B.root_posteriors[i]):
+            B.root_posteriors[i] = B._score_post(B.trees[i], y, False)
+        cdef double postA = float(A.root_posteriors[i])
+        cdef double postB = float(B.root_posteriors[i])
+        cdef double priorA = 0.0
+        cdef double priorB = 0.0
+        if self.polya is not None:
+            priorA = self.polya.log_prior(self.polya.extract_path(A.trees[i].get_root()))
+            priorB = self.polya.log_prior(self.polya.extract_path(B.trees[i].get_root()))
+        cdef double Ua = postA + priorA
+        cdef double Ub = postB + priorB
+        cdef double delta = (1.0 / Ta - 1.0 / Tb) * (Ub - Ua)
         cdef double acc_p = _safe_exp(delta)
-        if A._py_rng.random() < min(1.0, acc_p):
-            # swap trees and their posteriors
+        if self._py_rng.random() < min(1.0, acc_p):
             tmp_tree = A.trees[i]; A.trees[i] = B.trees[i]; B.trees[i] = tmp_tree
-            tmp_post = A.root_posteriors[i]; A.root_posteriors[i] = B.root_posteriors[i]; B.root_posteriors[i] = tmp_post
+            tmp_post = A.root_posteriors[i]
+            A.root_posteriors[i] = B.root_posteriors[i]
+            B.root_posteriors[i] = tmp_post
             return True
         return False
 
     cpdef int attempt_swaps(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
-        """
-        Try swaps between all adjacent pairs once (left-to-right).
-        Returns number of accepted swaps.
-        """
+        """R3: attempt ONE swap on a random consecutive pair. Returns #accepted."""
         cdef int G = len(self.groves)
-        cdef int acc = 0
-        cdef int g
         if G <= 1:
             return 0
-        for g in range(G - 1):
-            if self._attempt_swap_pair(g, y):
-                acc += 1
-        return acc
+        cdef int g = self._py_rng.randrange(G - 1)
+        if self._attempt_swap_pair(g, y):
+            return 1
+        return 0
+
+    cdef bint _attempt_crossover_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y):
+        """Trans-grove subtree crossover between consecutive groves g_left,
+        g_left+1 (slots i, j independent uniform). Reuses
+        gp_movesC.subtree_crossover on deepcopies of both parents: child i
+        lands in grove A(@Ta), child j in grove B(@Tb). Acceptance uses
+        U = post + shared prior:
+            log_alpha = (Ua'-Ua)/Ta + (Ub'-Ub)/Tb + (lqr - lqf).
+        Prior-preserving relabeling: does NOT reinforce the Polya.
+        """
+        cdef Grove A = self.groves[g_left]
+        cdef Grove B = self.groves[g_left + 1]
+        cdef int sizeA = A.size
+        cdef int sizeB = B.size
+        if sizeA == 0 or sizeB == 0:
+            return False
+        cdef double Ta = A.T
+        cdef double Tb = B.T
+        if Ta <= 0.0 or Tb <= 0.0:
+            return False
+        cdef int i = self._py_rng.randrange(sizeA)
+        cdef int j = self._py_rng.randrange(sizeB)
+        if A.root_posteriors[i] is None or np.isnan(A.root_posteriors[i]):
+            A.root_posteriors[i] = A._score_post(A.trees[i], y, False)
+        if B.root_posteriors[j] is None or np.isnan(B.root_posteriors[j]):
+            B.root_posteriors[j] = B._score_post(B.trees[j], y, False)
+        cdef double postA_old = float(A.root_posteriors[i])
+        cdef double postB_old = float(B.root_posteriors[j])
+        cdef double priorA_old = 0.0
+        cdef double priorB_old = 0.0
+        if self.polya is not None:
+            priorA_old = self.polya.log_prior(self.polya.extract_path(A.trees[i].get_root()))
+            priorB_old = self.polya.log_prior(self.polya.extract_path(B.trees[j].get_root()))
+        # Install the Forest RNG for the crossover move (mirrors Grove._step,
+        # which re-installs before each step) so the population trajectory is
+        # reproducible from the Forest seed.
+        gp_movesC.set_rng(self._py_rng, self._np_rng)
+        function_treeC.set_rng(self._py_rng, self._np_rng)
+        cdef function_treeC.Tree childA = deepcopy(A.trees[i])
+        cdef function_treeC.Tree childB = deepcopy(B.trees[j])
+        cdef double lqf, lqr
+        lqf, lqr = gp_movesC.subtree_crossover(childA, childB)
+        if not np.isfinite(lqf) or not np.isfinite(lqr):
+            return False
+        cdef double postA_new = A._score_post(childA, y, True)
+        cdef double postB_new = B._score_post(childB, y, True)
+        if postA_new <= -1.0e299 or postB_new <= -1.0e299:
+            return False
+        cdef double priorA_new = 0.0
+        cdef double priorB_new = 0.0
+        if self.polya is not None:
+            priorA_new = self.polya.log_prior(self.polya.extract_path(childA.get_root()))
+            priorB_new = self.polya.log_prior(self.polya.extract_path(childB.get_root()))
+        cdef double Ua_old = postA_old + priorA_old
+        cdef double Ub_old = postB_old + priorB_old
+        cdef double Ua_new = postA_new + priorA_new
+        cdef double Ub_new = postB_new + priorB_new
+        cdef double log_alpha = ((Ua_new - Ua_old) / Ta
+                                 + (Ub_new - Ub_old) / Tb
+                                 + (lqr - lqf))
+        cdef bint accept
+        cdef double u
+        if log_alpha >= 0.0:
+            accept = True
+        else:
+            u = self._py_rng.random()
+            accept = (u <= 0.0) or (np.log(u) < log_alpha)
+        if not accept:
+            return False
+        A.trees[i] = childA
+        B.trees[j] = childB
+        A.root_posteriors[i] = postA_new
+        B.root_posteriors[j] = postB_new
+        return True
+
+    cpdef int attempt_crossovers(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
+        """R3: attempt ONE trans-grove crossover on a random consecutive pair.
+        Returns #accepted (0 or 1)."""
+        cdef int G = len(self.groves)
+        if G <= 1:
+            return 0
+        cdef int g = self._py_rng.randrange(G - 1)
+        if self._attempt_crossover_pair(g, y):
+            return 1
+        return 0
 
     cpdef function_treeC.Tree best_tree(self):
-        """
-        Best (highest posterior) tree across all groves.
-        """
+        """Best (highest BIC posterior) tree across all groves. Caller should
+        have populated posteriors (run_all / compute_posteriors_all)."""
         cdef double best_val = -1e300
         cdef function_treeC.Tree best = None
         cdef Grove gr
         cdef int idx
+        cdef object val
         for gr in self.groves:
-            if gr.root_posteriors is None or np.any(np.isnan(gr.root_posteriors)):
-                # ensure computed
-                # cannot access y here; caller should have called compute_posteriors_all
-                pass
             idx = gr.best_index()
-            if gr.root_posteriors[idx] > best_val:
-                best_val = gr.root_posteriors[idx]
+            val = gr.root_posteriors[idx]
+            if val is not None and val > best_val:
+                best_val = val
                 best = gr.trees[idx]
         return best
 

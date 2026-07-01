@@ -82,6 +82,9 @@ cdef class Grove:
 
     cdef  legacy_step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cdef _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cdef double _score_post(self, function_treeC.Tree cand,
+                            cnp.ndarray[cnp.float64_t, ndim=1] y,
+                            bint optimize=*)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
     cpdef dict move_stats(self)
     cdef _step_parameter_refresh(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
@@ -127,10 +130,15 @@ cdef class Forest:
     cdef object temperatures
     cdef int n_procs
     cdef bint use_mpi
+    cdef public polya_treeC.PolyaTree polya
+    cdef object _py_rng
+    cdef object _np_rng
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove)
     cpdef compute_posteriors_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
     cdef bint _attempt_swap_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef int attempt_swaps(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cdef bint _attempt_crossover_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cpdef int attempt_crossovers(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef function_treeC.Tree best_tree(self)
 
 cdef _bis2_parallel_helper(object x)
