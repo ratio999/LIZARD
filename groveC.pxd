@@ -126,8 +126,8 @@ cdef class Grove:
     cpdef  acceptance_rate(self)
 
 cdef class Forest:
-    cdef list groves
-    cdef object temperatures
+    cdef public list groves
+    cdef public object temperatures
     cdef int n_procs
     cdef bint use_mpi
     cdef public polya_treeC.PolyaTree polya

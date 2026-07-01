@@ -71,6 +71,54 @@ cdef int    _ADD_NODE_DEPTH_MAX  = 4      # truncation; reverse hoists of
 cdef double _ADD_NODE_PARAM_PROB = 0.3    # per-leaf Bernoulli prob to be a
                                           # parameter leaf in the new subtree
 
+# --- Bounded-support cap on TOTAL tree depth (Phase 2.9 hardening) --------
+# The growth moves (add_node, split) are the only ones that increase tree
+# depth. Without a bound the chain -- especially a hot grove in a Forest,
+# whose per-node prior penalty is weakened by 1/T -- drifts to ever-deeper
+# trees. A deep tree then makes subtree_mutation call build_tree(d_max) with a
+# large height, whose random pow/compose ops make sympy blow up super-
+# exponentially (as_real_imag on nested trig powers) and the sampler hangs.
+# Capping the depth turns the state space into {depth <= _MAX_TREE_DEPTH}:
+# growth proposals that exceed it are force-rejected (log_q_rev = -inf, the
+# existing off-support convention), which preserves detailed balance on the
+# restricted support and keeps build_tree's argument bounded. Default 8 leaves
+# the shallow density-test fixtures (depth <= 7) untouched.
+cdef int _MAX_TREE_DEPTH = 8
+
+cpdef void set_max_tree_depth(int d):
+    """Set the bounded-support cap on total tree depth (see _MAX_TREE_DEPTH)."""
+    global _MAX_TREE_DEPTH
+    _MAX_TREE_DEPTH = d
+
+cpdef int get_max_tree_depth():
+    """Current bounded-support cap on total tree depth."""
+    return _MAX_TREE_DEPTH
+
+# --- Subtree-rebuild height bound (Phase 2.9 hardening) -------------------
+# subtree_mutation replaces a selected subtree with a freshly BUILT one of the
+# SAME height d_max, via function_treeC.build_tree(d_max). build_tree ALWAYS
+# uses pow/compose (it ignores the `operations` list), and a `compose` node is
+# a sympy `subs`, so the symbolic size of a height-h build_tree output grows
+# like ~2**(2**(h-1)) in the worst case. Even h == 6..8 detonates
+# (as_real_imag on nested trig powers spins forever) -- so bounding the TOTAL
+# tree depth at 8 is NOT enough; the height fed to build_tree must itself be
+# small. When the selected subtree is taller than this bound we force-reject
+# (log_q_rev = -inf, the existing off-support convention); other moves keep
+# the chain irreducible. This is separate from _MAX_TREE_DEPTH and is the
+# real defuse for the round-~370 freeze. Default 4 == _ADD_NODE_DEPTH_MAX (the
+# same height limit already used for grown subtrees) and leaves the
+# subtree_mutation density test untouched (it only reaches d_max <= 2).
+cdef int _SUBTREE_REBUILD_MAX_HEIGHT = 4
+
+cpdef void set_subtree_rebuild_max_height(int h):
+    """Set the max height fed to build_tree by subtree_mutation."""
+    global _SUBTREE_REBUILD_MAX_HEIGHT
+    _SUBTREE_REBUILD_MAX_HEIGHT = h
+
+cpdef int get_subtree_rebuild_max_height():
+    """Current max height fed to build_tree by subtree_mutation."""
+    return _SUBTREE_REBUILD_MAX_HEIGHT
+
 # ---------------------------------------------------------------------------
 # Helpers for proposal-density bookkeeping
 # ---------------------------------------------------------------------------
@@ -284,6 +332,15 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
     d_max = v.depth()                         # height of the subtree at v
     old_param_nodes = _collect_parameter_leaves(old_subtree, [])
     K = len(old_param_nodes)
+
+    # Bomb guard: build_tree(d_max) below builds a perfect-binary tree of
+    # height d_max using pow/compose; because `compose` is a sympy subs, the
+    # symbolic size grows ~2**(2**(d_max-1)) and even d_max ~ 6..8 makes
+    # as_real_imag spin forever. Bound the REBUILD HEIGHT itself (not just the
+    # total tree depth) and force-reject taller selections. Density-safe: the
+    # subtree_mutation density test only reaches d_max <= 2.
+    if d_max > _SUBTREE_REBUILD_MAX_HEIGHT:
+        return 0.0, -np.inf
 
     # ---- 3. Build a fresh non-parametric subtree of height d_max --------
     new_subtree = function_treeC.build_tree(d_max, functions, tree.domain)
@@ -1481,6 +1538,14 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
             parent.assign_right(new_internal)
         tree.tree_update(parent)
 
+    # Bounded-support depth cap (Phase 2.9 hardening): reject growth beyond
+    # _MAX_TREE_DEPTH. Forcing log_q_rev = -inf makes _step reject this
+    # proposal, keeping the chain on {depth <= _MAX_TREE_DEPTH} with detailed
+    # balance intact and bounding the d_max that subtree_mutation feeds to
+    # build_tree.
+    if tree.root.depth() > _MAX_TREE_DEPTH:
+        return (0.0, -np.inf)
+
     # ---- 4. proposal densities ----
     n_nodes_Tp = _count_nodes(tree.root)
     
@@ -1603,6 +1668,14 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
         else:
             parent.assign_right(new_internal)
         tree.tree_update(parent)
+
+    # Bounded-support depth cap (Phase 2.9 hardening): reject growth beyond
+    # _MAX_TREE_DEPTH. Forcing log_q_rev = -inf makes _step reject this
+    # proposal, keeping the chain on {depth <= _MAX_TREE_DEPTH} with detailed
+    # balance intact and bounding the d_max that subtree_mutation feeds to
+    # build_tree.
+    if tree.root.depth() > _MAX_TREE_DEPTH:
+        return (0.0, -np.inf)
 
     # ---- 4. proposal densities ----
     n_nodes_Tp = _count_nodes(tree.root)

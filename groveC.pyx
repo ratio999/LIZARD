@@ -305,7 +305,7 @@ cdef class Grove:
                     self.root_posteriors[i] = -np.inf
                     continue
 
-                self.root_posteriors[i] = self.trees[i]._log_marginal_bic(
+                self.root_posteriors[i] = self.trees[i].log_marginal_bic(
                     y, optimize=True,
                     use_gradients=self.use_gradients,
                     method_str=self.method_str,

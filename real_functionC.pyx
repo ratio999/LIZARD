@@ -86,10 +86,16 @@ cdef class RealFunctionC:
 
     def __deepcopy__(self, memo2):
         cdef object copy_func = lambda input_x, params: self.func(input_x, params)
+        # sympy expressions are IMMUTABLE (self.expr is assigned once in
+        # __init__ and never mutated), so SHARE the reference instead of
+        # deep-copying it. This removes an O(expr-size) copy per node on every
+        # MCMC-step deepcopy and preserves sympy's cached .free_symbols on the
+        # shared object. `params` is recomputed from the expr inside __init__
+        # (classify_symbols), so the constructor argument is discarded -- there
+        # is no point deep-copying it either.
         cdef RealFunctionC copy_rf = RealFunctionC(
-                copy_func, deepcopy(self.expr, memo2), deepcopy(self.domain, memo2),
-                deepcopy(self.params, memo2)
-                )
+                copy_func, self.expr, deepcopy(self.domain, memo2))
+                #,deepcopy(self.params, memo2)
         memo2[id(self)] = copy_rf
         return copy_rf
 
