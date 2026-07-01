@@ -46,6 +46,17 @@ cdef class Grove:
     # Invalidated whenever the y reference changes between _step calls.
     cdef public dict _bic_cache
     cdef public object _cache_y
+    # Phase 2.8: optional adaptive move-weight calibration (OFF by default).
+    # _move_logits holds the 5 logical-group logits; _adapt_t counts
+    # adaptive updates for the diminishing step size gamma_t.
+    cdef public bint adapt_moves
+    cdef public double adapt_gamma0
+    cdef public double adapt_t0
+    cdef public double adapt_floor
+    cdef public double adapt_logit_bound
+    cdef public double adapt_target
+    cdef public cnp.ndarray _move_logits
+    cdef public long _adapt_t
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
@@ -62,6 +73,9 @@ cdef class Grove:
     cpdef  best_tree(self)
 
     cdef  _choose_move(self)
+    cdef cnp.ndarray _adapted_move_probs(self)
+    cdef int _move_group(self, str move_name)
+    cdef void _adapt_move(self, str move_name, bint accepted)
     cpdef compute_posteriors(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
     
     cdef  tuple _propose(self, int i, int max_attempts=?)

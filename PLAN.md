@@ -218,6 +218,68 @@ Requirements (must all be met):
 ### 2.8 Move-rate calibration (after 2.7)
 - Feed move_stats() acceptance rates back into _choose_move probability weights.
 - Adaptive move weights per temperature level.
+- STATUS: OPTIONAL adaptive weights implemented (groveC only; `adapt_moves=False`
+  default; diminishing-adaptation + logit-box/floor containment; pair-equality kept
+  so `_step` math is unchanged). ⚠️ UNCOMPILED / UNTESTED this session.
+
+---
+
+## Phase 2.9 — Evolutionary Monte Carlo: population-coherent moves (rigorous, Bayesian)
+
+**Agreed roadmap order (this session):**
+  0. Verify base builds + tests pass (hoist-split + 2.8 adaptive are UNCOMPILED). ← gate
+  1. Cross-temperature crossover.                                          ← IMMEDIATE
+  2. Custom atomic primitives (Phase 2.10).
+  3. Full parallel/EMC hardening + MPI of the *sampling* loop (today MPI = burn-in only).
+
+**Target.** Population product of tempered posteriors  Π = Π_k π_{T_k},
+π_T(x) ∝ exp(U(x)/T),  U(x) = log-evidence_BIC(x) + log π_Pólya(x).
+
+**Canonical EMC operator set (Liang & Wong 2000) — NO fourth operator is required:**
+  - Mutation  = within-grove MCMC step (run_all → _step).              ✅ exists
+  - Exchange  = parallel-tempering swap (Forest.attempt_swaps).        ⚠️ exists BUT Forest
+                has no `_py_rng` (neither in __init__ nor .pxd) → `_attempt_swap_pair`
+                would AttributeError. RNG fix folds into the crossover work.
+  - Crossover = cross-temperature subtree crossover.                  ⏳ IMMEDIATE deliverable
+      log α = ΔU_a/T_a + ΔU_b/T_b + (lqr − lqf); preserves every marginal; reduces to the
+      PT swap when the "crossover" is a whole-tree swap. Reuses gp_movesC.subtree_crossover
+      (returns lqf, lqr; is its own inverse on the chosen pair). Design frozen in session
+      memory /memories/session/plan.md.
+
+**Rigor requirements BEYOND the three operators (properties, not new moves) — OPEN, ask user:**
+  (R1) PROPER joint target actually including the prior. Forest currently builds groves
+       with `polya=None` ⇒ the tempered population samples the LIKELIHOOD-ONLY (BIC) target,
+       NOT the posterior. For a rigorous *Bayesian* EMC, wire a Pólya prior into EVERY
+       grove's U. Subtlety: one *adaptive* prior shared across temperatures couples the
+       chains and breaks Π = Π_k π_{T_k}. Clean fix: FREEZE the prior after burn-in
+       (diminishing adaptation → freeze), then it is a fixed function and swap/crossover
+       are exactly correct. Also confirm the Pólya prior is normalizable over tree space.
+  (R2) WITHIN-CHAIN irreducibility of the mutation move-set over the tree space (lemma +
+       test; cross-ref Phase 1.4). Crossover/exchange add cross-chain connectivity but do
+       NOT substitute for within-chain irreducibility.
+  (R3) Composition/scan: either random-scan pair selection (swap ONE random consecutive
+       pair per step) or document invariance of the fixed all-adjacent-sweep cycle.
+
+**Non-required but standard PT/EMC hygiene — OPEN:**
+  - random consecutive-pair swap selection vs current all-adjacent sweep;
+  - principled geometric temperature ladder + swap/crossover acceptance monitoring;
+  - burn-in-ONLY adaptive tempering / annealing to escape traps (rigor: never during the
+    inference phase);
+  - extend θ̂ warm-start caching across the Forest (speed only; per-grove _bic_cache exists).
+
+---
+
+## Phase 2.10 — Custom atomic (protected) primitives — parametric terminals
+User-registrable indivisible basis functions (e.g. A·sin(ω·x)) treated as ONE opaque leaf:
+  - carries its own internal parameters (≥1 param that cannot be individually deleted);
+  - atomic to every structural move (cannot be split/hoisted-into; internal params tuned
+    only via parameter_refresh; whole leaf deleted/replaced as a unit);
+  - rigorous, generalized analog of a protected fixed sub-expression: a user primitive set
+    with proper prior mass assigned to each primitive symbol.
+Touches: function_treeC (Node opaque flag + is_leaf/is_param semantics), gp_movesC (moves
+skip opaque internals when picking targets), real_functionC (primitive definition), Pólya
+prior (assign each primitive a symbol/mass). Paradigm-independent; highest value/lowest risk.
+OPEN: exact prior-mass treatment for opaque primitives.
 
 ---
 
@@ -307,6 +369,12 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 2. Hero application choice (Phase 4.2).
 3. Kind-conditional vs unified Pólya nodes (Phase 1.1 / 2.6).
 4. Keep MPI in the paper version or drop it (Phase 3.4).
+5. (Phase 2.9 R1) Wire a FROZEN Pólya prior into every grove's tempered target so the
+   population samples the posterior (recommended) vs keep likelihood-only tempering for now.
+6. (Phase 2.9 R3) Swap pair selection: one random consecutive pair per step vs all-adjacent
+   sweep. Same choice applies to cross-temperature crossover.
+7. (Phase 2.9 R2) Add a within-chain irreducibility lemma/test task now vs defer.
+8. (Phase 2.10) Prior-mass treatment for user atomic/opaque primitives.
 
 ## Decisions closed
 - **σ in BIC** (Phase 2.7(a)): both modes supported via `sigma=None` (profiled) vs `sigma>0` (fixed). User picks per dataset.

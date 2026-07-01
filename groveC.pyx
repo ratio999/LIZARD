@@ -81,7 +81,13 @@ cdef class Grove:
                  bint use_spawn=False,
                  object polya=None,
                  object seed=None,
-                 object g_tau=None):
+                 object g_tau=None,
+                 bint adapt_moves=False,
+                 double adapt_gamma0=1.0,
+                 double adapt_t0=100.0,
+                 double adapt_floor=0.02,
+                 double adapt_logit_bound=4.0,
+                 double adapt_target=0.5):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -148,6 +154,41 @@ cdef class Grove:
         self._bic_cache = {}
         self._cache_y = None
         self.pr_prob = 0.02
+        # --- Phase 2.8: optional adaptive move-weight calibration ----------
+        # OFF by default (adapt_moves=False) -> Grove behaves exactly as
+        # before, using the fixed temperature-shaped weights in _choose_move.
+        # When ON, five logical-group logits are updated by a diminishing-
+        # adaptation (Robbins-Monro) rule (see _adapt_move) and mapped to the
+        # seven physical move probabilities by _adapted_move_probs, which
+        # preserves the birth/death pair equality (so the RJMCMC move-
+        # selection correction stays exactly zero) and floors every
+        # probability at `adapt_floor` (containment). Warm-started from the
+        # fixed weights so toggling adaptation on is continuous.
+        if not (0.0 <= adapt_floor < 1.0 / 7.0):
+            raise ValueError("Grove: adapt_floor must lie in [0, 1/7)")
+        if adapt_logit_bound <= 0.0:
+            raise ValueError("Grove: adapt_logit_bound must be > 0")
+        self.adapt_moves = adapt_moves
+        self.adapt_gamma0 = adapt_gamma0
+        self.adapt_t0 = adapt_t0 if adapt_t0 > 0.0 else 1.0
+        self.adapt_floor = adapt_floor
+        self.adapt_logit_bound = adapt_logit_bound
+        self.adapt_target = adapt_target
+        self._adapt_t = 0
+        _tau0 = self.T / self.base_temp
+        _f0 = 1.0 / (1.0 + _tau0)
+        _g0 = _tau0 / (1.0 + _tau0)
+        _pb0 = 0.15 * _f0 + 0.05
+        _eta0 = np.log(np.array([
+            0.30 * _f0 + 0.05,   # group 0: point_mutation
+            _pb0,                # group 1: add_node / leaf_hoist
+            _pb0,                # group 2: split / internal_hoist
+            0.15 * _g0 + 0.10,   # group 3: subtree_mutation
+            0.10 * _g0 + 0.05,   # group 4: subtree_crossover
+        ], dtype=np.float64))
+        _eta0 = _eta0 - _eta0.mean()
+        _eta0 = np.clip(_eta0, -self.adapt_logit_bound, self.adapt_logit_bound)
+        self._move_logits = np.ascontiguousarray(_eta0, dtype=np.float64)
         # Phase 2.5(a): per-Grove RNGs. Both seeded from a single user
         # `seed` (None -> non-deterministic). _py_rng drives Python-side
         # random.* call sites; _np_rng drives NumPy call sites. Forest
@@ -321,6 +362,10 @@ cdef class Grove:
                         dtype=np.float64)
         
         probs = probs / probs.sum()
+        if self.adapt_moves:
+            # Phase 2.8: adaptive path overrides the fixed weights computed
+            # above. _adapted_move_probs keeps the pair equality and floor.
+            probs = self._adapted_move_probs()
         idx = int(self._np_rng.choice(np.arange(7), p=probs))
         #random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
@@ -338,6 +383,73 @@ cdef class Grove:
         else:
             return ("subtree_crossover", {})
 
+    cdef cnp.ndarray _adapted_move_probs(self):
+        """Map the 5 logical-group logits to the 7 physical move probabilities.
+
+        Group -> physical layout (must match the _choose_move dispatch order
+        [point, leaf_hoist, internal_hoist, add, split, subtree, cross]):
+            eta[0] -> point_mutation
+            eta[1] -> leaf_hoist  AND  add_node      (shared: pair equality)
+            eta[2] -> internal_hoist AND split       (shared: pair equality)
+            eta[3] -> subtree_mutation
+            eta[4] -> subtree_crossover
+        Because each birth/death pair shares a single logit, p_add == p_leaf
+        and p_split == p_internal_hoist hold exactly, so the RJMCMC move-
+        selection term log p(m'|T')/p(m|T) is identically zero. A uniform
+        floor eps keeps every probability >= eps (containment).
+        """
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] eta = self._move_logits
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] l7 = np.array(
+            [eta[0], eta[1], eta[2], eta[1], eta[2], eta[3], eta[4]],
+            dtype=np.float64)
+        l7 = l7 - l7.max()
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] b = np.exp(l7)
+        b = b / b.sum()
+        cdef double eps = self.adapt_floor
+        return (1.0 - 7.0 * eps) * b + eps
+
+    cdef int _move_group(self, str move_name):
+        """Logical adaptation group (0..4) of a move, or -1 if the move is not
+        part of the adaptive kernel (e.g. parameter_refresh)."""
+        if move_name == "point_mutation":
+            return 0
+        elif move_name == "add_node" or move_name == "leaf_hoist":
+            return 1
+        elif move_name == "split" or move_name == "internal_hoist":
+            return 2
+        elif move_name == "subtree_mutation":
+            return 3
+        elif move_name == "subtree_crossover":
+            return 4
+        return -1
+
+    cdef void _adapt_move(self, str move_name, bint accepted):
+        """One diminishing-adaptation update of the proposed move's group logit.
+
+            eta_g <- clip( eta_g + gamma_t * (a - target),  -B, +B ),
+            gamma_t = gamma0 / (t0 + t),   a = 1{accepted}.
+
+        gamma_t -> 0 as t grows gives Diminishing Adaptation; the box [-B, B]
+        together with the eps floor in _adapted_move_probs gives Containment.
+        By Roberts & Rosenthal (2007) these two conditions make the adaptive
+        chain ergodic for the target pi. No-op when adapt_moves is False or
+        for non-adaptive moves (group -1).
+        """
+        if not self.adapt_moves:
+            return
+        cdef int g = self._move_group(move_name)
+        if g < 0:
+            return
+        cdef double gamma = self.adapt_gamma0 / (self.adapt_t0 + <double> self._adapt_t)
+        cdef double a = 1.0 if accepted else 0.0
+        cdef double B = self.adapt_logit_bound
+        cdef double val = self._move_logits[g] + gamma * (a - self.adapt_target)
+        if val > B:
+            val = B
+        elif val < -B:
+            val = -B
+        self._move_logits[g] = val
+        self._adapt_t += 1
 
     cdef tuple _propose(self, int i, int max_attempts=2) :
         """
@@ -548,6 +660,7 @@ cdef class Grove:
 
         # Validity-failed proposal -> hard reject (already counted as proposed).
         if cand is None or not np.isfinite(lqr):
+            self._adapt_move(move_name, False)
             return False
 
         # Cache-fill for current tree if needed.
@@ -580,6 +693,7 @@ cdef class Grove:
         cdef function_treeC.Node par_node
         cdef str pname
         if not cand.is_valid(self.domain):
+            self._adapt_move(move_name, False)
             return False
 
         # Phase 2.7(f): BIC topology cache.
@@ -613,6 +727,7 @@ cdef class Grove:
                 self._bic_cache[cand_key] = (new_post, dict(cand.name_values))
 
         if not np.isfinite(new_post):
+            self._adapt_move(move_name, False)
             return False
 
         # Polya prior contributions (zero when self.polya is None).
@@ -653,6 +768,10 @@ cdef class Grove:
             u = self._py_rng.random()
             # u == 0 would give log(u) = -inf; accept (probability-zero edge).
             accepted = (u <= 0.0) or (np.log(u) < log_alpha)
+
+        # Phase 2.8: feed the accept/reject outcome into the adaptive
+        # move-weight update (no-op when adapt_moves is False).
+        self._adapt_move(move_name, accepted)
 
         if accepted:
             self.trees[i] = cand
