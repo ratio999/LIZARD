@@ -204,6 +204,25 @@ Requirements (must all be met):
       - Skip trees with n_eff <= k+1.
       - Return INVALID = -1e300 sentinel instead of -inf.
 
+  (h) **Canonical deduplication in _bic_cache** (BMS-inspired, ⏳ pending)
+      BMS permanently blacklists any tree whose SymPy canonical form matches a
+      previously visited one, so the chain never re-evaluates algebraically
+      identical states (e.g. x*a and a*x). Current _bic_cache uses
+      `tree_get_description()` = `str(root_expr)` as the key, which is NOT
+      fully canonical under sympy (commutativity, constant folding, etc.) so
+      the same expression can be scored multiple times under different keys,
+      and the chain can oscillate between algebraically identical trees with
+      artificially high nominal acceptance.
+      Fix: normalise the cache key via `str(sp.expand(expr))` or
+      `str(sp.cancel(expr))` (choose one consistently), AND maintain a global
+      `_seen_exprs` set per grove that permanently bans re-entry of already-
+      scored canonical forms. Requires: (1) key normalisation in `_step` and
+      `_score_post`, (2) ban-list check before `_propose` returns a candidate,
+      (3) a unit test that two structurally different trees for the same
+      expression are treated as one. No detailed-balance impact: banning an
+      already-visited topology is equivalent to setting its prior mass to zero
+      in a finite state-space reduction.
+
   Implementation order (6 steps):
     1. _log_marginal_bic in real_functionC.pyx ✅ DONE.
     2. Thread sigma through Node → Tree → Grove ✅ DONE.
@@ -218,9 +237,39 @@ Requirements (must all be met):
 ### 2.8 Move-rate calibration (after 2.7)
 - Feed move_stats() acceptance rates back into _choose_move probability weights.
 - Adaptive move weights per temperature level.
-- STATUS: OPTIONAL adaptive weights implemented (groveC only; `adapt_moves=False`
-  default; diminishing-adaptation + logit-box/floor containment; pair-equality kept
-  so `_step` math is unchanged). ⚠️ UNCOMPILED / UNTESTED this session.
+- STATUS: feature FULLY IMPLEMENTED in groveC (`adapt_moves=False` default;
+  diminishing-adaptation + logit-box/floor containment; birth/death pair-equality
+  preserved so `_step` math is unchanged; plumbed through Grove AND Forest). The
+  remaining work is VALIDATION, not implementation:
+    * Added `_compute_move_probs` (shared source of truth for _choose_move) +
+      `cpdef get_move_probs()` introspection getter (groveC.pyx + .pxd).
+    * New `test_phase28.py` (plain script) with three checks:
+        (a) kernel invariants at init AND after adaptation -- pair equality
+            (p_add==p_leaf_hoist, p_split==p_internal_hoist) + containment floor;
+        (b) determinism: same seed -> identical adapted logits + move_stats +
+            trees;
+        (c) target invariance: adapt-on vs adapt-off cold-chain size marginal
+            within a null-calibrated noise floor (Roberts & Rosenthal 2007).
+  ⏳ PENDING: recompile groveC, then run `python3 test_phase28.py`.
+
+### 2.11 ETR-style small-step move (BMS-inspired, ⏳ pending, after 2.8)
+BMS uses Elementary Tree Replacement (ETR) as 50% of its proposals: select a
+random ET (subtree containing ≤1 operation) and replace it with a freshly drawn
+ET of possibly different arity. This is cheaper and more targeted than
+subtree_mutation (which rebuilds to the full subtree height) and stays on-support
+by design (never builds deep subtrees → no sympy blow-up risk). BMS's explicit
+(lqf, lqr) corrects for the asymmetry in the number of candidate ETs.
+- Implementation: new `etr_mutation(tree, functions, operations)` in gp_movesC.pyx.
+  Forward: pick one ET uniformly (Ω_i options); pick new ET uniformly over all
+  valid ETs of chosen arity (s_f options). Reverse: the symmetric count from T'.
+  log_q_fwd = -log(Ω_i * s_f), log_q_rev = -log(Ω_f * s_i) (see BMS eq. 11).
+- Add `"etr_mutation"` to `_choose_move` dispatch and `move_proposals` dict.
+  Pair equality: ETR is self-inverse (m'==m), so no selection-term correction
+  needed and it can be added/removed freely without touching other move weights.
+- Requires: density unit test (on-support / off-support / ratio check).
+- Benefit: cheap local edits that complement the current add_node/split/hoist
+  set; expected to improve cold-chain mixing at low T without the sympy cost of
+  subtree_mutation on tall subtrees.
 
 ---
 
@@ -285,7 +334,13 @@ Requirements (must all be met):
        reference PT). Replaces the current all-adjacent left-to-right sweep.
 
 **Non-required but standard PT/EMC hygiene (still open / later):**
-  - principled geometric temperature ladder + swap/crossover acceptance monitoring;
+  - **principled geometric temperature ladder** (BMS-inspired): BMS uses 40 rungs at
+    T_k = 1.05^k (k=0..39, top T ≈ 7). Swap acceptance degrades rapidly with temperature
+    gap; too few rungs → swaps/crossovers rarely fire. For production runs use ≥8–12
+    rungs at a geometric ratio ~1.3–1.5. For hard problems (e.g. CCSNe hero) BMS also
+    uses 4 independent restarts; implement as parallel Forest seeds + take best cold-
+    chain result. Concrete ladder choice is a 4.1 sanity-run tuning decision: monitor
+    swap acceptance rate (target ~0.2–0.4 per consecutive pair); if < 0.1, add rungs.
   - burn-in-ONLY adaptive tempering / annealing to escape traps (rigor: never during the
     inference phase);
   - extend theta-hat warm-start caching across the Forest (speed only; per-grove
@@ -369,6 +424,11 @@ Sub-tasks:
 ## Phase 4 — Experimental program
 Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results are biased).
 ### 4.1 Sanity checks (recovering known functions)
+- **PT ladder tuning**: before running sanity benchmarks, fix the temperature schedule.
+  Start with ≥8 rungs at geometric ratio ~1.4 (e.g. T_k = 1.4^k, k=0..7, top T≈14.7).
+  Monitor swap acceptance rate per consecutive pair; target 0.2–0.4. Adjust ratio or
+  add rungs until target is met. Log ladder + swap rates in results for the paper.
+  (See Phase 2.9 hygiene note.)
 ### 4.2 Hero application (CCSNe / Mc recovery / Feynman — choose one)
 ### 4.3 Ablations (no Pólya, no tempering, no BIC)
 
@@ -427,7 +487,9 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 - ✅ 3.3 test suite (a)–(g)
 - ✅ test_cython4 grove_smoke_test fixes
 - ✅ perf: lambdify caching in real_functionC.from_string; vectorised conversion
-- ⏳ 2.8 Move-rate calibration — NEXT (in progress)
+- ⏳ 2.8 Move-rate calibration — feature done + test_phase28.py written; PENDING recompile + run
+- ⏳ 2.11 ETR-style small-step move (BMS-inspired, after 2.8)
+- ⏳ 2.7(h) Canonical dedup in _bic_cache (BMS-inspired, before Phase 4)
 - ⏳ 3.1 dead-code removal (legacy_* moves, root_replacement, replace_with_subtree)
 - ⏳ 3.4 MPI keep/drop decision
 - ⏳ Phase 4 experiments (4.1 sanity → 4.3 ablations → 4.2 hero) — gate now open after verification

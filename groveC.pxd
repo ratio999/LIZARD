@@ -73,6 +73,8 @@ cdef class Grove:
     cpdef  best_tree(self)
 
     cdef  _choose_move(self)
+    cdef cnp.ndarray _compute_move_probs(self)
+    cpdef cnp.ndarray get_move_probs(self)
     cdef cnp.ndarray _adapted_move_probs(self)
     cdef int _move_group(self, str move_name)
     cdef void _adapt_move(self, str move_name, bint accepted)

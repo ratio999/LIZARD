@@ -316,14 +316,17 @@ cdef class Grove:
     cpdef best_tree(self):
         return self.trees[self.best_index()]
 
-    cdef _choose_move(self) :
+    cdef cnp.ndarray _compute_move_probs(self):
+        """The 7-vector of physical move probabilities the kernel uses on the
+        NEXT structural draw. Order matches the _choose_move dispatch:
+        [point, leaf_hoist, internal_hoist, add, split, subtree, cross].
+
+        When adapt_moves is False these are the fixed temperature-shaped
+        weights; when True they come from _adapted_move_probs (Phase 2.8),
+        which preserves the birth/death pair equality and the eps floor.
+        Extracted so both _choose_move and the introspection getter
+        get_move_probs() share one source of truth.
         """
-        Select a move and parameters based on temperature.
-        Returns (name, kwargs_dict).
-        """
-        
-        #if random.random() < self.pr_prob:
-        #     return ("parameter_refresh", {})
         # normalize temperature to [0, +inf): higher → more disruptive moves
         cdef double tau = self.T / self.base_temp
         # Temperature shape factors:
@@ -360,12 +363,27 @@ cdef class Grove:
         probs = np.array([p_point, p_leaf_hoist, p_internal_hoist,
                           p_add, p_split, p_subtree, p_cross],
                         dtype=np.float64)
-        
+
         probs = probs / probs.sum()
         if self.adapt_moves:
             # Phase 2.8: adaptive path overrides the fixed weights computed
             # above. _adapted_move_probs keeps the pair equality and floor.
             probs = self._adapted_move_probs()
+        return probs
+
+    cpdef cnp.ndarray get_move_probs(self):
+        """Phase 2.8 introspection: current physical move-probability 7-vector
+        (adapted if adapt_moves else the fixed temperature-shaped weights).
+        Read-only; does not advance any RNG. Order:
+        [point, leaf_hoist, internal_hoist, add, split, subtree, cross]."""
+        return self._compute_move_probs()
+
+    cdef _choose_move(self) :
+        """
+        Select a move and parameters based on temperature.
+        Returns (name, kwargs_dict).
+        """
+        cdef cnp.ndarray probs = self._compute_move_probs()
         idx = int(self._np_rng.choice(np.arange(7), p=probs))
         #random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
