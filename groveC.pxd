@@ -47,7 +47,7 @@ cdef class Grove:
     cdef public dict _bic_cache
     cdef public object _cache_y
     # Phase 2.8: optional adaptive move-weight calibration (OFF by default).
-    # _move_logits holds the 5 logical-group logits; _adapt_t counts
+    # _move_logits holds the 6 logical-group logits; _adapt_t counts
     # adaptive updates for the diminishing step size gamma_t.
     cdef public bint adapt_moves
     cdef public double adapt_gamma0

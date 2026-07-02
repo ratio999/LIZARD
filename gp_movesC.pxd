@@ -48,6 +48,12 @@ cpdef tuple add_node(function_treeC.Tree tree, list functions=?, list operations
                      random_depth=?)
 cdef tuple _split(function_treeC.Tree tree, list functions, list operations)
 cpdef tuple split(function_treeC.Tree tree, list functions=?, list operations=?)
+cdef list _collect_ets(function_treeC.Node node, list out)
+cdef tuple _draw_leaf_et(list functions, object domain, list name_pool, double g_tau)
+cdef tuple _build_random_et(int arity, list functions, list operations,
+                            object domain, list name_pool, double g_tau)
+cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operations)
+cpdef tuple etr_mutation(function_treeC.Tree tree, list functions=?, list operations=?)
 #cpdef select_random_node(node)
 #cpdef find_parent(root, child)
 #cpdef compute_subtree_size(node)

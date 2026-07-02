@@ -689,6 +689,141 @@ def _build_quadratic_tree(domain):
     return expr_to_tree(a0 * x_sym**2 + a1 * x_sym + a2, domain, _FUNCS)
 
 
+def _count_ets_py(node):
+    """Pure-Python mirror of gp_movesC._collect_ets count: every leaf is a
+    0-ET; every internal node whose BOTH children are leaves is a 2-ET; nested
+    ETs are all counted."""
+    if node is None:
+        return 0
+    if node.is_leaf():
+        return 1
+    left = node.get_left()
+    right = node.get_right()
+    c = 0
+    if (left is not None and right is not None
+            and left.is_leaf() and right.is_leaf()):
+        c = 1
+    return c + _count_ets_py(left) + _count_ets_py(right)
+
+
+def _param_values_py(node, out):
+    """Collect parameter-leaf values in the subtree rooted at `node`."""
+    if node is None:
+        return out
+    if node.is_leaf():
+        if node.is_param():
+            out.append(float(node.value))
+        return out
+    _param_values_py(node.get_left(), out)
+    _param_values_py(node.get_right(), out)
+    return out
+
+
+def test_3_3c_etr_density(n_seeds=400, tol=1e-9):
+    """etr_mutation (Phase 2.11): exact reconstruction of BOTH proposal
+    densities from a SINGLE-LEAF start.
+
+    A single-leaf tree has exactly one elementary tree (the root leaf), so it
+    is always the selected ET (Omega_i = 1, o_i = 0) and the WHOLE tree is
+    replaced -- making every density component observable from the after-tree:
+
+        N0 = M + 1 ; N2 = O * N0 * N0 ; s(a) = N0 if a == 0 else N2
+        log_q_fwd = -log 1       - log 2 - log s(o_f) + sum_new log g(theta_new)
+        log_q_rev = -log Omega_f - log 2 - log s(0)   + 0   (old leaf: no param)
+
+    o_f and Omega_f are read from the after-tree, theta_new from its parameter
+    leaves. Both replacement arities (o_f in {0, 2}) must occur.
+    """
+    print("[3.3c.etr] single-leaf exact density reconstruction")
+    from real_functionC import _domain_fixer
+    x, _ = _make_xy(n=24, seed=21)
+    domain = _domain_fixer(x)
+
+    M = len(_FUNCS)
+    O = len(_OPS)
+    N0 = M + 1
+    N2 = O * N0 * N0
+    x_sym = sp.Symbol('x')
+
+    n_leaf_out = 0   # o_f == 0
+    n_2et_out = 0    # o_f == 2
+    for s in range(n_seeds):
+        # Fresh single FUNCTION leaf: o_i = 0, Omega_i = 1, no old parameter.
+        tree = expr_to_tree(sp.sin(x_sym), domain, _FUNCS)
+        assert tree.get_root().is_leaf(), "fixture must be a single leaf"
+        if hasattr(tree, "set_g_tau"):
+            tree.set_g_tau(0.7)
+        g_tau = tree.g_tau
+
+        _seed_rngs(s)
+        lqf, lqr = gp_movesC.etr_mutation(tree, _FUNCS, _OPS)
+
+        root = tree.get_root()
+        o_f = 0 if root.is_leaf() else 2
+        omega_f = _count_ets_py(root)
+        thetas_new = _param_values_py(root, [])
+        log_g_new = sum(_log_g(t, g_tau) for t in thetas_new)
+
+        s_f = N0 if o_f == 0 else N2
+        expected_lqf = -math.log(1.0) - math.log(2.0) - math.log(s_f) + log_g_new
+        expected_lqr = -math.log(omega_f) - math.log(2.0) - math.log(N0)
+
+        assert math.isfinite(lqf) and math.isfinite(lqr), \
+            "[seed=%d] etr densities must be finite on-support" % s
+        assert math.isclose(lqf, expected_lqf, rel_tol=0.0, abs_tol=tol), (
+            "[seed=%d] etr lqf mismatch: got %.15g expected %.15g "
+            "(o_f=%d, s_f=%d, log_g_new=%.6g)"
+            % (s, lqf, expected_lqf, o_f, s_f, log_g_new))
+        assert math.isclose(lqr, expected_lqr, rel_tol=0.0, abs_tol=tol), (
+            "[seed=%d] etr lqr mismatch: got %.15g expected %.15g "
+            "(omega_f=%d)" % (s, lqr, expected_lqr, omega_f))
+        if o_f == 0:
+            n_leaf_out += 1
+        else:
+            n_2et_out += 1
+
+    assert n_leaf_out > 0 and n_2et_out > 0, (
+        "etr density test did not exercise BOTH replacement arities "
+        "(leaf=%d, 2et=%d)" % (n_leaf_out, n_2et_out))
+    print("[3.3c.etr] PASS  reconstructed lqf/lqr over %d seeds "
+          "(o_f=0: %d, o_f=2: %d)" % (n_seeds, n_leaf_out, n_2et_out))
+
+
+def test_3_3c_etr_offsupport(n_seeds=300):
+    """etr_mutation off-support: a 0-ET -> 2-ET replacement that would exceed
+    the depth cap is force-rejected with lqr == -inf (never a finite-but-wrong
+    density). Uses a temporarily lowered _MAX_TREE_DEPTH (save/restore)."""
+    print("[3.3c.etr] depth-cap force-reject -> lqr == -inf")
+    from real_functionC import _domain_fixer
+    x, _ = _make_xy(n=24, seed=22)
+    domain = _domain_fixer(x)
+
+    _set_depth = getattr(gp_movesC, "set_max_tree_depth", None)
+    _get_depth = getattr(gp_movesC, "get_max_tree_depth", None)
+    if _set_depth is None or _get_depth is None:
+        print("[3.3c.etr] SKIP off-support (build predates set_max_tree_depth)")
+        return
+    _old = _get_depth()
+    n_off = 0
+    n_on = 0
+    try:
+        _set_depth(2)   # start tree is depth 2 (at cap); any leaf->2ET busts it
+        for s in range(n_seeds):
+            tree = _make_balanced_tree(domain)   # every leaf sits at the cap
+            _seed_rngs(s)
+            lqf, lqr = gp_movesC.etr_mutation(tree, _FUNCS, _OPS)
+            if math.isinf(lqr):
+                assert lqr == -math.inf, "off-support lqr must be exactly -inf"
+                n_off += 1
+            else:
+                assert math.isfinite(lqr), "on-support lqr must be finite"
+                n_on += 1
+    finally:
+        _set_depth(_old)
+    assert n_off > 0, "no off-support (depth-cap) rejections were triggered"
+    print("[3.3c.etr] PASS  (off=%d, on=%d)" % (n_off, n_on))
+
+
 def _build_cubic_tree(domain):
     """y_hat = a0 * x**3 + a1 * x**2 + a2 * x + a3   (k = 4)."""
     x_sym = sp.Symbol('x')
@@ -1343,6 +1478,8 @@ if __name__ == "__main__":
     test_3_3c_leaf_hoist_density()
     test_3_3c_internal_hoist_density()
     test_3_3c_point_mutation_symmetric()
+    test_3_3c_etr_density()
+    test_3_3c_etr_offsupport()
     test_3_3d_bic_finite_on_linear()
     test_3_3d_bic_penalises_complexity()
     test_3_3d_bic_sigma_modes_differ()

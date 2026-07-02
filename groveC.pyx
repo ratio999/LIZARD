@@ -142,6 +142,7 @@ cdef class Grove:
             "split":              0,
             "subtree_mutation":   0,
             "subtree_crossover":  0,
+            "etr_mutation":       0,
             "parameter_refresh":  0,
         }
         self.move_accepts = dict.fromkeys(self.move_proposals, 0)
@@ -157,15 +158,15 @@ cdef class Grove:
         # --- Phase 2.8: optional adaptive move-weight calibration ----------
         # OFF by default (adapt_moves=False) -> Grove behaves exactly as
         # before, using the fixed temperature-shaped weights in _choose_move.
-        # When ON, five logical-group logits are updated by a diminishing-
+        # When ON, six logical-group logits are updated by a diminishing-
         # adaptation (Robbins-Monro) rule (see _adapt_move) and mapped to the
-        # seven physical move probabilities by _adapted_move_probs, which
+        # eight physical move probabilities by _adapted_move_probs, which
         # preserves the birth/death pair equality (so the RJMCMC move-
         # selection correction stays exactly zero) and floors every
         # probability at `adapt_floor` (containment). Warm-started from the
         # fixed weights so toggling adaptation on is continuous.
-        if not (0.0 <= adapt_floor < 1.0 / 7.0):
-            raise ValueError("Grove: adapt_floor must lie in [0, 1/7)")
+        if not (0.0 <= adapt_floor < 1.0 / 8.0):
+            raise ValueError("Grove: adapt_floor must lie in [0, 1/8)")
         if adapt_logit_bound <= 0.0:
             raise ValueError("Grove: adapt_logit_bound must be > 0")
         self.adapt_moves = adapt_moves
@@ -185,6 +186,7 @@ cdef class Grove:
             _pb0,                # group 2: split / internal_hoist
             0.15 * _g0 + 0.10,   # group 3: subtree_mutation
             0.10 * _g0 + 0.05,   # group 4: subtree_crossover
+            0.10 * _f0 + 0.05,   # group 5: etr_mutation
         ], dtype=np.float64))
         _eta0 = _eta0 - _eta0.mean()
         _eta0 = np.clip(_eta0, -self.adapt_logit_bound, self.adapt_logit_bound)
@@ -360,8 +362,9 @@ cdef class Grove:
         p_point   = 0.30 * f + 0.05
         p_subtree = 0.15 * g + 0.10
         p_cross   = 0.10 * g + 0.05
+        p_etr     = 0.10 * f + 0.05   # cheap local ET rewrite; favored cold
         probs = np.array([p_point, p_leaf_hoist, p_internal_hoist,
-                          p_add, p_split, p_subtree, p_cross],
+                          p_add, p_split, p_subtree, p_cross, p_etr],
                         dtype=np.float64)
 
         probs = probs / probs.sum()
@@ -372,10 +375,10 @@ cdef class Grove:
         return probs
 
     cpdef cnp.ndarray get_move_probs(self):
-        """Phase 2.8 introspection: current physical move-probability 7-vector
+        """Phase 2.8 introspection: current physical move-probability 8-vector
         (adapted if adapt_moves else the fixed temperature-shaped weights).
         Read-only; does not advance any RNG. Order:
-        [point, leaf_hoist, internal_hoist, add, split, subtree, cross]."""
+        [point, leaf_hoist, internal_hoist, add, split, subtree, cross, etr]."""
         return self._compute_move_probs()
 
     cdef _choose_move(self) :
@@ -384,7 +387,7 @@ cdef class Grove:
         Returns (name, kwargs_dict).
         """
         cdef cnp.ndarray probs = self._compute_move_probs()
-        idx = int(self._np_rng.choice(np.arange(7), p=probs))
+        idx = int(self._np_rng.choice(np.arange(8), p=probs))
         #random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
             return ("point_mutation", {"operations": self.operations})
@@ -398,36 +401,39 @@ cdef class Grove:
             return ("split", {"operations": self.operations})
         elif idx == 5:
             return ("subtree_mutation", {})
-        else:
+        elif idx == 6:
             return ("subtree_crossover", {})
+        else:
+            return ("etr_mutation", {"operations": self.operations})
 
     cdef cnp.ndarray _adapted_move_probs(self):
-        """Map the 5 logical-group logits to the 7 physical move probabilities.
+        """Map the 6 logical-group logits to the 8 physical move probabilities.
 
         Group -> physical layout (must match the _choose_move dispatch order
-        [point, leaf_hoist, internal_hoist, add, split, subtree, cross]):
+        [point, leaf_hoist, internal_hoist, add, split, subtree, cross, etr]):
             eta[0] -> point_mutation
             eta[1] -> leaf_hoist  AND  add_node      (shared: pair equality)
             eta[2] -> internal_hoist AND split       (shared: pair equality)
             eta[3] -> subtree_mutation
             eta[4] -> subtree_crossover
+            eta[5] -> etr_mutation
         Because each birth/death pair shares a single logit, p_add == p_leaf
         and p_split == p_internal_hoist hold exactly, so the RJMCMC move-
         selection term log p(m'|T')/p(m|T) is identically zero. A uniform
         floor eps keeps every probability >= eps (containment).
         """
         cdef cnp.ndarray[cnp.float64_t, ndim=1] eta = self._move_logits
-        cdef cnp.ndarray[cnp.float64_t, ndim=1] l7 = np.array(
-            [eta[0], eta[1], eta[2], eta[1], eta[2], eta[3], eta[4]],
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] l8 = np.array(
+            [eta[0], eta[1], eta[2], eta[1], eta[2], eta[3], eta[4], eta[5]],
             dtype=np.float64)
-        l7 = l7 - l7.max()
-        cdef cnp.ndarray[cnp.float64_t, ndim=1] b = np.exp(l7)
+        l8 = l8 - l8.max()
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] b = np.exp(l8)
         b = b / b.sum()
         cdef double eps = self.adapt_floor
-        return (1.0 - 7.0 * eps) * b + eps
+        return (1.0 - 8.0 * eps) * b + eps
 
     cdef int _move_group(self, str move_name):
-        """Logical adaptation group (0..4) of a move, or -1 if the move is not
+        """Logical adaptation group (0..5) of a move, or -1 if the move is not
         part of the adaptive kernel (e.g. parameter_refresh)."""
         if move_name == "point_mutation":
             return 0
@@ -439,6 +445,8 @@ cdef class Grove:
             return 3
         elif move_name == "subtree_crossover":
             return 4
+        elif move_name == "etr_mutation":
+            return 5
         return -1
 
     cdef void _adapt_move(self, str move_name, bint accepted):
@@ -515,6 +523,9 @@ cdef class Grove:
                     lqf, lqr = gp_movesC.point_mutation(
                         cand, self.funcs, self.operations)
                     move_name = "point_mutation"
+            elif move_name == "etr_mutation":
+                lqf, lqr = gp_movesC.etr_mutation(
+                    cand, self.funcs, kwargs.get("operations", None))
             else:
                 lqf, lqr = gp_movesC.point_mutation(
                     cand, self.funcs, self.operations)

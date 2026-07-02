@@ -1713,6 +1713,202 @@ cpdef tuple split(function_treeC.Tree tree, list functions=None, list operations
         operations = ["+", "-", "*", "/", "**", "o"]
     return _split(tree, functions, operations)
 
+# ---------------------------------------------------------------------------
+# Phase 2.11: Elementary Tree Replacement (ETR) -- BMS-inspired local rewrite
+# ---------------------------------------------------------------------------
+cdef list _collect_ets(function_treeC.Node node, list out):
+    """Collect every ELEMENTARY-TREE-rooted node of the subtree at `node`.
+
+    An elementary tree (ET) is a subtree with at most one operation. This
+    grammar has only binary operations (functions such as sin(x) are LEAVES,
+    not unary ops), so ETs come in exactly two arities:
+      * 0-ET : any leaf (function leaf OR parameter leaf);
+      * 2-ET : an internal node whose BOTH children are leaves.
+    Nested ETs are all listed (a 2-ET contributes itself plus its two leaves),
+    matching the BMS "uniform over all ETs in the tree" selection.
+    """
+    if node is None:
+        return out
+    if node.is_leaf():
+        out.append(node)
+        return out
+    if (node.left is not None and node.right is not None
+            and node.left.is_leaf() and node.right.is_leaf()):
+        out.append(node)                       # 2-ET
+    _collect_ets(node.left, out)
+    _collect_ets(node.right, out)
+    return out
+
+
+cdef tuple _draw_leaf_et(list functions, object domain, list name_pool,
+                         double g_tau):
+    """Draw one 0-ET (leaf) uniformly over the M function leaves + 1 parameter
+    option (N0 = M + 1 structural choices). Returns (leaf, log_g): log_g is 0
+    for a function leaf, or log g(theta) for a freshly-born parameter leaf
+    (theta ~ g = N(0, tau^2), same convention as add_node / point_mutation).
+    `name_pool` is extended in place so sibling leaves of a 2-ET get distinct,
+    collision-free parameter names."""
+    cdef int M = len(functions)
+    cdef int idx = _PY_RNG.randrange(M + 1)    # 0..M-1 -> function ; M -> param
+    cdef function_treeC.Node leaf
+    cdef str new_name
+    cdef double theta
+    if idx < M:
+        leaf = function_treeC.Node(
+            function=real_functionC.RealFunctionC.from_string(
+                functions[idx], domain, compute_grad=False))
+        return (leaf, 0.0)
+    # Parameter leaf: fresh name (unique vs the whole current tree) + theta ~ g.
+    new_name = function_treeC.new_par(name_pool, "a")
+    name_pool.append(new_name)
+    leaf = function_treeC.Node(
+        function=real_functionC.RealFunctionC.from_string(
+            new_name, domain, compute_grad=False))
+    leaf.bis_param = leaf.is_param()
+    theta = _sample_g(g_tau)
+    leaf.set_value(theta)
+    return (leaf, _log_g(theta, g_tau))
+
+
+cdef tuple _build_random_et(int arity, list functions, list operations,
+                            object domain, list name_pool, double g_tau):
+    """Build a fresh elementary tree of the given arity and return
+    (root_node, sum_log_g). arity 0 -> a single 0-ET leaf; arity 2 ->
+    op(leaf, leaf) with op ~ Uniform(operations) and each child an independent
+    0-ET. sum_log_g accumulates log g(theta) over every parameter leaf born."""
+    cdef function_treeC.Node node, childL, childR
+    cdef double lgL, lgR
+    cdef str op
+    if arity == 0:
+        node, lgL = _draw_leaf_et(functions, domain, name_pool, g_tau)
+        return (node, lgL)
+    # arity == 2
+    op = _PY_RNG.choice(operations)
+    childL, lgL = _draw_leaf_et(functions, domain, name_pool, g_tau)
+    childR, lgR = _draw_leaf_et(functions, domain, name_pool, g_tau)
+    node = function_treeC.Node()
+    node.assign_left(childL, brute_force=True)
+    node.assign_right(childR, brute_force=True)
+    node.assign_operation(op, brute_force=True)
+    node.update_func()
+    return (node, lgL + lgR)
+
+
+@cython.boundscheck(True)
+@cython.wraparound(True)
+cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operations):
+    """
+    Elementary Tree Replacement (Phase 2.11, BMS-inspired).
+
+    Select one ET uniformly among all ETs of T and replace it by a freshly
+    drawn ET whose arity is chosen uniformly in {0, 2}. Because ETs contain at
+    most one operation the move is CHEAP and can NEVER trigger the build_tree
+    pow/compose sympy blow-up (unlike subtree_mutation), so it needs no
+    subtree-rebuild height cap. It is SELF-INVERSE (the reverse of an ETR is an
+    ETR), so `_choose_move` needs no birth/death pairing correction for it.
+
+    Densities
+    ---------
+      N0 = M + 1                 # structural 0-ETs: M functions + 1 parameter
+      N2 = O * N0 * N0           # structural 2-ETs
+      s(arity) = N0 if arity == 0 else N2
+
+      log_q_fwd = -log Omega_i - log 2 - log s(o_f)
+                  + sum_{parameters born in the new ET} log g(theta_new)
+      log_q_rev = -log Omega_f - log 2 - log s(o_i)
+                  + sum_{parameters of the OLD ET}      log g(theta_old)
+
+    Omega_i / Omega_f are the ET counts of T / T'; o_f / o_i the arities of the
+    new / old ET; theta_new / theta_old the parameter values born / destroyed.
+    The -log 2 (uniform arity choice) is identical in both directions and
+    cancels in log_q_rev - log_q_fwd; it is written into both for transparency.
+    Parameter births use g = N(0, tau^2) (RJMCMC Jacobian = 1; theta profiled).
+
+    Bounded support: only a 0-ET -> 2-ET replacement can deepen the tree; if
+    the result exceeds _MAX_TREE_DEPTH we force-reject (log_q_rev = -inf), the
+    same convention as add_node / split.
+
+    Returns (log_q_fwd, log_q_rev).
+    """
+    cdef int M = len(functions)
+    cdef int O = len(operations)
+    if tree.root is None or M <= 0 or O <= 0:
+        return (0.0, 0.0)
+
+    cdef int N0 = M + 1
+    cdef int N2 = O * N0 * N0
+
+    # ---- 1. uniform ET selection over all ETs of T ----
+    cdef list ets_T = _collect_ets(tree.root, [])
+    cdef int omega_i = len(ets_T)
+    if omega_i <= 0:
+        return (0.0, 0.0)
+    cdef function_treeC.Node v = ets_T[_PY_RNG.randrange(omega_i)]
+    cdef int o_i = 0 if v.is_leaf() else 2
+
+    # ---- 2. capture OLD-ET parameter values (the reverse re-births them) ----
+    cdef list old_param_leaves = _collect_parameter_leaves(v, [])
+    cdef double g_tau = tree.g_tau
+    cdef double log_g_old = 0.0
+    cdef function_treeC.Node pl
+    for pl in old_param_leaves:
+        log_g_old += _log_g(<double> pl.value, g_tau)
+
+    # ---- 3. draw the replacement ET (arity ~ Uniform{0, 2}) ----
+    cdef int o_f = 0 if (_PY_RNG.random() < 0.5) else 2
+    # Fresh parameter names must avoid EVERY current tree parameter (the old ET
+    # included); the old ET's parameters vanish on splice, so no aliasing.
+    cdef list name_pool = [p.get_fun().get_description() for p in tree.params]
+    cdef function_treeC.Node new_et
+    cdef double log_g_new
+    new_et, log_g_new = _build_random_et(o_f, functions, operations,
+                                         tree.domain, name_pool, g_tau)
+
+    # ---- 4. splice new_et in place of v ----
+    cdef function_treeC.Node parent = tree.root.find_parent(v)
+    if parent is None:
+        tree.root = new_et
+        tree.tree_update(tree.root)
+    else:
+        if parent.get_left() is v:
+            parent.assign_left(new_et)
+        else:
+            parent.assign_right(new_et)
+        tree.tree_update(parent)
+
+    # Bounded-support depth cap (only a 0-ET -> 2-ET can deepen the tree).
+    if tree.root.depth() > _MAX_TREE_DEPTH:
+        return (0.0, -np.inf)
+
+    # ---- 5. proposal densities ----
+    cdef int omega_f = len(_collect_ets(tree.root, []))
+    if omega_f <= 0:
+        return (0.0, -np.inf)
+    cdef double s_f = (<double> N0) if o_f == 0 else (<double> N2)
+    cdef double s_i = (<double> N0) if o_i == 0 else (<double> N2)
+
+    cdef double log_q_fwd = (-np.log(<double> omega_i)
+                             - np.log(2.0)
+                             - np.log(s_f)
+                             + log_g_new)
+    cdef double log_q_rev = (-np.log(<double> omega_f)
+                             - np.log(2.0)
+                             - np.log(s_i)
+                             + log_g_old)
+    return (log_q_fwd, log_q_rev)
+
+
+@cython.boundscheck(True)
+cpdef tuple etr_mutation(function_treeC.Tree tree, list functions=None,
+                         list operations=None):
+    """Phase 2.11 public entry point (Elementary Tree Replacement).
+    Returns (log_q_fwd, log_q_rev)."""
+    if functions is None:
+        functions = tree.functions
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _etr_mutation(tree, list(functions), list(operations))
+
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Generates a random subtree with chosen size"""
     depth = size // 2  #  profondità approssimativa

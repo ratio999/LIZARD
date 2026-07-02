@@ -204,24 +204,36 @@ Requirements (must all be met):
       - Skip trees with n_eff <= k+1.
       - Return INVALID = -1e300 sentinel instead of -inf.
 
-  (h) **Canonical deduplication in _bic_cache** (BMS-inspired, ⏳ pending)
+  (h) **Canonical deduplication in _bic_cache** (BMS-inspired — RE-SCOPED, optional)
       BMS permanently blacklists any tree whose SymPy canonical form matches a
-      previously visited one, so the chain never re-evaluates algebraically
-      identical states (e.g. x*a and a*x). Current _bic_cache uses
-      `tree_get_description()` = `str(root_expr)` as the key, which is NOT
-      fully canonical under sympy (commutativity, constant folding, etc.) so
-      the same expression can be scored multiple times under different keys,
-      and the chain can oscillate between algebraically identical trees with
-      artificially high nominal acceptance.
-      Fix: normalise the cache key via `str(sp.expand(expr))` or
-      `str(sp.cancel(expr))` (choose one consistently), AND maintain a global
-      `_seen_exprs` set per grove that permanently bans re-entry of already-
-      scored canonical forms. Requires: (1) key normalisation in `_step` and
-      `_score_post`, (2) ban-list check before `_propose` returns a candidate,
-      (3) a unit test that two structurally different trees for the same
-      expression are treated as one. No detailed-balance impact: banning an
-      already-visited topology is equivalent to setting its prior mass to zero
-      in a finite state-space reduction.
+      previously visited one. The original plan text here called for keying
+      the cache on `str(sp.expand(expr))` / `str(sp.cancel(expr))` — REJECTED
+      after review: running `expand`/`cancel`/`simplify` on a compose/pow-heavy
+      expression is EXACTLY the operation that causes the catastrophic sympy
+      blow-up documented above under "build_tree sympy blow-up" (symbolic size
+      ~2**(2**(h-1)), as_real_imag spinning). Doing this unconditionally inside
+      `_step`'s hot path would reintroduce that hang risk for any accepted tree
+      that happens to compose/pow deeply, not just pathological build_tree
+      output. Do NOT expand/cancel/simplify unconditionally.
+      Lower-risk observation: RealFunctionC's arithmetic ops (`__add__` etc.)
+      call plain sympy operators (`self.expr + other.expr`, never
+      `evaluate=False`), so sympy ALREADY canonically reorders commutative
+      Add/Mul arguments and folds trivial identities (x+0, x*1, ...) at
+      construction time. `tree_get_description()` = `str(root_expr)` is
+      therefore already dedup-safe for the common case (x+a and a+x hash
+      identically today) — the original problem statement overstated the risk.
+      REVISED scope (if ever picked up): (i) OPT-IN, node-count-bounded
+      canonicalization only (e.g. run `sp.simplify` only when node count is
+      below a small cap, say <=10) so cost stays bounded regardless of what
+      compose/pow could produce; (ii) pure CACHE-KEY refinement only (extra
+      cache hits = free speed) — never a correctness-affecting ban-list. A
+      ban-list that forces `log_q_rev = -inf` for an "already seen" canonical
+      form changes the chain's effective support and would need its own
+      detailed-balance proof, which is not worth the complexity for a
+      speed-only optimization.
+      STATUS: re-scoped as OPTIONAL / low-priority speed polish, NOT a
+      correctness gate. Removed from the pre-Phase-4 critical path; revisit
+      only if profiling shows material cache misses from algebraic duplicates.
 
   Implementation order (6 steps):
     1. _log_marginal_bic in real_functionC.pyx ✅ DONE.
@@ -234,42 +246,53 @@ Requirements (must all be met):
   Future-work flags (not v1): full Laplace with -0.5 log|H|; pseudo-marginal MCMC
   (Andrieu & Roberts 2009); multi-start optimizer.
 
-### 2.8 Move-rate calibration (after 2.7)
+### 2.8 Move-rate calibration (after 2.7) ✅ DONE
 - Feed move_stats() acceptance rates back into _choose_move probability weights.
 - Adaptive move weights per temperature level.
-- STATUS: feature FULLY IMPLEMENTED in groveC (`adapt_moves=False` default;
+- Feature fully implemented in groveC (`adapt_moves=False` default;
   diminishing-adaptation + logit-box/floor containment; birth/death pair-equality
-  preserved so `_step` math is unchanged; plumbed through Grove AND Forest). The
-  remaining work is VALIDATION, not implementation:
+  preserved so `_step` math is unchanged; plumbed through Grove AND Forest).
     * Added `_compute_move_probs` (shared source of truth for _choose_move) +
       `cpdef get_move_probs()` introspection getter (groveC.pyx + .pxd).
-    * New `test_phase28.py` (plain script) with three checks:
+    * `test_phase28.py` (plain script) with three checks:
         (a) kernel invariants at init AND after adaptation -- pair equality
             (p_add==p_leaf_hoist, p_split==p_internal_hoist) + containment floor;
         (b) determinism: same seed -> identical adapted logits + move_stats +
             trees;
         (c) target invariance: adapt-on vs adapt-off cold-chain size marginal
             within a null-calibrated noise floor (Roberts & Rosenthal 2007).
-  ⏳ PENDING: recompile groveC, then run `python3 test_phase28.py`.
 
-### 2.11 ETR-style small-step move (BMS-inspired, ⏳ pending, after 2.8)
-BMS uses Elementary Tree Replacement (ETR) as 50% of its proposals: select a
-random ET (subtree containing ≤1 operation) and replace it with a freshly drawn
-ET of possibly different arity. This is cheaper and more targeted than
-subtree_mutation (which rebuilds to the full subtree height) and stays on-support
-by design (never builds deep subtrees → no sympy blow-up risk). BMS's explicit
-(lqf, lqr) corrects for the asymmetry in the number of candidate ETs.
-- Implementation: new `etr_mutation(tree, functions, operations)` in gp_movesC.pyx.
-  Forward: pick one ET uniformly (Ω_i options); pick new ET uniformly over all
-  valid ETs of chosen arity (s_f options). Reverse: the symmetric count from T'.
-  log_q_fwd = -log(Ω_i * s_f), log_q_rev = -log(Ω_f * s_i) (see BMS eq. 11).
-- Add `"etr_mutation"` to `_choose_move` dispatch and `move_proposals` dict.
-  Pair equality: ETR is self-inverse (m'==m), so no selection-term correction
-  needed and it can be added/removed freely without touching other move weights.
-- Requires: density unit test (on-support / off-support / ratio check).
-- Benefit: cheap local edits that complement the current add_node/split/hoist
-  set; expected to improve cold-chain mixing at low T without the sympy cost of
-  subtree_mutation on tall subtrees.
+### 2.11 ETR-style small-step move (BMS-inspired) ✅ DONE
+Elementary Tree Replacement: select an ET (a subtree with <=1 operation) uniformly
+and replace it with a freshly drawn ET of possibly different arity. Cheaper and
+more targeted than subtree_mutation and stays on-support by design (an ET has
+<=1 op, so it can NEVER trigger the build_tree pow/compose sympy blow-up -> no
+subtree-rebuild height cap needed).
+- GRAMMAR NOTE (this codebase != BMS): functions (sin, cos, x, ...) are LEAVES,
+  not unary operators; internal nodes are ONLY binary ops. So ETs have exactly
+  two arities: 0-ET = a leaf (function OR parameter); 2-ET = op(leaf, leaf).
+  There are no 1-ETs. Structural counts: N0 = M+1 (M functions + 1 param option),
+  N2 = O*N0*N0.
+- Implemented `etr_mutation` / `_etr_mutation` (+ helpers `_collect_ets`,
+  `_draw_leaf_et`, `_build_random_et`) in gp_movesC.pyx (+ .pxd). Forward: pick
+  ET uniformly (Omega_i); pick new arity ~ U{0,2}; draw the new ET uniformly
+  within that arity (s_f = N0 or N2); param leaves born ~ g = N(0, tau^2).
+  Reverse selects at the same position among Omega_f ETs of T', draws the OLD
+  arity/structure, re-births old params at their values:
+    log_q_fwd = -log Omega_i - log 2 - log s(o_f) + sum_new log g(theta_new)
+    log_q_rev = -log Omega_f - log 2 - log s(o_i) + sum_old log g(theta_old)
+  (the -log 2 arity choice is common and cancels). Self-inverse move -> no
+  birth/death pairing correction. Depth cap (only 0-ET->2-ET can deepen):
+  force-reject with log_q_rev = -inf, same convention as add_node/split.
+- Wired into groveC as the 8th physical move: `_choose_move` dispatch,
+  `move_proposals`/`move_accepts`, fixed weight `p_etr = 0.10*f + 0.05`, and the
+  Phase 2.8 adaptive map (now 6 groups -> 8 physical; group 5 = etr; floor 1/8).
+- Density unit tests in test_phase23.py:
+    * `test_3_3c_etr_density` -- EXACT reconstruction of lqf AND lqr from a
+      single-leaf start (Omega_i=1, whole tree replaced), both o_f in {0,2};
+    * `test_3_3c_etr_offsupport` -- depth-cap force-reject gives lqr == -inf.
+- ⏳ PENDING: recompile (gp_movesC + groveC) then run `python3 test_phase23.py`
+  (and the full suite). ETR is ACTIVE in the default kernel once compiled.
 
 ---
 
@@ -487,9 +510,9 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 - ✅ 3.3 test suite (a)–(g)
 - ✅ test_cython4 grove_smoke_test fixes
 - ✅ perf: lambdify caching in real_functionC.from_string; vectorised conversion
-- ⏳ 2.8 Move-rate calibration — feature done + test_phase28.py written; PENDING recompile + run
-- ⏳ 2.11 ETR-style small-step move (BMS-inspired, after 2.8)
-- ⏳ 2.7(h) Canonical dedup in _bic_cache (BMS-inspired, before Phase 4)
+- ✅ 2.8 Move-rate calibration — feature done + test_phase28.py written
+- ✅ 2.11 ETR move (etr_mutation) implemented + wired (8th move) + density tests
+- ⏸ 2.7(h) Canonical dedup in _bic_cache — RE-SCOPED optional (sympy expand/cancel unsafe)
 - ⏳ 3.1 dead-code removal (legacy_* moves, root_replacement, replace_with_subtree)
 - ⏳ 3.4 MPI keep/drop decision
 - ⏳ Phase 4 experiments (4.1 sanity → 4.3 ablations → 4.2 hero) — gate now open after verification
