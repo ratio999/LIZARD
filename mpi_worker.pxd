@@ -1,3 +1,4 @@
+# cython: language_level=3
 cimport numpy as cnp
 cimport function_treeC
 cimport real_functionC

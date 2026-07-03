@@ -1,3 +1,4 @@
+# cython: language_level=3
 # mpi_worker.py
 """
 MPI worker script for parallel burn-in.
@@ -17,6 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 cimport function_treeC
 cimport real_functionC
 cimport gp_movesC
+cimport polya_treeC
+cimport groveC
 cdef function_treeC.Tree _helper(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, 
             list funcs, dict names_params):
     
@@ -266,6 +269,177 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
 
 def worker_main():
     _worker_main()
+
+
+# ===========================================================================
+# Phase 2.12: MPI-parallel EMC sampling worker (spawned by
+# groveC.Forest.run_mpi_spawn; one worker per temperature rung).
+#
+# The worker builds and PERSISTENTLY OWNS one Grove for the whole run:
+#   * mutation steps run locally (grove.run) with polya_defer=True so the
+#     accepted Polya paths are collected, gathered by the master each round
+#     and replayed identically on every replica (deterministic replay);
+#   * exchange / crossover decisions happen on the master; this worker only
+#     serves 'get_tree' (serialize a slot) and 'set_tree' (install a slot)
+#     commands, using the same (sympy expr, name_values, post) wire format
+#     as the burn-in spawn path.
+# The command loop is bcast-driven: EVERY worker receives every command and
+# only the addressed rank acts on the point-to-point parts, so no
+# interleaving can deadlock. `worker_main` (burn-in) is untouched.
+# ===========================================================================
+cdef tuple _sampler_tree_to_wire(function_treeC.Tree tree, double post):
+    return (tree.root.function.expr,
+            dict(tree.name_values) if tree.name_values else {},
+            float(post))
+
+
+cdef function_treeC.Tree _sampler_tree_from_wire(
+        object expr, dict name_values,
+        cnp.ndarray[cnp.float64_t, ndim=1] domain, list funcs,
+        object sigma, double g_tau):
+    cdef function_treeC.Tree tree
+    cdef function_treeC.Node param
+    cdef str desc
+    try:
+        tree = function_treeC._expr_to_tree(expr, domain, funcs)
+    except Exception:
+        return None
+    if tree is None:
+        return None
+    if name_values:
+        for param in tree.params:
+            desc = param.get_fun().get_description()
+            if desc in name_values:
+                param.set_value(<double> name_values[desc])
+    tree.set_sigma(sigma)
+    tree.set_g_tau(g_tau)
+    tree.tree_update(tree.get_root())
+    if tree.tree_get_description() != str(expr):
+        return None
+    return tree
+
+
+cdef void _sampler_main():
+    cdef object parent_comm = MPI.Comm.Get_parent()
+    if parent_comm == MPI.COMM_NULL:
+        print("Error: sampler_main must be spawned by MPI, not run directly.")
+        sys.exit(1)
+    cdef int rank = MPI.COMM_WORLD.Get_rank()
+
+    # ---- startup config ---------------------------------------------------
+    cdef dict config = parent_comm.bcast(None, root=0)
+    cdef dict ctor = config['ctor']
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] y = \
+        np.ascontiguousarray(config['y'], dtype=np.float64)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] temps = \
+        np.ascontiguousarray(config['temperatures'], dtype=np.float64)
+    cdef double my_T = float(temps[rank])
+    cdef object my_seed = config['worker_seeds'][rank]
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] x = \
+        np.ascontiguousarray(ctor['x'], dtype=np.float64)
+
+    # Optional caps (module-level in THIS process's gp_movesC instance).
+    if config.get('max_tree_depth') is not None:
+        gp_movesC.set_max_tree_depth(int(config['max_tree_depth']))
+    if config.get('subtree_rebuild_max_height') is not None:
+        gp_movesC.set_subtree_rebuild_max_height(
+            int(config['subtree_rebuild_max_height']))
+
+    # ---- local Polya replica (exact copy of the master's) ------------------
+    cdef polya_treeC.PolyaTree polya = None
+    cdef dict pstate = config.get('polya_state')
+    if pstate is not None:
+        polya = polya_treeC.PolyaTree(
+            list(pstate['operations']), list(pstate['primitives']),
+            alpha_0=float(pstate['alpha_0']))
+        polya.set_state(pstate)
+
+    # ---- build MY grove -----------------------------------------------------
+    cdef groveC.Grove grove = groveC.Grove(
+        x, y, my_T, int(ctor['size']), int(ctor['depth']),
+        list(ctor['funcs']), sigma=ctor['sigma'],
+        Npars=int(ctor['Npars']), init_value=ctor['init_value'],
+        operations=list(ctor['operations']),
+        base_temp=float(ctor['base_temp']),
+        lambda_reg=float(ctor['lambda_reg']),
+        use_gradients=bool(ctor['use_gradients']),
+        burn_in=False, use_mpi=0,
+        polya=polya, seed=my_seed, g_tau=ctor['g_tau'],
+        adapt_moves=bool(ctor['adapt_moves']))
+    grove.polya_defer = True
+
+    # Install the master's CURRENT trees (start exactly where it stands).
+    cdef list wires = config['init_trees'][rank]
+    cdef list new_trees = []
+    cdef function_treeC.Tree t
+    cdef int s
+    for s in range(len(wires)):
+        t = _sampler_tree_from_wire(wires[s][0], wires[s][1],
+                                    grove.domain, list(ctor['funcs']),
+                                    grove.sigma, grove.g_tau)
+        if t is None:
+            # Fall back to the locally built tree for this slot (the master
+            # will simply rescore it through the round replies).
+            t = grove.trees[s]
+        new_trees.append(t)
+        grove.root_posteriors[s] = wires[s][2]
+    grove.set_trees(new_trees)
+
+    # ---- command loop (COLLECTIVE gather/scatter, same shape as the
+    # burn-in spawn path: bcast a command, gather results, scatter updates).
+    # The collectives (bcast / gather / scatter) run OUTSIDE any try so master
+    # and workers stay in lockstep; only the local computation is guarded. ---
+    cdef object cmd, incoming
+    cdef str op
+    cdef list paths, new_wires, all_paths, final_wires
+    cdef function_treeC.Tree nt
+    cdef int slot
+    while True:
+        cmd = parent_comm.bcast(None, root=0)
+        op = <str> cmd[0]
+        if op == 'run':
+            try:
+                grove.run(y, int(cmd[1]))
+            except Exception as e:
+                print(f"[Sampler {rank}] run failed: {type(e).__name__}: {e}")
+                sys.stdout.flush()
+            paths = grove.drain_deferred_paths()
+            wires = [
+                _sampler_tree_to_wire(
+                    <function_treeC.Tree> grove.trees[slot],
+                    float(grove.root_posteriors[slot]))
+                for slot in range(grove.size)]
+            # Send this grove's (paths, trees); receive its updated trees +
+            # the global path list to replay. Collective, always in lockstep.
+            parent_comm.gather((paths, wires), root=0)
+            incoming = parent_comm.scatter(None, root=0)
+            new_wires = <list> incoming[0]
+            all_paths = <list> incoming[1]
+            for slot in range(min(grove.size, len(new_wires))):
+                nt = _sampler_tree_from_wire(
+                    new_wires[slot][0], new_wires[slot][1], grove.domain,
+                    list(ctor['funcs']), grove.sigma, grove.g_tau)
+                if nt is not None:
+                    grove.set_single_tree(nt, slot)
+                    grove.root_posteriors[slot] = float(new_wires[slot][2])
+            if polya is not None:
+                polya.replay_paths(all_paths)
+        elif op == 'stop':
+            final_wires = [
+                _sampler_tree_to_wire(
+                    <function_treeC.Tree> grove.trees[slot],
+                    float(grove.root_posteriors[slot]))
+                for slot in range(grove.size)]
+            parent_comm.gather(final_wires, root=0)
+            break
+
+    parent_comm.Disconnect()
+    print(f"[Sampler {rank}] disconnected.")
+
+
+def sampler_main():
+    _sampler_main()
+
 
 if __name__ == "__main__":
     worker_main()

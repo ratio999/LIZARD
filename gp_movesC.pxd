@@ -8,6 +8,13 @@ cimport function_treeC
 cpdef void set_rng(object py_rng, object np_rng) except *
 cpdef tuple get_rng()
 
+cpdef void set_max_tree_depth(int d)
+
+cpdef int get_max_tree_depth()
+
+cpdef void set_subtree_rebuild_max_height(int h)
+
+cpdef int get_subtree_rebuild_max_height()
 
 cdef list _flatten_nodes(function_treeC.Node node, list out)
 cpdef list flatten_nodes(function_treeC.Node node, list out=?)

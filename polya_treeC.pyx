@@ -372,3 +372,76 @@ cdef class PolyaTree:
             )
         self._assert_covers_recursive(node.get_left())
         self._assert_covers_recursive(node.get_right())
+
+    # ------------------------------------------------------------------
+    # Phase 2.12 (MPI sampling): picklable state snapshot / restore.
+    #
+    # The MPI-parallel EMC loop keeps one PolyaTree REPLICA per worker
+    # process and keeps them bit-identical to the master's by (a) shipping
+    # the master's full state once at startup via get_state()/set_state()
+    # and (b) replaying the same ordered list of accepted construction
+    # paths on every copy after each round (deterministic replay). Both
+    # methods are pure-Python-object walks over the public fields, so the
+    # returned state contains only dict/list/str/int/float/ndarray — all
+    # picklable by mpi4py's default (pickle-based) communication.
+    # ------------------------------------------------------------------
+    cpdef dict get_state(self):
+        """Deep, picklable snapshot of the whole Pólya tree (vocabulary,
+        urn counter t, and every node's Dirichlet alphas + children)."""
+        return {
+            'operations': list(self.operations),
+            'primitives': list(self.primitives),
+            'alpha_0': float(self.alpha_0),
+            't': int(self.t),
+            'auto_register': bool(self.auto_register),
+            'strict_ops': bool(self.strict_ops),
+            'root': _node_to_state(self.root),
+        }
+
+    cpdef void set_state(self, dict state) except *:
+        """Restore a snapshot produced by get_state(). Overwrites the
+        vocabulary, counter and the entire node tree in place."""
+        self.operations = list(state['operations'])
+        self.primitives = list(state['primitives'])
+        self.alpha_0 = <double> state['alpha_0']
+        self.t = <int> state['t']
+        self.auto_register = <bint> state['auto_register']
+        self.strict_ops = <bint> state['strict_ops']
+        self.n_ops = len(self.operations)
+        self.n_prims = len(self.primitives)
+        self._op_to_idx = {op: i for i, op in enumerate(self.operations)}
+        self._prim_to_idx = {p: i for i, p in enumerate(self.primitives)}
+        self.root = _node_from_state(state['root'])
+
+    cpdef void replay_paths(self, list paths) except *:
+        """Replay a list of accepted construction paths (each a list of
+        (kind, idx) tuples) through update_path IN ORDER. Used by the MPI
+        deterministic-replay sync: every replica replays the identical
+        ordered list, so all copies stay bit-identical."""
+        cdef list p
+        for p in paths:
+            self.update_path(p)
+
+
+cdef dict _node_to_state(PolyaNode node):
+    """Recursive picklable snapshot of one PolyaNode."""
+    return {
+        'kind': node.kind,
+        'n_choices': int(node.n_choices),
+        'depth': int(node.depth),
+        'alphas': np.asarray(node.alphas, dtype=np.float64).copy(),
+        'alpha_total': float(node.alpha_total),
+        'children': {key: _node_to_state(child)
+                     for key, child in node.children.items()},
+    }
+
+
+cdef PolyaNode _node_from_state(dict s):
+    """Rebuild a PolyaNode (and its subtree) from _node_to_state output."""
+    cdef PolyaNode node = PolyaNode(
+        <str> s['kind'], <int> s['n_choices'], <int> s['depth'], alpha_0=1.0)
+    node.alphas = np.asarray(s['alphas'], dtype=np.float64).copy()
+    node.alpha_total = <double> s['alpha_total']
+    node.children = {key: _node_from_state(child)
+                     for key, child in (<dict> s['children']).items()}
+    return node

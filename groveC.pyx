@@ -253,6 +253,14 @@ cdef class Grove:
         # Optional Pólya tree prior. When None, _step behaves exactly as
         # before (no prior term, no adaptation).
         self.polya = polya
+        # Phase 2.12 (MPI sampling): when polya_defer is True, accepted
+        # construction paths are COLLECTED into _deferred_paths instead of
+        # immediately reinforcing the shared Polya. The MPI master gathers
+        # them each round and replays the same ordered list on every
+        # replica (deterministic replay), keeping all Theta copies
+        # bit-identical. Default False -> exact pre-2.12 behaviour.
+        self.polya_defer = False
+        self._deferred_paths = []
         
     def get_domain(self):
         return self.domain
@@ -808,9 +816,24 @@ cdef class Grove:
             self.acceptance_count += 1.0
             self.move_accepts[move_name] = self.move_accepts.get(move_name, 0) + 1
             if self.polya is not None and new_path is not None:
-                self.polya.update_path(new_path)
+                if self.polya_defer:
+                    # Phase 2.12: collect for the master's deterministic
+                    # replay instead of reinforcing immediately. Priors
+                    # keep using the last-synced Theta (delayed adaptation;
+                    # gamma_t -> 0 + containment still hold, Roberts &
+                    # Rosenthal 2007).
+                    self._deferred_paths.append(new_path)
+                else:
+                    self.polya.update_path(new_path)
             return True
         return False
+
+    cpdef list drain_deferred_paths(self):
+        """Phase 2.12: return and clear the accepted construction paths
+        collected while polya_defer was True. Order = acceptance order."""
+        cdef list out = self._deferred_paths
+        self._deferred_paths = []
+        return out
 
     cdef double _score_post(self, function_treeC.Tree cand,
                             cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -1894,6 +1917,48 @@ cdef class Grove:
         if np.isfinite(post):
             local_candidates.append((tree, post))
 
+
+# ---------------------------------------------------------------------------
+# Phase 2.12 (MPI sampling): tree wire format
+# ---------------------------------------------------------------------------
+# Same serialization the burn-in spawn path uses: (sympy_expr, name_values,
+# post). Trees are cdef classes (not picklable); sympy exprs + dicts of
+# floats are. Rebuild goes through function_treeC._expr_to_tree, then param
+# values, sigma and g_tau are restored. A rebuilt tree whose description
+# does not round-trip is reported as None and the caller must treat the
+# exchange as REJECTED (self-loop; target-preserving).
+cdef tuple _tree_to_wire(function_treeC.Tree tree, double post):
+    return (tree.root.function.expr,
+            dict(tree.name_values) if tree.name_values else {},
+            float(post))
+
+
+cdef function_treeC.Tree _tree_from_wire(object expr, dict name_values,
+                                         object domain, list funcs,
+                                         object sigma, double g_tau):
+    cdef function_treeC.Tree tree
+    cdef function_treeC.Node param
+    cdef str desc
+    try:
+        tree = function_treeC._expr_to_tree(expr, domain, funcs)
+    except Exception:
+        return None
+    if tree is None:
+        return None
+    if name_values:
+        for param in tree.params:
+            desc = param.get_fun().get_description()
+            if desc in name_values:
+                param.set_value(<double> name_values[desc])
+    tree.set_sigma(sigma)
+    tree.set_g_tau(g_tau)
+    tree.tree_update(tree.get_root())
+    # Round-trip fidelity check (same guard the burn-in spawn path uses).
+    if tree.tree_get_description() != str(expr):
+        return None
+    return tree
+
+
 cdef class Forest:
     """
     Evolutionary Monte Carlo population of Groves at different temperatures
@@ -1995,6 +2060,25 @@ cdef class Forest:
                       seed=int(child_seeds[g].generate_state(1)[0]),
                       g_tau=g_tau, adapt_moves=adapt_moves)
             )
+        # Phase 2.12 (MPI sampling): stash the Grove constructor arguments so
+        # run_mpi_spawn can ship them to spawned workers, which rebuild
+        # structurally identical Groves in their own processes. Purely
+        # additive; nothing else reads this.
+        self._ctor = {
+            'x': np.asarray(x, dtype=np.float64),
+            'size': size_per_grove,
+            'depth': depth,
+            'funcs': list(funcs),
+            'operations': list(operations),
+            'sigma': sigma,
+            'Npars': Npars,
+            'init_value': init_value,
+            'base_temp': base_temp,
+            'lambda_reg': lambda_reg,
+            'use_gradients': use_gradients,
+            'g_tau': g_tau,
+            'adapt_moves': adapt_moves,
+        }
 
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove):
         """Mutation phase: run within-grove MH in each grove independently."""
@@ -2141,6 +2225,295 @@ cdef class Forest:
         if self._attempt_crossover_pair(g, y):
             return 1
         return 0
+
+    # ------------------------------------------------------------------
+    # Phase 2.12: MPI-parallel EMC sampling loop (spawn model)
+    # ------------------------------------------------------------------
+    cpdef dict run_mpi_spawn(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                             int n_rounds, int n_steps_per_round,
+                             object seed=None,
+                             object max_tree_depth=None,
+                             object subtree_rebuild_max_height=None):
+        """Run the EMC loop with ONE spawned MPI worker per temperature rung.
+
+        Mirrors the serial usage pattern
+            for r in range(n_rounds):
+                forest.run_all(y, n_steps_per_round)
+                forest.attempt_swaps(y)
+                forest.attempt_crossovers(y)
+        but the mutation phase (the expensive part: BIC scoring + scipy
+        optimize per step) runs CONCURRENTLY, one worker process per grove.
+        Burn-in is untouched: this parallelizes only the sampling loop.
+
+        Design (all rigor-critical pieces):
+          * PERSISTENT workers: each worker builds one Grove once (from the
+            same ctor args + the master's CURRENT trees, shipped in the
+            startup config) and owns it for the whole run. No per-round
+            grove serialization.
+          * SHARED Polya by deterministic replay: workers run with
+            polya_defer=True (accepted paths collected, not applied). Each
+            round the master gathers all paths (ordered by rank), replays
+            them into ITS Polya, then broadcasts the same ordered list;
+            every worker replays it identically -> all Theta replicas stay
+            bit-identical. Within-round priors use the last-synced Theta
+            (delayed adaptation: gamma_t -> 0 and containment still hold).
+            The master's vocabulary is frozen up-front (parameter names
+            pre-registered) so ('kind', idx) tuples mean the same thing on
+            every replica.
+          * Exchange + crossover are computed ON THE MASTER with the synced
+            Theta and the master RNG, using exactly the serial acceptance
+            forms (_attempt_swap_pair / _attempt_crossover_pair math).
+            Trees cross the wire as (sympy expr, name_values, post) — the
+            burn-in spawn format — and any rebuild-fidelity failure turns
+            the exchange into a REJECT (self-loop; target-preserving).
+          * Control flow is bcast-driven (every worker sees every command;
+            only the addressed rank acts on point-to-point pieces), so no
+            interleaving can deadlock.
+
+        Returns a stats dict. On exit the master's self.groves hold the
+        final trees/posteriors and self.polya the final Theta, so all
+        downstream code (best_tree, ...) works unchanged.
+        """
+        cdef int G = len(self.groves)
+        if G < 2:
+            raise ValueError("run_mpi_spawn needs >= 2 temperature rungs")
+        cdef Grove g0 = self.groves[0]
+
+        # --- Freeze the Polya vocabulary so path indices are stable ------
+        # Pre-register a generous fixed parameter-name pool BEFORE the state
+        # snapshot. Workers then never auto-register mid-round, so the
+        # ('kind', idx) mapping is identical on every replica for the whole
+        # run (Phase 1.5 growth-invariance makes the pre-registration
+        # well-defined).
+        cdef list param_pool = [f"a{k}" for k in range(32)] + \
+                               [f"b{k}" for k in range(32)]
+        if self.polya is not None:
+            self.polya.add_primitives(param_pool)
+
+        # --- Per-worker seeds (reproducible from `seed`) ------------------
+        # NB: use `ss` (untyped object) here, NOT `s` -- `s` is declared
+        # `cdef int` below and Cython hoists that to function scope, so
+        # iterating SeedSequence objects into `s` raises "an integer is
+        # required".
+        seed_seq = np.random.SeedSequence(seed)
+        worker_seed_children = seed_seq.spawn(G)
+        cdef list worker_seeds = [
+            int(ss.generate_state(1)[0]) for ss in worker_seed_children]
+
+        # --- Ship the master's CURRENT trees so workers start exactly here
+        cdef list init_trees = []      # per grove: list of wire tuples
+        cdef Grove gr
+        cdef int gidx, s
+        cdef function_treeC.Tree t
+        for gidx in range(G):
+            gr = self.groves[gidx]
+            wires = []
+            for s in range(gr.size):
+                t = gr.trees[s]
+                wires.append(_tree_to_wire(
+                    t, float(gr.root_posteriors[s])
+                    if np.isfinite(gr.root_posteriors[s]) else -1.0e300))
+            init_trees.append(wires)
+
+        # --- Spawn -------------------------------------------------------
+        intercomm = MPI.COMM_SELF.Spawn(
+            sys.executable,
+            args=["-c", "from mpi_worker import sampler_main; sampler_main()"],
+            maxprocs=G)
+
+        cdef dict config = {
+            'ctor': self._ctor,
+            'y': np.asarray(y, dtype=np.float64),
+            'temperatures': np.asarray(self.temperatures, dtype=np.float64),
+            'worker_seeds': worker_seeds,
+            'polya_state': (self.polya.get_state()
+                            if self.polya is not None else None),
+            'init_trees': init_trees,
+            'max_tree_depth': max_tree_depth,
+            'subtree_rebuild_max_height': subtree_rebuild_max_height,
+        }
+        intercomm.bcast(config, root=MPI.ROOT)
+
+        # --- Master-side accumulators -------------------------------------
+        # Each round is a pure COLLECTIVE cycle, exactly like
+        # _burn_in_stage2_parallel_spawn: bcast a command, GATHER every
+        # worker's trees (+ its accepted Polya paths), do the deterministic
+        # replay and one swap / one crossover LOCALLY on the wires, then
+        # SCATTER the (possibly patched) trees plus the global path list back.
+        # No point-to-point send/recv, so no message-ordering can deadlock.
+        cdef int n_swap_acc = 0
+        cdef int n_x_acc = 0
+        cdef int n_paths_total = 0
+        cdef int rnd, gsel, i, j
+        cdef list replies, all_paths, all_wires, outgoing
+        cdef object wireA, wireB
+        cdef function_treeC.Tree treeA, treeB
+        cdef double Ua, Ub, delta, log_alpha, lqf, lqr
+        cdef double postA_new, postB_new
+        cdef double priorA_old, priorB_old, priorA_new, priorB_new
+        cdef double u
+        cdef Grove A, B
+        cdef object domain = g0.domain
+        cdef list funcs = self._ctor['funcs']
+        # Effective sigma: Grove.__init__ maps sigma=None -> 1.0, and the
+        # master's live trees carry THAT value; wire rebuilds must match.
+        cdef object sigma = g0.sigma
+        cdef double g_tau = float(g0.g_tau)
+
+        try:
+            for rnd in range(n_rounds):
+                # ---- 1. mutation phase (parallel) + gather all trees ----
+                intercomm.bcast(('run', n_steps_per_round), root=MPI.ROOT)
+                replies = intercomm.gather(None, root=MPI.ROOT)
+                # reply g = (deferred_paths_g, [wire per slot])
+                all_paths = []
+                all_wires = [None] * G
+                for gidx in range(G):
+                    all_paths.extend(replies[gidx][0])
+                    all_wires[gidx] = list(replies[gidx][1])
+                n_paths_total += len(all_paths)
+
+                # ---- 2. Polya deterministic replay on the master --------
+                # Workers replay the same list (shipped in the scatter
+                # below), so both advance the shared urn identically.
+                if self.polya is not None and all_paths:
+                    self.polya.replay_paths(all_paths)
+
+                # Local swap + crossover are guarded so a compute error can
+                # never skip the scatter that keeps the ranks in lockstep.
+                try:
+                    # ---- 3. one swap attempt (mirrors ------------------
+                    #         _attempt_swap_pair) -------------------------
+                    gsel = self._py_rng.randrange(G - 1)
+                    A = self.groves[gsel]
+                    B = self.groves[gsel + 1]
+                    if (A.T > 0.0 and B.T > 0.0
+                            and all_wires[gsel] and all_wires[gsel + 1]):
+                        i = self._py_rng.randrange(min(A.size, B.size))
+                        wireA = all_wires[gsel][i]
+                        wireB = all_wires[gsel + 1][i]
+                        treeA = _tree_from_wire(wireA[0], wireA[1],
+                                                domain, funcs, sigma, g_tau)
+                        treeB = _tree_from_wire(wireB[0], wireB[1],
+                                                domain, funcs, sigma, g_tau)
+                        if treeA is not None and treeB is not None:
+                            priorA_old = 0.0
+                            priorB_old = 0.0
+                            if self.polya is not None:
+                                priorA_old = self.polya.log_prior(
+                                    self.polya.extract_path(treeA.get_root()))
+                                priorB_old = self.polya.log_prior(
+                                    self.polya.extract_path(treeB.get_root()))
+                            Ua = (<double> wireA[2]) + priorA_old
+                            Ub = (<double> wireB[2]) + priorB_old
+                            delta = (1.0 / A.T - 1.0 / B.T) * (Ub - Ua)
+                            if self._py_rng.random() < min(1.0, _safe_exp(delta)):
+                                # A swap is just exchanging the two wire tuples.
+                                all_wires[gsel][i] = wireB
+                                all_wires[gsel + 1][i] = wireA
+                                n_swap_acc += 1
+
+                    # ---- 4. one crossover attempt (mirrors --------------
+                    #         _attempt_crossover_pair) --------------------
+                    gsel = self._py_rng.randrange(G - 1)
+                    A = self.groves[gsel]
+                    B = self.groves[gsel + 1]
+                    if (A.T > 0.0 and B.T > 0.0
+                            and all_wires[gsel] and all_wires[gsel + 1]):
+                        i = self._py_rng.randrange(A.size)
+                        j = self._py_rng.randrange(B.size)
+                        wireA = all_wires[gsel][i]
+                        wireB = all_wires[gsel + 1][j]
+                        treeA = _tree_from_wire(wireA[0], wireA[1],
+                                                domain, funcs, sigma, g_tau)
+                        treeB = _tree_from_wire(wireB[0], wireB[1],
+                                                domain, funcs, sigma, g_tau)
+                        if treeA is not None and treeB is not None:
+                            priorA_old = 0.0
+                            priorB_old = 0.0
+                            if self.polya is not None:
+                                priorA_old = self.polya.log_prior(
+                                    self.polya.extract_path(treeA.get_root()))
+                                priorB_old = self.polya.log_prior(
+                                    self.polya.extract_path(treeB.get_root()))
+                            # Same RNG discipline as the serial path.
+                            gp_movesC.set_rng(self._py_rng, self._np_rng)
+                            function_treeC.set_rng(self._py_rng, self._np_rng)
+                            lqf, lqr = gp_movesC.subtree_crossover(treeA, treeB)
+                            if np.isfinite(lqf) and np.isfinite(lqr):
+                                postA_new = A._score_post(treeA, y, True)
+                                postB_new = B._score_post(treeB, y, True)
+                                if postA_new > -1.0e299 and postB_new > -1.0e299:
+                                    priorA_new = 0.0
+                                    priorB_new = 0.0
+                                    if self.polya is not None:
+                                        priorA_new = self.polya.log_prior(
+                                            self.polya.extract_path(treeA.get_root()))
+                                        priorB_new = self.polya.log_prior(
+                                            self.polya.extract_path(treeB.get_root()))
+                                    log_alpha = (
+                                        (postA_new + priorA_new
+                                         - (<double> wireA[2]) - priorA_old) / A.T
+                                        + (postB_new + priorB_new
+                                           - (<double> wireB[2]) - priorB_old) / B.T
+                                        + (lqr - lqf))
+                                    u = self._py_rng.random()
+                                    if log_alpha >= 0.0 or (u > 0.0 and
+                                                            np.log(u) < log_alpha):
+                                        # Round-trip check the CHILD wires on
+                                        # the master BEFORE installing:
+                                        # crossover can produce expressions
+                                        # that do not survive _expr_to_tree
+                                        # (the burn-in sees the same and
+                                        # skips). The workers rebuild the
+                                        # identical wire, so a failure here
+                                        # would desync a worker. Print + skip,
+                                        # no exceptions (a skip is a reject).
+                                        wireA = _tree_to_wire(treeA, postA_new)
+                                        wireB = _tree_to_wire(treeB, postB_new)
+                                        if (_tree_from_wire(wireA[0], wireA[1],
+                                                            domain, funcs, sigma,
+                                                            g_tau) is None or
+                                            _tree_from_wire(wireB[0], wireB[1],
+                                                            domain, funcs, sigma,
+                                                            g_tau) is None):
+                                            print("[run_mpi_spawn] crossover "
+                                                  "child failed wire round-trip; "
+                                                  "skipping exchange (round %d)"
+                                                  % rnd)
+                                        else:
+                                            all_wires[gsel][i] = wireA
+                                            all_wires[gsel + 1][j] = wireB
+                                            n_x_acc += 1
+                except Exception as _cerr:
+                    print("[run_mpi_spawn] round %d compute error: %s"
+                          % (rnd, _cerr))
+
+                # ---- 5. scatter updated trees + the global path list ----
+                # outgoing[g] -> worker g: (its trees, all accepted paths).
+                outgoing = [(all_wires[gidx], all_paths) for gidx in range(G)]
+                intercomm.scatter(outgoing, root=MPI.ROOT)
+        finally:
+            # ---- collect final states + shut workers down ---------------
+            intercomm.bcast(('stop',), root=MPI.ROOT)
+            final_states = intercomm.gather(None, root=MPI.ROOT)
+            for gidx in range(G):
+                gr = self.groves[gidx]
+                wires = final_states[gidx]
+                for s in range(min(gr.size, len(wires))):
+                    t = _tree_from_wire(wires[s][0], wires[s][1],
+                                        domain, funcs, sigma, g_tau)
+                    if t is not None:
+                        gr.trees[s] = t
+                        gr.root_posteriors[s] = wires[s][2]
+            intercomm.Disconnect()
+
+        return {
+            'rounds': n_rounds,
+            'swap_accepted': n_swap_acc,
+            'crossover_accepted': n_x_acc,
+            'polya_paths_replayed': n_paths_total,
+        }
 
     cpdef function_treeC.Tree best_tree(self):
         """Best (highest BIC posterior) tree across all groves. Caller should

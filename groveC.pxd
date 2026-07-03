@@ -57,6 +57,9 @@ cdef class Grove:
     cdef public double adapt_target
     cdef public cnp.ndarray _move_logits
     cdef public long _adapt_t
+    # Phase 2.12 (MPI sampling): defer Polya reinforcement for replay-sync.
+    cdef public bint polya_defer
+    cdef public list _deferred_paths
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
@@ -89,6 +92,7 @@ cdef class Grove:
                             bint optimize=*)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
     cpdef dict move_stats(self)
+    cpdef list drain_deferred_paths(self)
     cdef _step_parameter_refresh(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
 
     cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
@@ -135,12 +139,24 @@ cdef class Forest:
     cdef public polya_treeC.PolyaTree polya
     cdef object _py_rng
     cdef object _np_rng
+    # Phase 2.12 (MPI sampling): Grove ctor args for spawned workers.
+    cdef dict _ctor
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove)
     cpdef compute_posteriors_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
     cdef bint _attempt_swap_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef int attempt_swaps(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cdef bint _attempt_crossover_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cpdef int attempt_crossovers(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    cpdef dict run_mpi_spawn(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                             int n_rounds, int n_steps_per_round,
+                             object seed=*,
+                             object max_tree_depth=*,
+                             object subtree_rebuild_max_height=*)
     cpdef function_treeC.Tree best_tree(self)
+
+cdef tuple _tree_to_wire(function_treeC.Tree tree, double post)
+cdef function_treeC.Tree _tree_from_wire(object expr, dict name_values,
+                                         object domain, list funcs,
+                                         object sigma, double g_tau)
 
 cdef _bis2_parallel_helper(object x)

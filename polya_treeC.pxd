@@ -46,3 +46,11 @@ cdef class PolyaTree:
 
     cpdef assert_covers(self, function_treeC.Node root_node)
     cdef _assert_covers_recursive(self, function_treeC.Node node)
+
+    # Phase 2.12 (MPI sampling): picklable snapshot / restore / replay.
+    cpdef dict get_state(self)
+    cpdef void set_state(self, dict state) except *
+    cpdef void replay_paths(self, list paths) except *
+
+cdef dict _node_to_state(PolyaNode node)
+cdef PolyaNode _node_from_state(dict s)

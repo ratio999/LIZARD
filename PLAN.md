@@ -294,6 +294,50 @@ subtree-rebuild height cap needed).
 - ⏳ PENDING: recompile (gp_movesC + groveC) then run `python3 test_phase23.py`
   (and the full suite). ETR is ACTIVE in the default kernel once compiled.
 
+### 2.12 MPI parallelization of the SAMPLING loop (spawn model) ✅ IMPLEMENTED (pending compile+run)
+Parallelizes the EMC sampling loop only — all four burn-in implementations and
+`mpi_worker.worker_main` are UNTOUCHED. Mirrors the burn-in spawn pattern:
+`MPI.COMM_SELF.Spawn` (no mpirun needed), config bcast, gather replies, and the
+same tree wire format (sympy expr, name_values, post) rebuilt via `_expr_to_tree`.
+- **Topology**: `Forest.run_mpi_spawn(y, n_rounds, n_steps_per_round, seed=,
+  max_tree_depth=, subtree_rebuild_max_height=)` spawns ONE worker per
+  temperature rung (`mpi_worker.sampler_main`). Each worker builds and
+  persistently OWNS one Grove (same ctor args via new `Forest._ctor` stash +
+  the master's CURRENT trees shipped at startup). The mutation phase (BIC
+  scoring + scipy optimize — the dominant cost) runs concurrently; each round
+  the master coordinates ONE swap + ONE crossover attempt.
+- **Shared-Θ rigor (R1) by deterministic replay**: new `Grove.polya_defer`
+  flag (default False = zero serial change): accepted construction paths are
+  COLLECTED (`drain_deferred_paths`) instead of applied. Master gathers all
+  paths each round (ordered by rank), replays into its Θ
+  (`PolyaTree.replay_paths`), and broadcasts the same ordered list; every
+  worker replays identically ⇒ all Θ replicas bit-identical. Within-round
+  priors use the last-synced Θ = DELAYED adaptation (γ_t→0 + containment
+  still hold; Roberts & Rosenthal 2007). Vocabulary is frozen up-front
+  (a0..a31/b0..b31 pre-registered) so ('kind', idx) tuples mean the same on
+  every replica. New `PolyaTree.get_state()/set_state()` ship the (possibly
+  evolved) master Θ to workers at startup.
+- **Exchange/crossover on the master** with the synced Θ and master RNG, using
+  exactly the serial acceptance forms. Control flow is bcast-driven
+  (('run',n) / ('sync',paths) / ('get_tree',rank,slot) /
+  ('set_tree',rank,slot,wire,post) / ('stop',)) ⇒ deadlock-free by
+  construction; workers answer collectives even on internal errors (lesson
+  from the burn-in worker). Rebuild-fidelity failure on any wire tree turns
+  the exchange into a REJECT (self-loop; target-preserving).
+- On exit the master's `self.groves`/`self.polya` hold the final state, so
+  `best_tree()` etc. work unchanged. Returns stats dict (swap/xover accepts,
+  paths replayed).
+- **Test**: `test_phase2mpi.py` — (a) end-to-end integration (valid trees,
+  finite posts, best_tree), (b) replay fingerprint `t_after == t_before +
+  paths_replayed`, (c) exploration progress, (d) serial-path regression guard
+  (polya_defer defaults off; serial loop unchanged).
+- ⏳ PENDING: recompile (polya_treeC + groveC + mpi_worker) then
+  `python3 test_phase2mpi.py`.
+- Known limits (documented, acceptable v1): worker adapt_moves state is not
+  synced back at 'stop'; swap/crossover remain serial per round (cheap);
+  bit-parity with the serial trajectory is NOT expected (different but equally
+  valid random schedule).
+
 ---
 
 ## Phase 2.9 — Evolutionary Monte Carlo: population-coherent moves (rigorous, Bayesian)
@@ -512,7 +556,6 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 - ✅ perf: lambdify caching in real_functionC.from_string; vectorised conversion
 - ✅ 2.8 Move-rate calibration — feature done + test_phase28.py written
 - ✅ 2.11 ETR move (etr_mutation) implemented + wired (8th move) + density tests
-- ⏸ 2.7(h) Canonical dedup in _bic_cache — RE-SCOPED optional (sympy expand/cancel unsafe)
-- ⏳ 3.1 dead-code removal (legacy_* moves, root_replacement, replace_with_subtree)
-- ⏳ 3.4 MPI keep/drop decision
+- ⏳ 3.1 MPI keep/drop decision
+- ⏳ 3.4 dead-code removal (legacy_* moves, root_replacement, replace_with_subtree)
 - ⏳ Phase 4 experiments (4.1 sanity → 4.3 ablations → 4.2 hero) — gate now open after verification
