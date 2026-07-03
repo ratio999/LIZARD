@@ -1,4 +1,4 @@
-[](img/LIZARD_CODICE.png)
+![](img/LIZARD_CODICE.png)
 
 ## Installation
 ### Cloning
