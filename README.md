@@ -1,4 +1,4 @@
-# Machine Scientist
+[](img/LIZARD_CODICE.png)
 
 ## Installation
 ### Cloning
