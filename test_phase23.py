@@ -1463,6 +1463,93 @@ def test_3_3g_polya_auto_register_unknown_leaf():
 
 
 # ---------------------------------------------------------------------------
+# Phase 2.13(a1) regression: two-topology occupancy (THEORY_2_13.md §1.4/§1.7)
+# ---------------------------------------------------------------------------
+def test_a1_toy_occupancy(n_steps=4000, theta_hats=(2.0, 4.0), tau=0.5,
+                          tol=0.05, seed=20260709):
+    """The sharpest regression check for fix 2.13(a1).
+
+    Chain: two topologies under point_mutation with M = 1 function --
+        T0 = single FUNCTION leaf  sin(x)
+        T1 = single PARAMETER leaf a0
+    Target: UNIFORM over {T0, T1} (dtarget = 0 by construction; no BIC, no
+    Polya). MH acceptance is then exp(lqr - lqf) alone. After every accepted
+    birth we overwrite the parameter value with a fixed theta_hat -- this
+    simulates the optimizer projection theta* -> theta_hat(T), which is the
+    exact mechanism that broke detailed balance pre-fix.
+
+    Post-fix (structural densities, M = 1): birth = (0, -log 1) = (0, 0) and
+    death = (0, 0), so every kind-flip is accepted and the chain must sit at
+    50/50 occupancy REGARDLESS of theta_hat and tau.
+
+    Pre-fix (g-densities): death acceptance was g(theta_hat) << 1 for
+    theta_hat in the tail of N(0, tau'^2), so the chain HOARDED the
+    parameter state -- e.g. theta_hat = 2, tau' = 1 gives stationary
+    occupancy ~ 1/(1 + phi(2)) ~ 0.949, and theta_hat = 4 gives ~ 0.9999.
+    Both are far outside the tolerance band around 0.5, so this test fails
+    loudly on the old code and pins the fix.
+
+    Statistics: with M = 1 and p_cross = 0.5 the flip probability per step
+    is 1/2 from either state, so successive states are ~independent;
+    sd(freq) ~ 0.5/sqrt(n_steps) ~ 0.008 for n_steps = 4000, and tol = 0.05
+    is a >6-sigma band (no flakiness).
+    """
+    print("[a1.occupancy] two-topology 50/50 occupancy, theta_hats=%r"
+          % (theta_hats,))
+    from copy import deepcopy
+    from real_functionC import _domain_fixer
+    x, _ = _make_xy(n=16, seed=31)
+    domain = _domain_fixer(x)
+    x_sym = sp.Symbol('x')
+    funcs_M1 = ["sin(x)"]     # M = 1 -> all structural corrections are 0
+
+    for theta_hat in theta_hats:
+        rng_accept = random.Random(seed + int(theta_hat * 1000.0))
+        _seed_rngs(seed + int(theta_hat))
+        state = expr_to_tree(sp.sin(x_sym), domain, funcs_M1)
+        state.set_g_tau(tau)
+
+        n_in_param = 0
+        for _t in range(n_steps):
+            cand = deepcopy(state)
+            # NB: Tree.__deepcopy__ does NOT propagate g_tau (it re-defaults
+            # to 1.0 on the copy) -- re-install so the warm-start draw uses
+            # the configured tau. Post-a1 this affects NO density; it only
+            # keeps the "regardless of tau" claim honest. (Quirk logged in
+            # AUDIT_2_13_FIXES.md as candidate item (m).)
+            cand.set_g_tau(tau)
+            lqf, lqr = point_mutation(cand, funcs_M1, _OPS)
+
+            # Uniform target over the two topologies: dtarget = 0.
+            log_alpha = lqr - lqf
+            u = rng_accept.random()
+            if log_alpha >= 0.0 or (u > 0.0 and math.log(u) < log_alpha):
+                state = cand
+                # Optimizer-projection surrogate: any parameter leaf snaps
+                # to theta_hat (deterministic per-topology statistic).
+                root = state.get_root()
+                if root.is_leaf() and root.is_param():
+                    root.set_value(theta_hat)
+
+            if state.get_root().is_param():
+                n_in_param += 1
+
+        freq = n_in_param / float(n_steps)
+        assert 0 < n_in_param < n_steps, (
+            "[theta_hat=%g] chain never left one state (n_in_param=%d) -- "
+            "kind-flips are not firing" % (theta_hat, n_in_param))
+        assert abs(freq - 0.5) <= tol, (
+            "[theta_hat=%g] occupancy %.4f is outside 0.5 +/- %.2f: the "
+            "topology marginal depends on theta_hat -- the a1 structural-"
+            "density contract is violated (g-terms back in the proposal "
+            "corrections?)" % (theta_hat, freq, tol))
+        print("[a1.occupancy]   theta_hat=%g -> freq(param)=%.4f  OK"
+              % (theta_hat, freq))
+
+    print("[a1.occupancy] PASS  (occupancy independent of theta_hat/tau)")
+
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     # OpenMP / BLAS threading affects bit-equality on some routines.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -1492,4 +1579,5 @@ if __name__ == "__main__":
     test_3_3g_polya_log_prior_analytic()
     test_3_3g_polya_update_changes_prior()
     test_3_3g_polya_auto_register_unknown_leaf()
-    print("\nAll Phase 3.3 (a)+(b)+(c)+(d)+(e)+(f)+(g) tests passed.")
+    test_a1_toy_occupancy()
+    print("\nAll Phase 3.3 (a)+(b)+(c)+(d)+(e)+(f)+(g) + 2.13(a1) tests passed.")
