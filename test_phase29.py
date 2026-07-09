@@ -12,8 +12,13 @@ Covers the two new cross-temperature operators wired into `groveC.Forest`:
       ratio when the crossover is a whole-tree swap (algebraic identity);
   (c) statistical target-invariance: adding crossover to a mutation+swap
       sampler does not change the (fixed) cold-chain stationary distribution;
-  (d) R2 within-grove irreducibility: the mutation move-set connects the tree
-      lattice both upward (growth) and downward (shrink) and explores broadly.
+  (d) R2 within-grove irreducibility (dynamic form): the mutation move-set
+      connects the tree lattice both upward (growth) and downward (shrink)
+      and explores broadly;
+  (d2) R2 STRONG form (PLAN §2.9 R2(b) deliverable): on a 38-state
+      micro-space (M=1, O=1, depth cap 2) the kernel achieves EXHAUSTIVE
+      support coverage from a single-leaf start AND never leaves the
+      support (closure). Proof sketch: THEORY_2_13.md §4.
 
 Design references (locked decisions):
   R1  ONE shared PolyaTree across all groves, never frozen; only within-grove
@@ -352,8 +357,7 @@ def test_2_9d_within_chain_irreducibility(n_steps=800, seeds=(0, 1, 2, 3),
                 _sd(4)
             if _sr:
                 _sr(2)
-            for st in range(n_steps):
-                print(st)
+            for _st in range(n_steps):
                 g.run(y, 1)
                 tr = g.trees[0]
                 sigs.add(_structure_sig(tr))
@@ -415,6 +419,145 @@ def test_2_9d_within_chain_irreducibility(n_steps=800, seeds=(0, 1, 2, 3),
 
 
 # ---------------------------------------------------------------------------
+# (d2) R2 STRONG form: exhaustive support coverage on a micro state space
+# (the PLAN.md §2.9 R2(b) deliverable; proof sketch in THEORY_2_13.md §4)
+# ---------------------------------------------------------------------------
+_MICRO_FUNCS = ["x"]        # M = 1 function
+_MICRO_OPS = ["+"]          # O = 1 op
+_MICRO_DEPTH_CAP = 2        # tree depth (leaf = 0) capped at 2
+
+
+def _parse_sig(node):
+    """EXACT parse-tree signature built from the Node structure itself.
+
+    tree_get_description() is UNUSABLE for this test: sympy canonicalizes
+    the expression string (x+x -> 2*x, commutative argument sorting), which
+    conflates structurally distinct parse trees. The chain's state space IS
+    the parse-tree space (prior on parses, not equivalence classes), so the
+    signature must come from the raw node structure."""
+    if node.is_leaf():
+        return "θ" if node.is_param() else "x"
+    return "(%s%s%s)" % (_parse_sig(node.get_left()), node.get_op(),
+                         _parse_sig(node.get_right()))
+
+
+def _enumerate_support(depth_cap):
+    """Every parse-structure with leaves in {x, θ}, ops in _MICRO_OPS and
+    depth <= depth_cap. Recursion: E(0) = {x, θ};
+    E(d) = E(d-1) ∪ {(l op r) : l, r ∈ E(d-1)}. For M=1, O=1, cap=2 this is
+    2 -> 6 -> 38 states."""
+    level = {"x", "θ"}
+    for _ in range(depth_cap):
+        level = level | {"(%s%s%s)" % (l, op, r)
+                         for op in _MICRO_OPS for l in level for r in level}
+    return level
+
+
+def test_2_9d2_full_support_coverage(max_steps=12000, seeds=(11, 12, 13)):
+    """R2 strong form: on a micro state space (M=1, O=1, depth cap 2 ->
+    exactly 38 parse-structures) the within-grove mutation kernel visits
+    EVERY state from a single-leaf start, and NEVER leaves the support.
+
+    Driver
+    ------
+    The raw PROPOSAL kernel with an always-accept-on-support rule: accept
+    iff the candidate is valid and log_q_rev is finite. Justification: an
+    MH chain with any strictly positive bounded target accepts every
+    on-support proposal with positive probability, so
+        reachability(always-accept chain) == reachability(MH chain).
+    Driving the kernel directly keeps the test target-free (no BIC
+    optimizer, no Polya) — a real Grove concentrates on good fits and can
+    take astronomically long to visit poor-fit states even though they are
+    reachable, which would make a coverage assertion flaky.
+
+    Assertions (two-sided, set EQUALITY per seed)
+    ---------------------------------------------
+      * coverage  (visited ⊇ support): the irreducibility claim proper;
+      * closure   (visited ⊆ support, checked EVERY step with the offending
+        move named): the depth cap and the Phase 2.13(f) vocabulary
+        threading — nothing outside the capped, vocabulary-consistent
+        space is ever produced.
+
+    Proof sketch that coverage MUST succeed (THEORY_2_13.md §4): ETR alone
+    connects all shapes through the single leaf (2-ET -> 0-ET reductions
+    down, 0-ET -> 2-ET constructions up), and point_mutation's birth/death
+    connects the leaf kinds; every other move only adds edges.
+    """
+    print("[2.9d2] R2 strong: exhaustive coverage of the %d-state micro-space"
+          % len(_enumerate_support(_MICRO_DEPTH_CAP)))
+    from copy import deepcopy
+    import function_treeC
+    x, _ = _make_xy(n=16, seed=9)
+    support = _enumerate_support(_MICRO_DEPTH_CAP)
+    assert len(support) == 38, \
+        "micro-space enumeration changed: %d states" % len(support)
+    x_sym = sp.Symbol("x")
+
+    moves = (
+        ("point",     lambda t: gp_movesC.point_mutation(t, _MICRO_FUNCS, _MICRO_OPS)),
+        ("leafhoist", lambda t: gp_movesC.leaf_hoist(t, _MICRO_FUNCS, _MICRO_OPS)),
+        ("inthoist",  lambda t: gp_movesC.internal_hoist(t, _MICRO_FUNCS, _MICRO_OPS)),
+        ("add",       lambda t: gp_movesC.add_node(t, _MICRO_FUNCS, _MICRO_OPS)),
+        ("split",     lambda t: gp_movesC.split(t, _MICRO_FUNCS, _MICRO_OPS)),
+        ("subtree",   lambda t: gp_movesC.subtree_mutation(t, _MICRO_FUNCS, _MICRO_OPS)),
+        ("etr",       lambda t: gp_movesC.etr_mutation(t, _MICRO_FUNCS, _MICRO_OPS)),
+    )
+
+    # Depth caps: pin BOTH the total-depth cap (defines the finite support)
+    # and the subtree-rebuild height (bounds build_tree work). Save/restore.
+    _sd = getattr(gp_movesC, "set_max_tree_depth", None)
+    _gd = getattr(gp_movesC, "get_max_tree_depth", None)
+    _sr = getattr(gp_movesC, "set_subtree_rebuild_max_height", None)
+    _gr = getattr(gp_movesC, "get_subtree_rebuild_max_height", None)
+    _od = _gd() if _gd else None
+    _or = _gr() if _gr else None
+    try:
+        if _sd:
+            _sd(_MICRO_DEPTH_CAP)
+        if _sr:
+            _sr(_MICRO_DEPTH_CAP)
+        for seed in seeds:
+            drv = random.Random(seed)                     # move-choice + accepts
+            gp_movesC.set_rng(random.Random(seed + 1),
+                              np.random.default_rng(seed + 1))
+            function_treeC.set_rng(random.Random(seed + 2),
+                                   np.random.default_rng(seed + 2))
+            state = expr_to_tree(x_sym, x, _MICRO_FUNCS)  # single leaf 'x'
+            visited = {_parse_sig(state.get_root())}
+            steps_to_cover = None
+            for st in range(max_steps):
+                name, mv = moves[drv.randrange(len(moves))]
+                cand = deepcopy(state)
+                _lqf, lqr = mv(cand)
+                if math.isfinite(lqr) and cand.is_valid(x):
+                    state = cand
+                sig = _parse_sig(state.get_root())
+                assert sig in support, (
+                    "[seed=%d step=%d move=%s] chain LEFT the support: %r — "
+                    "depth-cap or vocabulary closure violated"
+                    % (seed, st, name, sig))
+                visited.add(sig)
+                if len(visited) == len(support):
+                    steps_to_cover = st + 1
+                    break
+            missing = support - visited
+            assert not missing, (
+                "[seed=%d] %d/%d states NEVER visited in %d steps: %s — "
+                "within-chain irreducibility violated (R2)"
+                % (seed, len(missing), len(support), max_steps,
+                   sorted(missing)[:8]))
+            print("[2.9d2]   seed=%d: full coverage of %d states in %d steps"
+                  % (seed, len(support), steps_to_cover))
+    finally:
+        if _sd and _od is not None:
+            _sd(_od)
+        if _sr and _or is not None:
+            _sr(_or)
+
+    print("[2.9d2] PASS  coverage == support (both inclusions) on all seeds")
+
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     # Keep BLAS/OpenMP single-threaded for reproducibility parity with the
     # rest of the suite.
@@ -426,4 +569,5 @@ if __name__ == "__main__":
     test_2_9b_crossover_reduces_to_swap()
     test_2_9c_crossover_target_invariance()
     test_2_9d_within_chain_irreducibility()
+    test_2_9d2_full_support_coverage()
     print("\nAll Phase 2.9 (Forest EMC) tests passed.")

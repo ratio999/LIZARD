@@ -577,7 +577,13 @@ second-order / documentation.
          already updates only slot i, donor untouched.)
        - Confirm the Polya prior is normalizable over tree space (proper => proper posterior).
 
-  (R2) DECIDED — add a WITHIN-CHAIN irreducibility lemma + a small connectivity test.
+  (R2) ✅ DONE 2026-07-09 (pending run) — lemma sketch: THEORY_2_13.md §4
+       (ETR carries connectivity through the single leaf; point_mutation the
+       labels; perfect-binary moves conserve parities, only add mixing).
+       Strong test: test_phase29 test_2_9d2_full_support_coverage (38-state
+       micro-space, set-equality coverage+closure, 3 seeds). Dynamic
+       companion: existing test_2_9d. Original spec follows:
+       add a WITHIN-CHAIN irreducibility lemma + a small connectivity test.
        The mutation move-set (point/subtree mutation, add_node/hoist, split, within-grove
        crossover) must connect the whole tree space: from any tree, every other tree is
        reachable in finitely many positive-probability moves. Crossover/exchange add
