@@ -491,12 +491,30 @@ second-order / documentation.
   for (a)), test_phase28, test_phase29, test_phase2mpi. (i)–(l) are
   docs/flags. Phase 4 remains gated until (a)–(e) land.
 
-  STATUS 2026-07-09: (a) ✅ IMPLEMENTED as (a1) — g-density terms removed
-  from _point_mutation birth/death, _eval_build_density, _etr_mutation;
-  θ~g draws retained as optimizer warm starts; test_phase23 3.3(b)/(c)
-  re-targeted to the structural contract. Pending recompile + full test run
-  on the Linux box. Formal derivation: THEORY_2_13.md §1. Technical change
-  log: AUDIT_2_13_FIXES.md. (b)–(e) still open.
+  STATUS 2026-07-09 (second batch): ALL FIVE BLOCKING FIXES IMPLEMENTED,
+  pending recompile + full test rerun on the Linux box.
+    (a) ✅ (a1) — g-density terms removed from _point_mutation birth/death,
+        _eval_build_density, _etr_mutation; θ~g draws kept as warm starts;
+        test_phase23 3.3(b)/(c) re-targeted. THEORY_2_13.md §1.
+    (b) ✅ (b1) — within-grove crossover is now a genuine PAIR move:
+        _propose returns the donor child, new Grove._step_pair_crossover
+        installs both with joint acceptance (ΔU_i + ΔU_j)/T + q_corr.
+        THEORY_2_13.md §2.
+    (c) ✅ — extract-then-score Pólya ordering at six sites (_step,
+        legacy_step, Forest swap/xover, MPI-master blocks, pair helper).
+        THEORY_2_13.md §3.1.
+    (d) ✅ — lazy NaN root_posteriors fill in _step via _score_post.
+    (e) ✅ — _propose max_attempts = 1 (invalid candidate = hard reject).
+        THEORY_2_13.md §3.2.
+    (f) ✅ (PROMOTED from second tier — prime suspect for the 2.8c
+        target-invariance failure, whose fixture uses a 4-op vocabulary) —
+        operations threaded through build_tree / Tree.__init__ /
+        _init_trees / _build_subtree_with_params / subtree_mutation;
+        default preserves the historical RNG stream bit-exactly; initial
+        trees now support-closed. THEORY_2_13.md §3.3.
+  Technical change log: AUDIT_2_13_FIXES.md. Once the suite passes
+  (incl. test_phase28 2.8c), the Phase 4 gate REOPENS; (g)(h) remain as
+  quality follow-ups, (i)–(l) docs-only.
 
 ---
 

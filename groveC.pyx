@@ -275,9 +275,14 @@ cdef class Grove:
                                                node_list[i], Npars, init_value, self.T,
                                                sigma=self.sigma, g_tau=self.g_tau)
             else:
+                # Phase 2.13(f): initial trees must be built from the
+                # kernel's own op vocabulary (support closure) — an
+                # out-of-vocabulary op in the start state could never be
+                # legally removed by any on-support move.
                 trees[i] = function_treeC.Tree(self.depth, self.funcs, self.domain,
                                                Npars=Npars, value=init_value, T=self.T,
-                                               sigma=self.sigma, g_tau=self.g_tau)
+                                               sigma=self.sigma, g_tau=self.g_tau,
+                                               operations=self.operations)
 
 
                 self.root_posteriors[i] = trees[i].log_marginal_bic(
@@ -485,20 +490,33 @@ cdef class Grove:
         self._move_logits[g] = val
         self._adapt_t += 1
 
-    cdef tuple _propose(self, int i, int max_attempts=2) :
+    cdef tuple _propose(self, int i, int max_attempts=1) :
         """
         Build a proposal from tree i using a move drawn from the temperature-dependent kernel.
         Returns a deepcopy candidate (original tree remains unchanged).
+
+        Phase 2.13(e): max_attempts MUST be 1. Retrying with a freshly drawn
+        move on a validity failure creates a proposal mixture that the
+        (lqf, lqr) bookkeeping does not account for (the returned densities
+        describe only the successful attempt), silently breaking detailed
+        balance. An invalid candidate is a hard REJECT (the None return path
+        in _step), which is exact.
         """
-        cdef function_treeC.Tree cand 
+        cdef function_treeC.Tree cand
+        # Phase 2.13(b1): for subtree_crossover the donor child is PART of
+        # the proposal (pair move). cand2 is the mutated donor deepcopy and
+        # donor_idx its slot; both are None/-1 for every other move.
+        cdef function_treeC.Tree cand2
         cdef str move_name
         cdef dict kwargs
         cdef int attempts = 0
-        cdef int donor_idx
+        cdef int donor_idx = -1
         cdef double lqf, lqr
 
         while attempts < max_attempts:
             cand = deepcopy(self.trees[i])
+            cand2 = None
+            donor_idx = -1
             move_name, kwargs = self._choose_move()
             if move_name == "point_mutation":
                 lqf, lqr = gp_movesC.point_mutation(
@@ -517,16 +535,23 @@ cdef class Grove:
                     cand, self.funcs, kwargs.get("operations", None))
             elif move_name == "subtree_mutation":
                     #print(kwargs.get('random_depth', False))
-                lqf, lqr = gp_movesC.subtree_mutation(cand, self.funcs)
-                                        #kwargs.get("random_depth", False)) USED ONLY IF LEGACY SUBTREE
+                # Phase 2.13(f): pass the kernel's op vocabulary so the
+                # rebuild samples from it (support closure + exact fwd/rev
+                # build-factor cancellation).
+                lqf, lqr = gp_movesC.subtree_mutation(cand, self.funcs,
+                                                      self.operations)
             elif move_name == "subtree_crossover":
-                # pick a donor tree (not i), deep-copied to keep original intact
+                # Phase 2.13(b1): pick a donor slot (not i); BOTH children
+                # are kept and returned. Installing only slot i's child (the
+                # pre-2.13 behaviour) made the reverse density zero while
+                # the bookkeeping used pair-swap counts -> detailed balance
+                # broken. _step installs the pair jointly on accept.
                 if self.size > 1:
                     donor_idx = i
                     while donor_idx == i:
                         donor_idx = self._py_rng.randrange(self.size)
-                    donor = deepcopy(self.trees[donor_idx])
-                    lqf, lqr = gp_movesC.subtree_crossover(cand, donor)
+                    cand2 = deepcopy(self.trees[donor_idx])
+                    lqf, lqr = gp_movesC.subtree_crossover(cand, cand2)
                 else:
                     lqf, lqr = gp_movesC.point_mutation(
                         cand, self.funcs, self.operations)
@@ -539,12 +564,12 @@ cdef class Grove:
                     cand, self.funcs, self.operations)
                 move_name = "point_mutation"
 
-            if cand.is_valid(self.domain):
-                
-                return (cand, lqf, lqr, move_name)
+            if cand.is_valid(self.domain) and (
+                    cand2 is None or cand2.is_valid(self.domain)):
+                return (cand, lqf, lqr, move_name, cand2, donor_idx)
             attempts += 1
             #print(attempts)
-        return (None, 0.0, 0.0, move_name)
+        return (None, 0.0, 0.0, move_name, None, -1)
         #return deepcopy(self.trees[i])
 
     cdef _step_parameter_refresh(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
@@ -682,15 +707,19 @@ cdef class Grove:
             return self._step_parameter_refresh(y)
         cdef int i = self._py_rng.randrange(self.size)
         cdef function_treeC.Tree cand
+        cdef function_treeC.Tree cand2
+        cdef int donor_idx
         cdef double lqf, lqr
         cdef str move_name
         cdef tuple proposal = self._propose(i)
 
-        
+
         cand     = <function_treeC.Tree> proposal[0]
         lqf      = <double> proposal[1]
         lqr      = <double> proposal[2]
         move_name = <str>   proposal[3]
+        cand2    = <function_treeC.Tree> proposal[4]
+        donor_idx = <int> proposal[5]
 
         self.proposal_count += 1.0
         self.move_proposals[move_name] = self.move_proposals.get(move_name, 0) + 1
@@ -700,16 +729,20 @@ cdef class Grove:
             self._adapt_move(move_name, False)
             return False
 
-        # Cache-fill for current tree if needed.
-        '''if np.isnan(self.root_posteriors[i]):
-            #nelow is deprecated
-            #self.root_posteriors[i] = self.trees[i].get_superficial_posterior(
-            #    y, self.lambda_reg)
-            self.root_posteriors[i] = self.trees[i].log_marginal_bic(
-                y, optimize=True,
-                use_gradients=self.use_gradients,
-                method_str=self.method_str,
-            )'''
+        # Phase 2.13(b1): within-grove crossover is a PAIR move — both
+        # children accepted (and installed) or rejected together.
+        if cand2 is not None:
+            return self._step_pair_crossover(y, i, donor_idx, cand, cand2,
+                                             lqf, lqr)
+
+        # Phase 2.13(d): lazy cache-fill for the current tree. Groves built
+        # from node_list (or any path that skipped scoring) hold NaN here;
+        # without this fill old_post = NaN poisons log_alpha (every
+        # comparison False) and the slot can never accept anything — a
+        # silent stall. _score_post shares the validity gate + BIC cache
+        # with the candidate-scoring path, so old and new are comparable.
+        if np.isnan(self.root_posteriors[i]):
+            self.root_posteriors[i] = self._score_post(self.trees[i], y, True)
         cdef double old_post = float(self.root_posteriors[i])
 
         # Refit theta on the candidate (BIC-style profile; Phase 2.7 will
@@ -773,9 +806,15 @@ cdef class Grove:
         cdef list new_path = None
         cdef list old_path = None
         if self.polya is not None:
+            # Phase 2.13(c): extract BOTH paths FIRST, then score both.
+            # extract_path may auto-register a fresh symbol, growing every
+            # Dirichlet (n_total += 1); interleaving extraction with scoring
+            # evaluated old and new against DIFFERENT vocabularies whenever
+            # the candidate introduced a new symbol, systematically
+            # favoring the incumbent by ~(#unvisited steps)*log((n+1)/n).
             old_path = self.polya.extract_path(self.trees[i].get_root())
-            old_prior = self.polya.log_prior(old_path)
             new_path  = self.polya.extract_path(cand.get_root())
+            old_prior = self.polya.log_prior(old_path)
             new_prior = self.polya.log_prior(new_path)
 
         cdef double dtarget = (new_post + new_prior) - (old_post + old_prior)
@@ -825,6 +864,113 @@ cdef class Grove:
                     self._deferred_paths.append(new_path)
                 else:
                     self.polya.update_path(new_path)
+            return True
+        return False
+
+    cdef bint _step_pair_crossover(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                   int i, int j,
+                                   function_treeC.Tree candA,
+                                   function_treeC.Tree candB,
+                                   double lqf, double lqr):
+        """Phase 2.13(b1): joint accept/reject for the within-grove
+        subtree_crossover PAIR move.
+
+        Pre-2.13 the move installed only slot i's child and discarded the
+        donor's: from the new state the displaced subtree existed nowhere,
+        so the true reverse density was zero while the bookkeeping used the
+        pair-swap node counts — detailed balance broken (AUDIT 2.13(b)).
+
+        Here BOTH children are proposed and installed together. Both slots
+        live in this grove (same T), so the joint tempered target is
+        pi_T(x_i) * pi_T(x_j) and
+
+            log_alpha = [(U_i' - U_i) + (U_j' - U_j)] / T + (lqr - lqf),
+
+        with U = BIC log-evidence + Polya log-prior. Slot-pair selection
+        (i uniform, donor uniform, both (i,j)/(j,i) orderings) is equal
+        forward and reverse and cancels; the node-selection counts live in
+        (lqf, lqr) from subtree_crossover. Proposal correction untempered,
+        as everywhere. Caller has already bumped proposal counters and
+        hard-rejected non-finite lqr; _propose validated both children.
+        """
+        # Lazy fills (Phase 2.13(d)) for BOTH slots.
+        if np.isnan(self.root_posteriors[i]):
+            self.root_posteriors[i] = self._score_post(self.trees[i], y, True)
+        if np.isnan(self.root_posteriors[j]):
+            self.root_posteriors[j] = self._score_post(self.trees[j], y, True)
+        cdef double old_post_i = float(self.root_posteriors[i])
+        cdef double old_post_j = float(self.root_posteriors[j])
+
+        cdef double new_post_i = self._score_post(candA, y, True)
+        cdef double new_post_j = self._score_post(candB, y, True)
+        if new_post_i <= -1.0e299 or new_post_j <= -1.0e299:
+            self._adapt_move("subtree_crossover", False)
+            return False
+
+        cdef double old_prior_i = 0.0
+        cdef double old_prior_j = 0.0
+        cdef double new_prior_i = 0.0
+        cdef double new_prior_j = 0.0
+        cdef list new_path_i = None
+        cdef list new_path_j = None
+        cdef list old_path_i, old_path_j
+        if self.polya is not None:
+            # Phase 2.13(c) discipline: extract ALL paths, then score all.
+            old_path_i = self.polya.extract_path(self.trees[i].get_root())
+            old_path_j = self.polya.extract_path(self.trees[j].get_root())
+            new_path_i = self.polya.extract_path(candA.get_root())
+            new_path_j = self.polya.extract_path(candB.get_root())
+            old_prior_i = self.polya.log_prior(old_path_i)
+            old_prior_j = self.polya.log_prior(old_path_j)
+            new_prior_i = self.polya.log_prior(new_path_i)
+            new_prior_j = self.polya.log_prior(new_path_j)
+
+        cdef double dtarget = (
+            (new_post_i + new_prior_i + new_post_j + new_prior_j)
+            - (old_post_i + old_prior_i + old_post_j + old_prior_j))
+        cdef double q_corr = lqr - lqf
+        cdef double log_alpha
+
+        if self.T <= 0.0:
+            # Greedy mode: same convention as the single-tree path.
+            if dtarget > 0.0:
+                log_alpha = 0.0
+            elif dtarget == 0.0 and q_corr >= 0.0:
+                log_alpha = 0.0
+            else:
+                log_alpha = -np.inf
+        else:
+            log_alpha = dtarget / self.T + q_corr
+
+        cdef double u
+        cdef bint accepted
+        if log_alpha >= 0.0:
+            accepted = True
+        elif log_alpha == -np.inf:
+            accepted = False
+        else:
+            u = self._py_rng.random()
+            accepted = (u <= 0.0) or (np.log(u) < log_alpha)
+
+        self._adapt_move("subtree_crossover", accepted)
+
+        if accepted:
+            self.trees[i] = candA
+            self.trees[j] = candB
+            self.root_posteriors[i] = new_post_i
+            self.root_posteriors[j] = new_post_j
+            self.acceptance_count += 1.0
+            self.move_accepts["subtree_crossover"] = \
+                self.move_accepts.get("subtree_crossover", 0) + 1
+            if self.polya is not None and new_path_i is not None:
+                # Within-grove crossover is mutation-family (R1): reinforce
+                # BOTH accepted trees. Deferred under polya_defer (2.12).
+                if self.polya_defer:
+                    self._deferred_paths.append(new_path_i)
+                    self._deferred_paths.append(new_path_j)
+                else:
+                    self.polya.update_path(new_path_i)
+                    self.polya.update_path(new_path_j)
             return True
         return False
 
@@ -928,13 +1074,15 @@ cdef class Grove:
         cdef double old_prior = 0.0
         cdef double new_prior = 0.0
         cdef list new_path = None
+        cdef list old_path = None
         if self.polya is not None:
             # Prior of the *current* tree must be recomputed every step
             # because Theta moves whenever any walker accepts.
-            old_prior = self.polya.log_prior(
-                self.polya.extract_path(self.trees[i].get_root())
-            )
+            # Phase 2.13(c): extract both paths BEFORE scoring either
+            # (auto-registration grows n_total; see _step).
+            old_path = self.polya.extract_path(self.trees[i].get_root())
             new_path = self.polya.extract_path(cand.get_root())
+            old_prior = self.polya.log_prior(old_path)
             new_prior = self.polya.log_prior(new_path)
         cdef double dlogpost = (new_post + new_prior) - (old_post + old_prior)
 
@@ -2116,9 +2264,13 @@ cdef class Forest:
         cdef double postB = float(B.root_posteriors[i])
         cdef double priorA = 0.0
         cdef double priorB = 0.0
+        cdef list pathA, pathB
         if self.polya is not None:
-            priorA = self.polya.log_prior(self.polya.extract_path(A.trees[i].get_root()))
-            priorB = self.polya.log_prior(self.polya.extract_path(B.trees[i].get_root()))
+            # Phase 2.13(c): extract both paths before scoring either.
+            pathA = self.polya.extract_path(A.trees[i].get_root())
+            pathB = self.polya.extract_path(B.trees[i].get_root())
+            priorA = self.polya.log_prior(pathA)
+            priorB = self.polya.log_prior(pathB)
         cdef double Ua = postA + priorA
         cdef double Ub = postB + priorB
         cdef double delta = (1.0 / Ta - 1.0 / Tb) * (Ub - Ua)
@@ -2168,11 +2320,21 @@ cdef class Forest:
             B.root_posteriors[j] = B._score_post(B.trees[j], y, False)
         cdef double postA_old = float(A.root_posteriors[i])
         cdef double postB_old = float(B.root_posteriors[j])
+        # Phase 2.13(c): EXTRACT all four construction paths before scoring
+        # ANY prior. The children can introduce fresh parameter labels
+        # (auto-registration grows every Dirichlet), and old priors scored
+        # against the pre-growth vocabulary are not comparable to new priors
+        # scored after it.
         cdef double priorA_old = 0.0
         cdef double priorB_old = 0.0
+        cdef double priorA_new = 0.0
+        cdef double priorB_new = 0.0
+        cdef list pathA_old = None
+        cdef list pathB_old = None
+        cdef list pathA_new, pathB_new
         if self.polya is not None:
-            priorA_old = self.polya.log_prior(self.polya.extract_path(A.trees[i].get_root()))
-            priorB_old = self.polya.log_prior(self.polya.extract_path(B.trees[j].get_root()))
+            pathA_old = self.polya.extract_path(A.trees[i].get_root())
+            pathB_old = self.polya.extract_path(B.trees[j].get_root())
         # Install the Forest RNG for the crossover move (mirrors Grove._step,
         # which re-installs before each step) so the population trajectory is
         # reproducible from the Forest seed.
@@ -2188,11 +2350,14 @@ cdef class Forest:
         cdef double postB_new = B._score_post(childB, y, True)
         if postA_new <= -1.0e299 or postB_new <= -1.0e299:
             return False
-        cdef double priorA_new = 0.0
-        cdef double priorB_new = 0.0
         if self.polya is not None:
-            priorA_new = self.polya.log_prior(self.polya.extract_path(childA.get_root()))
-            priorB_new = self.polya.log_prior(self.polya.extract_path(childB.get_root()))
+            pathA_new = self.polya.extract_path(childA.get_root())
+            pathB_new = self.polya.extract_path(childB.get_root())
+            # All extractions done: score everything on the same vocabulary.
+            priorA_old = self.polya.log_prior(pathA_old)
+            priorB_old = self.polya.log_prior(pathB_old)
+            priorA_new = self.polya.log_prior(pathA_new)
+            priorB_new = self.polya.log_prior(pathB_new)
         cdef double Ua_old = postA_old + priorA_old
         cdef double Ub_old = postB_old + priorB_old
         cdef double Ua_new = postA_new + priorA_new
@@ -2400,10 +2565,11 @@ cdef class Forest:
                             priorA_old = 0.0
                             priorB_old = 0.0
                             if self.polya is not None:
-                                priorA_old = self.polya.log_prior(
-                                    self.polya.extract_path(treeA.get_root()))
-                                priorB_old = self.polya.log_prior(
-                                    self.polya.extract_path(treeB.get_root()))
+                                # Phase 2.13(c): extract both, then score both.
+                                _pA = self.polya.extract_path(treeA.get_root())
+                                _pB = self.polya.extract_path(treeB.get_root())
+                                priorA_old = self.polya.log_prior(_pA)
+                                priorB_old = self.polya.log_prior(_pB)
                             Ua = (<double> wireA[2]) + priorA_old
                             Ub = (<double> wireB[2]) + priorB_old
                             delta = (1.0 / A.T - 1.0 / B.T) * (Ub - Ua)
@@ -2431,11 +2597,18 @@ cdef class Forest:
                         if treeA is not None and treeB is not None:
                             priorA_old = 0.0
                             priorB_old = 0.0
+                            # Phase 2.13(c): capture OLD paths BEFORE the
+                            # in-place crossover mutates treeA/treeB; score
+                            # all four priors only after every extraction.
+                            # (Vocabulary is frozen up-front in MPI mode —
+                            # 32 pre-registered names — precisely so master-
+                            # side auto-registration, which would desync the
+                            # worker replicas, cannot fire in practice.)
+                            _pA = None
+                            _pB = None
                             if self.polya is not None:
-                                priorA_old = self.polya.log_prior(
-                                    self.polya.extract_path(treeA.get_root()))
-                                priorB_old = self.polya.log_prior(
-                                    self.polya.extract_path(treeB.get_root()))
+                                _pA = self.polya.extract_path(treeA.get_root())
+                                _pB = self.polya.extract_path(treeB.get_root())
                             # Same RNG discipline as the serial path.
                             gp_movesC.set_rng(self._py_rng, self._np_rng)
                             function_treeC.set_rng(self._py_rng, self._np_rng)
@@ -2447,10 +2620,12 @@ cdef class Forest:
                                     priorA_new = 0.0
                                     priorB_new = 0.0
                                     if self.polya is not None:
-                                        priorA_new = self.polya.log_prior(
-                                            self.polya.extract_path(treeA.get_root()))
-                                        priorB_new = self.polya.log_prior(
-                                            self.polya.extract_path(treeB.get_root()))
+                                        _pAn = self.polya.extract_path(treeA.get_root())
+                                        _pBn = self.polya.extract_path(treeB.get_root())
+                                        priorA_old = self.polya.log_prior(_pA)
+                                        priorB_old = self.polya.log_prior(_pB)
+                                        priorA_new = self.polya.log_prior(_pAn)
+                                        priorB_new = self.polya.log_prior(_pBn)
                                     log_alpha = (
                                         (postA_new + priorA_new
                                          - (<double> wireA[2]) - priorA_old) / A.T

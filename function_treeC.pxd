@@ -184,10 +184,11 @@ cdef class Tree:
 
 cdef _post_order_update(Node node)
 
-cpdef build_tree(int depth, list functions, 
-    cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?, 
+cpdef build_tree(int depth, list functions,
+    cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?,
     int Npars=?, object leaves_count=?, object arr_indices=?,
-    dict params_used=?, object value=?, double T=?, double alpha=?, object sigma=?, double g_tau=?)
+    dict params_used=?, object value=?, double T=?, double alpha=?, object sigma=?, double g_tau=?,
+    list operations=?)
 
 cdef parameter_parser(int Npars)
 

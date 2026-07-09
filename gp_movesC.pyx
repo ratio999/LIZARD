@@ -226,8 +226,25 @@ cdef function_treeC.Node _build_subtree_with_params(
         int d, list functions, list operations, object domain,
         double p_par, list existing_param_names, double g_tau):
     """Build a perfect-binary subtree of height d with per-leaf Bernoulli
-    parameter assignment. Parameter names extend `existing_param_names`."""
-    cdef function_treeC.Node root = function_treeC.build_tree(d, functions, domain)
+    parameter assignment. Parameter names extend `existing_param_names`.
+
+    Phase 2.13(f): internal ops of the built subtree are drawn from the
+    SAME `operations` vocabulary that _eval_build_density charges with
+    -log O per internal node. Before this fix build_tree sampled from its
+    hardcoded 6-op set while the density used O = len(operations), so any
+    non-default kernel (e.g. the 4 safe ops in the 2.8c/2.9c fixtures) had
+    biased build densities — a weight-dependent bias that the 2.8c
+    target-invariance test detects."""
+    # NB: a cpdef function called ACROSS a cimport boundary cannot take
+    # keyword arguments (Cython falls back to a Python-name lookup of
+    # 'build_tree' in THIS module -> NameError at runtime). Call fully
+    # positionally; the middle args spell out build_tree's own defaults
+    # (output_type, Npars, leaves_count, arr_indices, params_used, value,
+    #  T, alpha, sigma, g_tau, operations).
+    cdef function_treeC.Node root = function_treeC.build_tree(
+        d, functions, domain,
+        None, 0, None, None, None, 1.0, 0.0, 0.01, 1.0, 1.0,
+        operations)
     cdef list leaves = root.get_leaves(leaves_list=[])
     cdef list pool = list(existing_param_names)
     cdef function_treeC.Node leaf
@@ -267,7 +284,8 @@ cdef int _count_selectable(function_treeC.Node node):
     return 1 + _count_selectable(node.left) + _count_selectable(node.right)
 
 @cython.boundscheck(True)
-cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
+cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions,
+                             list operations):
     """
     Replace a uniformly-selected node's subtree with a freshly-built subtree
     of the same height. Mutates `tree` in place. The caller is responsible
@@ -316,8 +334,8 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
     cdef double log_q_rev = 0.0
     if tree.root.is_leaf():
         #print('actually addnode')
-        
-        return add_node(tree, functions)
+
+        return add_node(tree, functions, operations)
     parent_node = None
     cdef bint is_par = True
     # ---- 1. Uniform node selection (root allowed) ------------------------
@@ -348,7 +366,15 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
         return 0.0, -np.inf
 
     # ---- 3. Build a fresh non-parametric subtree of height d_max --------
-    new_subtree = function_treeC.build_tree(d_max, functions, tree.domain)
+    # Phase 2.13(f): rebuild draws ops from the kernel's own vocabulary so
+    # the fwd/rev build factors cancel exactly AND the support stays closed
+    # (a safe-ops kernel no longer leaks '**'/'o' ops it cannot re-produce).
+    # Positional call: keyword args across a cimport boundary raise
+    # NameError on cpdef functions (see _build_subtree_with_params).
+    new_subtree = function_treeC.build_tree(
+        d_max, functions, tree.domain,
+        None, 0, None, None, None, 1.0, 0.0, 0.01, 1.0, 1.0,
+        operations)
 
     # ---- 4. Recycle K parameters into uniformly chosen leaf positions ---
     if K > 0:
@@ -414,10 +440,16 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions):
     return log_q_fwd, log_q_rev
 
 @cython.boundscheck(True)
-cpdef tuple subtree_mutation(function_treeC.Tree tree, list functions=None):
+cpdef tuple subtree_mutation(function_treeC.Tree tree, list functions=None,
+                             list operations=None):
+    """Phase 2.13(f): `operations` is the kernel's op vocabulary, used for
+    the rebuild (and the root-leaf add_node delegation). Default None keeps
+    the historical canonical 6-op set."""
     if functions is None:
         functions = tree.functions
-    return _subtree_mutation(tree, functions)
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _subtree_mutation(tree, functions, list(operations))
 
 @cython.boundscheck(True) 
 cpdef legacy_subtree_mutation( function_treeC.Tree tree, functions, random_depth=False):

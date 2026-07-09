@@ -87,6 +87,12 @@ cdef class Grove:
 
     cdef  legacy_step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cdef _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
+    # Phase 2.13(b1): joint accept/install for the within-grove crossover pair.
+    cdef bint _step_pair_crossover(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                   int i, int j,
+                                   function_treeC.Tree candA,
+                                   function_treeC.Tree candB,
+                                   double lqf, double lqr)
     cdef double _score_post(self, function_treeC.Tree cand,
                             cnp.ndarray[cnp.float64_t, ndim=1] y,
                             bint optimize=*)

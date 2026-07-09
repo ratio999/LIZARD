@@ -469,12 +469,18 @@ cdef class Node:
 cdef class Tree:
      
 
-    def __init__(self, int depth, list functions, 
-            cnp.ndarray[cnp.float64_t, ndim=1] x, 
-            Node node=None, int Npars = 0, object value=1, 
+    def __init__(self, int depth, list functions,
+            cnp.ndarray[cnp.float64_t, ndim=1] x,
+            Node node=None, int Npars = 0, object value=1,
             double T=0, double alpha=0.01, object sigma = 1.0,
-            double g_tau=1.0):
-        '''Tree class initialization'''
+            double g_tau=1.0, list operations=None):
+        '''Tree class initialization.
+
+        Phase 2.13(f): `operations` (op symbols) is forwarded to build_tree
+        when the root is built from scratch, so a kernel with a restricted
+        op vocabulary starts INSIDE its own support (out-of-vocabulary ops
+        in the initial tree could never be legally removed: every reverse
+        density for them is zero). Default None = historical 6-op set.'''
         self.T = T
         self.domain = real_functionC._domain_fixer(x)
         self.depth = depth
@@ -483,10 +489,11 @@ cdef class Tree:
         self.alpha = alpha
         self.sigma = sigma
         self.value = value
-        self.g_tau = g_tau  
+        self.g_tau = g_tau
         if node==None:
-            self.root = build_tree(depth, functions, self.domain, Npars=Npars, 
-                        value=value, alpha=self.alpha, sigma=self.sigma,  g_tau = self.g_tau)
+            self.root = build_tree(depth, functions, self.domain, Npars=Npars,
+                        value=value, alpha=self.alpha, sigma=self.sigma,  g_tau = self.g_tau,
+                        operations=operations)
         else:
             self.root = node
             self.depth = node.depth()
@@ -912,11 +919,22 @@ cdef _post_order_update(Node node):
     node.update_func()
 
 #cdef --> is cpdef for testing purposes only
-cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x, 
-        str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None, 
+cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x,
+        str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None,
              dict params_used=None, object value = 1.0, double T=0, double alpha=0.01, object sigma=1.00,
-             double g_tau = 1.0):
-        '''Builds a Tree from scratch'''
+             double g_tau = 1.0, list operations=None):
+        '''Builds a Tree from scratch.
+
+        Phase 2.13(f): internal ops are drawn uniformly from `operations`
+        (symbols: '+', '-', '*', '/', '**', 'o'). Default None keeps the
+        historical 6-op set — IN THE SAME ORDER as the old internal
+        ['add','sub','mul','div','pow','compose'] list, so default-ops RNG
+        streams (and every determinism test) are bit-identical. Callers with
+        a restricted kernel vocabulary (e.g. safe-ops fixtures) MUST pass
+        their list, otherwise the proposal build-densities computed with
+        O = len(operations) do not match the true sampling law.'''
+        if operations is None:
+            operations = ['+', '-', '*', '/', '**', 'o']
         if isinstance(value, (float, int)):
             assign_value = np.full((Npars,), value, dtype=np.float64)
         elif isinstance(value, np.ndarray):
@@ -992,34 +1010,33 @@ cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x
         #Recursion needed
         cdef Node left = build_tree(depth - 1, functions, x,
                 'node', Npars, leaves_count,  arr_indices, params_used, value=value,
-                alpha = alpha, sigma = sigma, g_tau = g_tau)
-        cdef Node right = build_tree(depth - 1, functions, x, 
+                alpha = alpha, sigma = sigma, g_tau = g_tau, operations = operations)
+        cdef Node right = build_tree(depth - 1, functions, x,
                 'node', Npars, leaves_count, arr_indices, params_used, value=value,
-                alpha = alpha, sigma = sigma, g_tau = g_tau)
-       
-        
-        cdef str operation = _PY_RNG.choice(['add', 'sub', 'mul', 'div', 'pow', 'compose'])
-        cdef real_functionC.RealFunctionC func  
-        cdef str op_symbol
+                alpha = alpha, sigma = sigma, g_tau = g_tau, operations = operations)
 
-        if operation == 'add':
+
+        # Phase 2.13(f): draw the op SYMBOL uniformly from the caller's
+        # vocabulary (default list above preserves the historical stream).
+        cdef str op_symbol = _PY_RNG.choice(operations)
+        cdef real_functionC.RealFunctionC func
+
+        if op_symbol == '+':
             func = left.function + right.function
-            op_symbol = '+'
-        elif operation == 'sub':
+        elif op_symbol == '-':
             func = left.function - right.function
-            op_symbol = '-'
-        elif operation == 'mul':
+        elif op_symbol == '*':
             func = left.function * right.function
-            op_symbol = '*'
-        elif operation == 'div':
+        elif op_symbol == '/':
             func = left.function / right.function
-            op_symbol = '/'
-        elif operation == 'pow':
-            func = left.function ** right.function 
-            op_symbol = '**'
-        elif operation == 'compose':
+        elif op_symbol == '**':
+            func = left.function ** right.function
+        elif op_symbol == 'o':
             func = left.function.compose(right.function)
-            op_symbol = 'o' 
+        else:
+            raise ValueError(
+                "build_tree: unknown operation symbol %r (supported: "
+                "'+', '-', '*', '/', '**', 'o')" % op_symbol)
         if output_type is None or output_type=='node' or output_type=='Node':
             
             return_node = Node(function=func, left=left, right=right, symbol=op_symbol, alpha=alpha, sigma=sigma) 
