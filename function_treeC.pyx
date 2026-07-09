@@ -503,16 +503,23 @@ cdef class Tree:
         self.param_values, self.name_values, self.penalty = self.get_param_values()
         self.fitness_tree = None
     def __copy__(self):
+        # Phase 2.13(m): forward g_tau (was dropped -> copies silently
+        # re-defaulted to 1.0). Positional slot 10, after sigma.
         return Tree(self.depth, self.functions, self.domain, self.root,
-            self.Npars, self.value, self.T, self.alpha, self.sigma)
+            self.Npars, self.value, self.T, self.alpha, self.sigma,
+            self.g_tau)
 
     def __deepcopy__(self, memo):
+        # Phase 2.13(m): forward g_tau. Grove._propose deepcopies before
+        # every move, so without this the birth warm-start draw N(0,g_tau^2)
+        # used the wrong scale (1.0 instead of the configured std(y)).
         cdef Tree copy_tree = Tree(
                 self.depth,
                 deepcopy(self.functions, memo),
                 deepcopy(self.domain, memo),
                 deepcopy(self.root, memo),
-                self.Npars, self.value, self.T, self.alpha, self.sigma
+                self.Npars, self.value, self.T, self.alpha, self.sigma,
+                self.g_tau
                 )
         #copy_tree.tree_update(copy_tree.root)  # Ensure descriptions and params are updated
         #copy_tree.name_values = deepcopy(self.name_values, memo)

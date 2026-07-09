@@ -1512,11 +1512,11 @@ def test_a1_toy_occupancy(n_steps=4000, theta_hats=(2.0, 4.0), tau=0.5,
         n_in_param = 0
         for _t in range(n_steps):
             cand = deepcopy(state)
-            # NB: Tree.__deepcopy__ does NOT propagate g_tau (it re-defaults
-            # to 1.0 on the copy) -- re-install so the warm-start draw uses
-            # the configured tau. Post-a1 this affects NO density; it only
-            # keeps the "regardless of tau" claim honest. (Quirk logged in
-            # AUDIT_2_13_FIXES.md as candidate item (m).)
+            # Defensive re-install of g_tau. As of 2.13(m) Tree.__deepcopy__
+            # forwards g_tau correctly, so this is now belt-and-suspenders
+            # (idempotent) -- it also guards the test against any future
+            # regression of that forwarding. Post-a1 g_tau affects NO
+            # density anyway; this only keeps the warm-start scale honest.
             cand.set_g_tau(tau)
             lqf, lqr = point_mutation(cand, funcs_M1, _OPS)
 
