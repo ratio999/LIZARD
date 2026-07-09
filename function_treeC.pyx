@@ -684,13 +684,14 @@ cdef class Tree:
         if params_list is None:
             params_list = []
         cdef list order_names = []
+        cdef Node leaf
         for leaf in self.leaves:
             #print(leaf.get_fun().get_description())
             if leaf.is_param():
 
 
                 params_list.append(leaf)
-                order_names.append(leaf.get_fun().get_description())
+                order_names.append(leaf.function.get_description())
         # Phase 2.10 Stage 2: opaque atomic leaves carry internal parameters
         # with no dedicated parameter Node. Append their names AFTER the
         # plain ones, in leaf (pre-order) order — the identical order
