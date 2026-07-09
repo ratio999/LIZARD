@@ -333,9 +333,15 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions,
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
     if tree.root.is_leaf():
-        #print('actually addnode')
-
-        return add_node(tree, functions, operations)
+        # Phase 2.13(g): a single-leaf tree has no replaceable subtree. The
+        # old behaviour silently delegated to add_node — but this move was
+        # SELECTED with p_subtree, while add_node's reverse (leaf_hoist) is
+        # selected with p_leaf_hoist != p_subtree, so the Green move-choice
+        # factor no longer cancelled for that transition. Force-reject
+        # instead (no-op; tree untouched): growth from a single leaf is
+        # add_node/split/ETR's job, all separately in the kernel, so
+        # irreducibility is unaffected.
+        return (0.0, -np.inf)
     parent_node = None
     cdef bint is_par = True
     # ---- 1. Uniform node selection (root allowed) ------------------------

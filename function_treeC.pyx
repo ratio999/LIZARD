@@ -729,9 +729,14 @@ cdef class Tree:
         cdef int N = y.shape[0]
         cdef int k = len(self.name_values)
         if self.sigma is None:
-            return -0.5 * N * (_LOG(2.0 * _PI * mse) + 1.0) - 0.5 * k * _LOG(N)
+            # Phase 2.13(i): sigma is PROFILED here (sigma_hat^2 = SSR/N),
+            # so it counts as an estimated parameter -> penalty on k+1
+            # (Phase 2.7(a) contract). Constant +0.5*log(N) shift across
+            # all models, so MH ratios are unchanged; reported evidences
+            # and fixed-vs-profiled comparisons become honest.
+            return -0.5 * N * (_LOG(2.0 * _PI * mse) + 1.0) - 0.5 * (k + 1) * _LOG(N)
         else:
-        
+
             return -0.5 * N * mse - 0.5 *k * _LOG(N)
     cdef double _log_marginal_bic(self,
                                   cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -743,14 +748,26 @@ cdef class Tree:
         if self.bic_loss_is_param_loss and optimize and len(self.params)>0:
             mse = self._update_parameters_and_fitness(self.domain, y,
                                         method_str, use_gradients)
+            # Phase 2.13(h): re-validate at theta_hat. The optimizer's
+            # objective uses np.nanmean, so it can settle on parameters that
+            # make the model NaN/inf on part of the domain while being
+            # scored only on the finite subset (with the full-N BIC
+            # penalty) — inflated evidence for partially-defined models.
+            # The pre-scoring is_valid gate ran at the PRE-optimization
+            # theta, so it cannot catch this. Reject such optima outright.
+            if not self.is_valid(self.domain):
+                return -np.inf
             if self.sigma is not None and (not hasattr(self.sigma, '__len__')):
                 mse /= (<double>self.sigma*<double>self.sigma)
-            return self._shortcut_bic(y, mse) 
+            return self._shortcut_bic(y, mse)
 
         if optimize and len(self.params) > 0:
-            
+
             self._update_parameters(self.domain, y,
                                     method_str, use_gradients)
+            # Phase 2.13(h): same theta_hat re-validation on the slow path.
+            if not self.is_valid(self.domain):
+                return -np.inf
         if self.sigma is None:
             return self.root._log_marginal_bic(y, self.name_values, self.domain)
         elif hasattr(self.sigma, '__len__'):

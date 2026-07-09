@@ -230,7 +230,9 @@ cdef class RealFunctionC:
             params = {}
         cdef double fitness = self.fitness(y, params, x)
         cdef int N = y.shape[0]
-        return -0.5 * N * (_LOG(2.0 * _PI * fitness) + 1.0) - 0.5*len(params)*_LOG(N) #-0.5 * N * fitness /s2
+        # Phase 2.13(i): sigma profiled -> counts as a parameter, penalty on
+        # len(params)+1 (matches Tree._shortcut_bic's sigma=None branch).
+        return -0.5 * N * (_LOG(2.0 * _PI * fitness) + 1.0) - 0.5*(len(params) + 1)*_LOG(N) #-0.5 * N * fitness /s2
 
     cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                                 dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 

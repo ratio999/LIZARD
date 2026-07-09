@@ -513,8 +513,21 @@ second-order / documentation.
         default preserves the historical RNG stream bit-exactly; initial
         trees now support-closed. THEORY_2_13.md §3.3.
   Technical change log: AUDIT_2_13_FIXES.md. Once the suite passes
-  (incl. test_phase28 2.8c), the Phase 4 gate REOPENS; (g)(h) remain as
-  quality follow-ups, (i)–(l) docs-only.
+  (incl. test_phase28 2.8c), the Phase 4 gate REOPENS.
+
+  STATUS 2026-07-09 (third batch): (g)(h)(i) ✅ IMPLEMENTED, pending
+  recompile (gp_movesC + function_treeC + real_functionC) + suite rerun.
+    (g) ✅ single-leaf subtree_mutation → forced reject (0, -inf), no more
+        mislabelled add_node delegation. THEORY_2_13.md §3.4.
+    (h) ✅ re-validation at θ̂ in Tree._log_marginal_bic (both branches)
+        closes the nanmean partial-domain loophole exactly. THEORY §3.5.
+    (i) ✅ profiled-σ BIC penalty k → k+1 in both σ=None scorers +
+        test_phase23 3.3(d) formula test/docs updated. THEORY §3.6.
+  Remaining in 2.13: (j)–(l) are docs-only (fold into the paper per
+  PAPER_PLAN.md §5.5/§9.5/§12.4). Next CODE work after the suite is green:
+  the a1 toy-occupancy regression test (THEORY §1.7, needs go-ahead),
+  then Phase 2.10 (custom opaque primitives — design first, PAPER_PLAN
+  §10.3), then Phase 3 dead-code removal.
 
 ---
 
@@ -680,6 +693,13 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 ---
 
 ## Phase 5 — Writing
+**→ The full, consequential section-by-section writing roadmap now lives in
+`PAPER_PLAN.md` (created 2026-07-09). It supersedes the thin skeleton below,
+which is retained only as a quick index. PAPER_PLAN.md flags the CENTRAL
+FORMAL DECISION (fixed vs adaptive Pólya prior framing) that must be resolved
+before drafting §4/§9, and folds the Phase 2.10 opaque-primitive prior-mass
+question into the paper's formalism (its §10.3).**
+
 ### 5.1 Chapter T: theory
   1. Informal motivation
   2. State space T (parse trees, not equivalence classes)

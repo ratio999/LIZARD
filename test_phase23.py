@@ -643,13 +643,15 @@ def test_3_3c_point_mutation_symmetric(n_seeds=200, tol=1e-12):
 # ---------------------------------------------------------------------------
 #
 # Reference formula (from real_functionC._log_marginal_bic and
-# function_treeC._shortcut_bic):
+# function_treeC._shortcut_bic), Phase 2.13(i) convention:
 #
-#     log_marginal_bic = -0.5 * N * (log(2*pi*MSE) + 1)  -  0.5 * k * log(N)
+#     sigma=None (profiled):
+#     log_marginal_bic = -0.5 * N * (log(2*pi*MSE) + 1)  -  0.5 * (k+1) * log(N)
+#     (sigma_hat^2 = SSR/N is estimated, so sigma counts as a parameter)
 #
 # where N = len(y), MSE = optimized mean-squared residual, k = #free params.
 #
-# With sigma fixed (scalar):
+# With sigma fixed (scalar, known):
 #     log_marginal_bic = -0.5 * N * MSE / sigma^2  -  0.5 * k * log(N)
 #
 # (Note: the optimizer rescales the loss by 1/sigma^2 BEFORE this term, so
@@ -901,9 +903,10 @@ def test_3_3d_bic_penalises_complexity():
 
 def test_3_3d_bic_sigma_modes_differ(tol=1e-6):
     """sigma=None vs sigma=fixed scalar produce different but finite
-    scores. The two code paths use distinct formulas:
+    scores. The two code paths use distinct formulas (2.13(i) convention):
 
-      sigma=None  : -0.5*N*(log(2*pi*MSE) + 1) - 0.5*k*log(N)
+      sigma=None  : -0.5*N*(log(2*pi*MSE) + 1) - 0.5*(k+1)*log(N)
+                    (sigma profiled -> counts as a parameter)
       sigma=s>0   : -0.5*N*(MSE/s^2)           - 0.5*k*log(N)
                     (after the optimizer's MSE has been divided by s^2,
                      via _shortcut_bic).
@@ -966,8 +969,10 @@ def test_3_3d_bic_formula_consistency(tol=1e-6):
     mse = float(np.mean((y - y_pred) ** 2))
     assert math.isfinite(mse) and mse > 0.0, "bad MSE: %r" % mse
 
+    # Phase 2.13(i): sigma=None profiles sigma_hat^2 = SSR/N, so sigma
+    # counts as an estimated parameter -> penalty on k+1.
     expected = (-0.5 * N * (math.log(2.0 * math.pi * mse) + 1.0)
-                - 0.5 * k * math.log(N))
+                - 0.5 * (k + 1) * math.log(N))
     print(expected, mse, score)
     assert math.isclose(score, expected, rel_tol=tol, abs_tol=tol), (
         "BIC formula mismatch: got %.10g, expected %.10g (N=%d, k=%d, MSE=%.6g)"
