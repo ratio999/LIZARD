@@ -165,31 +165,23 @@ def test_3_3b_g_tau_plumbing():
 
 
 def test_3_3b_birth_density(max_seeds=400):
-    """point_mutation BIRTH branch emits the correct g-density.
+    """point_mutation BIRTH/DEATH branches emit PURELY STRUCTURAL densities
+    (Phase 2.13(a)).
 
-    Strategy
-    --------
-    Build a small random tree, force a known RNG state, and call
-    point_mutation.  Detect the BIRTH branch via its signature:
+    Post-2.13(a) contract
+    ---------------------
+        BIRTH (function leaf -> param):  lqf == 0,        lqr == -log M
+        DEATH (param leaf -> function):  lqf == -log M,   lqr == 0
 
-        log_q_rev == -log M   AND   log_q_fwd != 0
+    The freshly born parameter still receives a finite warm-start value
+    drawn from g = N(0, tau^2), but that draw contributes NO density term:
+    the chain is topology-marginal, theta is not retained state, and the
+    theta-draw integrates to 1 in q_struct (THEORY_2_13.md §1.5).
 
-    (DEATH branch is the swap: log_q_fwd == -log M, log_q_rev != 0.)
-
-    For a BIRTH, the new theta is stored on the mutated leaf -- but
-    that leaf may be any leaf in the tree.  We don't try to identify
-    it; instead we verify that log_q_fwd is consistent with SOME
-    sample from N(0, tau^2) by checking the round-trip via the
-    quadratic-form constant:
-
-        log_q_fwd = -0.5*log(2*pi*tau^2) - 0.5*(theta/tau)^2
-
-    -> theta^2 = -tau^2 * (2*log_q_fwd + log(2*pi*tau^2))
-
-    The recovered theta^2 must match the squared value of the leaf
-    that just became a parameter leaf.
+    Branch detection is done ON THE TREE (a leaf's kind flipping), not on
+    the returned densities, so the test cannot be fooled by a wrong density.
     """
-    print("[3.3b.2] birth-density analytic check (sweeping <=%d seeds)"
+    print("[3.3b.2] birth/death structural-density check (sweeping <=%d seeds)"
           % max_seeds)
     from real_functionC import _domain_fixer
     x, y = _make_xy(n=24, seed=2)
@@ -218,49 +210,47 @@ def test_3_3b_birth_density(max_seeds=400):
         post_leaves = []
         _collect_leaves(tree.get_root() , post_leaves)
 
-        # Branch detection.
-        is_birth = (abs(lqr - (-log_M)) < tol) and (lqf != 0.0)
-        is_death = (abs(lqf - (-log_M)) < tol) and (lqr != 0.0)
+        # Branch detection from the tree: which leaf changed KIND?
+        is_birth = False
+        is_death = False
+        born_value = None
+        for n in post_leaves:
+            pre = pre_state.get(id(n))
+            if pre is None:
+                # Edge case: the mutated leaf is a new Node instance.
+                continue
+            was_param, _ = pre
+            if (not was_param) and n.is_param():
+                is_birth = True
+                born_value = _safe_value(n)
+                break
+            if was_param and (not n.is_param()):
+                is_death = True
+                break
 
         if is_birth:
-            # Find the leaf that flipped function -> parameter.
-            theta = None
-            for n in post_leaves:
-                pre = pre_state.get(id(n))
-                if pre is None:
-                    continue
-                was_param, _ = pre
-                if (not was_param) and n.is_param():
-                    theta = float(n.value)
-                    break
-            if theta is None:
-                # Edge case: the mutated leaf is a new Node instance.
-                # Skip but don't fail.
-                continue
-
-            expected_lqf = _log_g(theta, tau)
-            assert math.isclose(lqf, expected_lqf, rel_tol=0.0, abs_tol=1e-10), (
-                "[seed=%d] BIRTH lqf mismatch: got %.15g, expected %.15g "
-                "(theta=%g, tau=%g)" % (s, lqf, expected_lqf, theta, tau)
+            assert abs(lqf) < tol, (
+                "[seed=%d] BIRTH lqf must be 0 (structural only, 2.13(a)); "
+                "got %.15g" % (s, lqf)
+            )
+            assert math.isclose(lqr, -log_M, rel_tol=0.0, abs_tol=tol), (
+                "[seed=%d] BIRTH lqr mismatch: got %.15g, expected %.15g "
+                "(-log M)" % (s, lqr, -log_M)
+            )
+            assert born_value is not None and math.isfinite(born_value), (
+                "[seed=%d] BIRTH warm-start value must be finite, got %r"
+                % (s, born_value)
             )
             n_birth_checked += 1
 
         elif is_death:
-            # Find the leaf that flipped parameter -> function.
-            theta = None
-            for n in pre_leaves:
-                if id(n) in {id(m) for m in post_leaves}:
-                    was_param, val = pre_state[id(n)]
-                    if was_param and (not n.is_param()):
-                        theta = float(val)
-                        break
-            if theta is None:
-                continue
-
-            expected_lqr = _log_g(theta, tau)
-            assert math.isclose(lqr, expected_lqr, rel_tol=0.0, abs_tol=1e-10), (
-                "[seed=%d] DEATH lqr mismatch: got %.15g, expected %.15g "
-                "(theta=%g, tau=%g)" % (s, lqr, expected_lqr, theta, tau)
+            assert math.isclose(lqf, -log_M, rel_tol=0.0, abs_tol=tol), (
+                "[seed=%d] DEATH lqf mismatch: got %.15g, expected %.15g "
+                "(-log M)" % (s, lqf, -log_M)
+            )
+            assert abs(lqr) < tol, (
+                "[seed=%d] DEATH lqr must be 0 (structural only, 2.13(a)); "
+                "got %.15g" % (s, lqr)
             )
             n_death_checked += 1
 
@@ -582,19 +572,17 @@ def test_3_3c_internal_hoist_density(n_seeds=300, tol=1e-10):
 
 def test_3_3c_point_mutation_symmetric(n_seeds=200, tol=1e-12):
     """point_mutation: every (lqf, lqr) returned by the move falls into
-    exactly one of three regimes:
+    exactly one of three regimes (Phase 2.13(a): structural densities only):
 
       (i)   symmetric branch          -> (0, 0) exactly,
-      (ii)  BIRTH (function -> param) -> lqf = log N(theta; 0, tau^2),
-                                          lqr = -log M,
-      (iii) DEATH (param -> function) -> lqf = -log M,
-                                          lqr = log N(theta; 0, tau^2).
+      (ii)  BIRTH (function -> param) -> (0, -log M),
+      (iii) DEATH (param -> function) -> (-log M, 0).
 
     Branch (i) covers internal-op resample, function-leaf re-pick (do_cross
     miss), and param-leaf identity (do_cross miss).  Branches (ii) and (iii)
-    are the BIRTH/DEATH cases already validated for absolute density in
-    test_3_3b_birth_density; here we only need to verify that the (0, 0)
-    *symmetric* path is reachable and that no fourth regime exists.
+    are the BIRTH/DEATH cases already validated in test_3_3b_birth_density;
+    here we only need to verify that the (0, 0) *symmetric* path is
+    reachable and that no fourth regime exists.
     """
     print("[3.3c.point_mutation] symmetric branch reachability + regime exhaustion")
     from real_functionC import _domain_fixer
@@ -626,8 +614,9 @@ def test_3_3c_point_mutation_symmetric(n_seeds=200, tol=1e-12):
             continue
 
         # Non-symmetric: must be exactly one of BIRTH/DEATH.
-        is_birth = (abs(lqr - (-log_M)) < 1e-10) and (lqf < 0.0) and math.isfinite(lqf)
-        is_death = (abs(lqf - (-log_M)) < 1e-10) and (lqr < 0.0) and math.isfinite(lqr)
+        # Phase 2.13(a): BIRTH = (0, -log M); DEATH = (-log M, 0).
+        is_birth = (abs(lqr - (-log_M)) < 1e-10) and (abs(lqf) < 1e-10)
+        is_death = (abs(lqf - (-log_M)) < 1e-10) and (abs(lqr) < 1e-10)
         if is_birth:
             n_birth += 1
         elif is_death:
@@ -728,11 +717,14 @@ def test_3_3c_etr_density(n_seeds=400, tol=1e-9):
     replaced -- making every density component observable from the after-tree:
 
         N0 = M + 1 ; N2 = O * N0 * N0 ; s(a) = N0 if a == 0 else N2
-        log_q_fwd = -log 1       - log 2 - log s(o_f) + sum_new log g(theta_new)
-        log_q_rev = -log Omega_f - log 2 - log s(0)   + 0   (old leaf: no param)
+        log_q_fwd = -log 1       - log 2 - log s(o_f)
+        log_q_rev = -log Omega_f - log 2 - log s(0)
 
-    o_f and Omega_f are read from the after-tree, theta_new from its parameter
-    leaves. Both replacement arities (o_f in {0, 2}) must occur.
+    Phase 2.13(a): densities are PURELY STRUCTURAL — parameters born in the
+    new ET receive finite warm-start values theta ~ g = N(0, tau^2) but
+    contribute NO log g terms (topology-marginal chain; THEORY_2_13.md §1.5).
+    o_f and Omega_f are read from the after-tree. Both replacement arities
+    (o_f in {0, 2}) must occur.
     """
     print("[3.3c.etr] single-leaf exact density reconstruction")
     from real_functionC import _domain_fixer
@@ -753,7 +745,6 @@ def test_3_3c_etr_density(n_seeds=400, tol=1e-9):
         assert tree.get_root().is_leaf(), "fixture must be a single leaf"
         if hasattr(tree, "set_g_tau"):
             tree.set_g_tau(0.7)
-        g_tau = tree.g_tau
 
         _seed_rngs(s)
         lqf, lqr = gp_movesC.etr_mutation(tree, _FUNCS, _OPS)
@@ -761,19 +752,23 @@ def test_3_3c_etr_density(n_seeds=400, tol=1e-9):
         root = tree.get_root()
         o_f = 0 if root.is_leaf() else 2
         omega_f = _count_ets_py(root)
+        # Phase 2.13(a): warm-start values must be finite but contribute
+        # no density terms.
         thetas_new = _param_values_py(root, [])
-        log_g_new = sum(_log_g(t, g_tau) for t in thetas_new)
+        assert all(math.isfinite(t) for t in thetas_new), (
+            "[seed=%d] born warm-start values must be finite: %r"
+            % (s, thetas_new))
 
         s_f = N0 if o_f == 0 else N2
-        expected_lqf = -math.log(1.0) - math.log(2.0) - math.log(s_f) + log_g_new
+        expected_lqf = -math.log(1.0) - math.log(2.0) - math.log(s_f)
         expected_lqr = -math.log(omega_f) - math.log(2.0) - math.log(N0)
 
         assert math.isfinite(lqf) and math.isfinite(lqr), \
             "[seed=%d] etr densities must be finite on-support" % s
         assert math.isclose(lqf, expected_lqf, rel_tol=0.0, abs_tol=tol), (
             "[seed=%d] etr lqf mismatch: got %.15g expected %.15g "
-            "(o_f=%d, s_f=%d, log_g_new=%.6g)"
-            % (s, lqf, expected_lqf, o_f, s_f, log_g_new))
+            "(o_f=%d, s_f=%d)"
+            % (s, lqf, expected_lqf, o_f, s_f))
         assert math.isclose(lqr, expected_lqr, rel_tol=0.0, abs_tol=tol), (
             "[seed=%d] etr lqr mismatch: got %.15g expected %.15g "
             "(omega_f=%d)" % (s, lqr, expected_lqr, omega_f))

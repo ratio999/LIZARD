@@ -37,10 +37,14 @@ cpdef tuple get_rng():
     return (_PY_RNG, _NP_RNG)
 
 
-# --- Phase 2.1.PM: birth density g for new parameters ---------------------
-# g(theta) = Normal(0, _G_TAU^2). Set per-run via set_g_tau(std(y)).
-# Tree-level plumbing of tau (analogous to sigma) is deferred; this module
-# global is the temporary single source of truth.
+# --- Phase 2.1.PM / 2.13(a): birth draw g for new parameters --------------
+# g(theta) = Normal(0, tau^2), tau from tree.g_tau (default std(y)).
+# Phase 2.13(a): g is the WARM-START distribution for freshly born
+# parameters ONLY. It contributes NO density terms to any (log_q_fwd,
+# log_q_rev): the chain is topology-marginal (theta is overwritten by the
+# BIC scorer's theta_hat and is not retained state), so the theta-draw
+# integrates to 1 in every structural proposal density. See THEORY_2_13.md
+# §1 for the detailed-balance argument.
 
 cdef double _KIND_CROSS_PROB = 0.5      # mixture weight for sub-move B (BIRTH/DEATH)
 
@@ -196,22 +200,23 @@ cdef int _count_nodes(function_treeC.Node node):
 
 cdef double _eval_build_density(function_treeC.Node S, int d,
                                 int M, int O, double p_par, double g_tau):
-    """log q_build(S | d) for a perfect-binary subtree of height d.
+    """STRUCTURAL log q_build(S | d) for a perfect-binary subtree of height d.
     Caller must verify _is_perfect_binary(S, d) before calling.
 
     Per-leaf Bernoulli(p_par) for parameter-vs-function, uniform from F
-    for function leaves, uniform from O for ops, and log g(theta_i) per
-    parameter leaf evaluated at its current value."""
+    for function leaves, uniform from O for ops.
+
+    Phase 2.13(a): the theta values of parameter leaves do NOT contribute
+    (no log g terms). The chain is topology-marginal — theta is optimizer
+    warm-start randomness, not retained state, so its density integrates
+    to 1 in q_struct. `g_tau` is kept in the signature for .pxd stability
+    but is no longer read."""
     cdef int n_leaves = 1 << d           # 2^d
     cdef int n_int    = n_leaves - 1     # 2^d - 1
     cdef list param_leaves = _collect_parameter_leaves(S, [])
     cdef int K_S = len(param_leaves)
-    cdef double log_g_sum = 0.0
-    cdef function_treeC.Node leaf
-    for leaf in param_leaves:
-        log_g_sum += _log_g(<double> leaf.value, g_tau)
     return (
-        (<double> K_S) * np.log(p_par) + log_g_sum
+        (<double> K_S) * np.log(p_par)
         + (<double> (n_leaves - K_S)) * (np.log(1.0 - p_par) - np.log(<double> M))
         - (<double> n_int) * np.log(<double> O)
     )
@@ -773,16 +778,20 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
           - prob (1 - p_cross): sub-move A, pick uniform from F (size M).
             Symmetric. (0, 0).
           - prob p_cross: sub-move B, case (c) BIRTH. Replace with a fresh
-            parameter leaf a_new, value theta_new ~ g = N(0, tau^2).
-              log_q_fwd contribution =  log g(theta_new)
+            parameter leaf a_new, value theta_new ~ g = N(0, tau^2) used as
+            optimizer WARM START only (Phase 2.13(a): the chain is
+            topology-marginal; the theta-draw integrates out of q_struct).
+              log_q_fwd contribution =  0
               log_q_rev contribution = -log M
       * v parameter leaf:
           - prob (1 - p_cross): identity. Parameter relabel/refresh is
             handled by the dedicated parameter-refresh move (Phase 2.1.PR).
           - prob p_cross: sub-move B, case (d) DEATH. Pick a new function
-            uniform from F; the parameter value theta_j is discarded.
+            uniform from F; the parameter value theta_j is discarded
+            (Phase 2.13(a): no g(theta_j) reverse-birth density — theta is
+            not retained state).
               log_q_fwd contribution = -log M
-              log_q_rev contribution =  log g(theta_j)
+              log_q_rev contribution =  0
 
     The selection factor 1/|N(T)| and the mixture weight log p are common
     to forward and reverse and therefore omitted.
@@ -842,13 +851,17 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         return (0.0, 0.0)
 
     # 4. Sub-move B: kind-crossing.
-    cdef double theta_dying
     cdef double theta_new
     if v.is_param():
         # Case (d): DEATH of theta_j. Replace with a function leaf.
-        # Capture the dying value BEFORE swapping the leaf, since the
-        # reverse move is a BIRTH at exactly this value: log q_rev = log g(theta_j).
-        theta_dying = <double> v.value
+        # Phase 2.13(a): the chain is TOPOLOGY-MARGINAL. theta is not
+        # retained chain state (the scorer overwrites it with theta_hat),
+        # so the reverse-birth density g(theta_j) must NOT appear here:
+        # the reverse birth's theta-draw integrates to 1 in q_struct.
+        # Only structural factors survive. Forward picks the new function
+        # uniformly (1/M); the reverse birth is structurally forced given
+        # the node/kind coin (which cancel), so log_q_rev stays 0 and
+        # q_corr = log_q_rev - log_q_fwd = +log M.
         new_func_str = _PY_RNG.choice(functions)
         v.function = real_functionC.RealFunctionC.from_string(
             new_func_str, tree.domain, compute_grad=False)
@@ -858,7 +871,6 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         else:
             tree.tree_update(parent)
         log_q_fwd += -np.log(<double> M)
-        log_q_rev += _log_g(theta_dying, g_tau)
         return (log_q_fwd, log_q_rev)
 
     # Function leaf -> parameter leaf: case (c) BIRTH of theta_new.
@@ -868,15 +880,17 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
         new_name, tree.domain, compute_grad=False)
     # set_value gates on bis_param; flip flag BEFORE assigning the value.
     v.bis_param = v.is_param()
-    # Phase 2.1.PM: draw theta_new ~ g and store the SAME draw as the leaf
-    # value AND as the argument to log g(.) in log_q_fwd.
+    # Phase 2.13(a): theta_new ~ g is WARM-START randomness only. It does
+    # not influence which topology results, so it integrates to 1 in
+    # q_struct and contributes NOTHING to log_q_fwd (the scorer replaces
+    # it with theta_hat before the accept/reject anyway). The reverse
+    # (death) picks the original function uniformly: log_q_rev = -log M.
     theta_new = _sample_g(g_tau)
     v.set_value(theta_new)
     if parent is None:
         tree.tree_update(tree.root)
     else:
         tree.tree_update(parent)
-    log_q_fwd += _log_g(theta_new, g_tau)
     log_q_rev += -np.log(<double> M)
     return (log_q_fwd, log_q_rev)
 
@@ -1814,15 +1828,15 @@ cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operatio
       s(arity) = N0 if arity == 0 else N2
 
       log_q_fwd = -log Omega_i - log 2 - log s(o_f)
-                  + sum_{parameters born in the new ET} log g(theta_new)
       log_q_rev = -log Omega_f - log 2 - log s(o_i)
-                  + sum_{parameters of the OLD ET}      log g(theta_old)
 
     Omega_i / Omega_f are the ET counts of T / T'; o_f / o_i the arities of the
-    new / old ET; theta_new / theta_old the parameter values born / destroyed.
-    The -log 2 (uniform arity choice) is identical in both directions and
-    cancels in log_q_rev - log_q_fwd; it is written into both for transparency.
-    Parameter births use g = N(0, tau^2) (RJMCMC Jacobian = 1; theta profiled).
+    new / old ET. The -log 2 (uniform arity choice) is identical in both
+    directions and cancels in log_q_rev - log_q_fwd; it is written into both
+    for transparency. Phase 2.13(a): parameter births still draw
+    theta ~ g = N(0, tau^2) but ONLY as optimizer warm start — the chain is
+    topology-marginal, so no log g terms enter either density (the draw
+    integrates to 1 in q_struct; the reverse re-birth likewise).
 
     Bounded support: only a 0-ET -> 2-ET replacement can deepen the tree; if
     the result exceeds _MAX_TREE_DEPTH we force-reject (log_q_rev = -inf), the
@@ -1846,13 +1860,10 @@ cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operatio
     cdef function_treeC.Node v = ets_T[_PY_RNG.randrange(omega_i)]
     cdef int o_i = 0 if v.is_leaf() else 2
 
-    # ---- 2. capture OLD-ET parameter values (the reverse re-births them) ----
-    cdef list old_param_leaves = _collect_parameter_leaves(v, [])
+    # ---- 2. old-ET arity was captured above; Phase 2.13(a): the old ET's
+    # parameter VALUES are irrelevant to the reverse density (topology-
+    # marginal chain; the reverse re-birth's theta-draw integrates to 1).
     cdef double g_tau = tree.g_tau
-    cdef double log_g_old = 0.0
-    cdef function_treeC.Node pl
-    for pl in old_param_leaves:
-        log_g_old += _log_g(<double> pl.value, g_tau)
 
     # ---- 3. draw the replacement ET (arity ~ Uniform{0, 2}) ----
     cdef int o_f = 0 if (_PY_RNG.random() < 0.5) else 2
@@ -1887,14 +1898,14 @@ cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operatio
     cdef double s_f = (<double> N0) if o_f == 0 else (<double> N2)
     cdef double s_i = (<double> N0) if o_i == 0 else (<double> N2)
 
+    # Phase 2.13(a): purely structural densities — log_g_new (returned by
+    # _build_random_et for the warm-start draws) is deliberately NOT added.
     cdef double log_q_fwd = (-np.log(<double> omega_i)
                              - np.log(2.0)
-                             - np.log(s_f)
-                             + log_g_new)
+                             - np.log(s_f))
     cdef double log_q_rev = (-np.log(<double> omega_f)
                              - np.log(2.0)
-                             - np.log(s_i)
-                             + log_g_old)
+                             - np.log(s_i))
     return (log_q_fwd, log_q_rev)
 
 

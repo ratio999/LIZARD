@@ -4,7 +4,7 @@
 **Headline novelty**: Adaptive Pólya-tree structural prior over GP construction paths inside parallel-tempered MCMC.
 
 ## Critical-path summary
-Phase 0 → Phase 1.3 + Phase 2.1 + Phase 2.2 (proposal-correction work) → **Phase 2.7 (SOLID POSTERIOR — hard gate)** → Phase 2.3 (vocabulary) → Phase 3.3 (tests) → Phase 4.1 (sanity) → Phase 4.3 (ablations) → Phase 4.2 (hero) → Phase 5 (writing).
+Phase 0 → Phase 1.3 + Phase 2.1 + Phase 2.2 (proposal-correction work) → **Phase 2.7 (SOLID POSTERIOR — hard gate)** → **Phase 2.13 (SOUNDNESS AUDIT fixes (a)–(e) — new hard gate, 2026-07-09)** → Phase 2.3 (vocabulary) → Phase 3.3 (tests) → Phase 4.1 (sanity) → Phase 4.3 (ablations) → Phase 4.2 (hero) → Phase 5 (writing).
 Phase 1.1, 1.2, 1.5, 1.6 can run in parallel with the Phase 2 code work.
 
 ---
@@ -338,6 +338,166 @@ same tree wire format (sympy expr, name_values, post) rebuilt via `_expr_to_tree
   bit-parity with the serial trajectory is NOT expected (different but equally
   valid random schedule).
 
+### 2.13 SOUNDNESS AUDIT (2026-07-09, full-code Bayesian review) — NEW HARD GATE before Phase 4
+Independent audit of the posterior/acceptance math across groveC._step,
+gp_movesC densities, real_functionC/function_treeC BIC, polya_treeC prior,
+Forest EMC operators, and mpi_worker. Verdict: the overall architecture
+(BIC-as-Laplace target, Pólya adaptive prior with diminishing adaptation,
+tempered EMC with untempered proposal correction, birth/death pair-equality,
+bounded-support depth caps via log_q_rev = -inf, MPI deterministic replay)
+is sound in design. The following items break or bias exactness and are
+ordered by urgency. (a)–(e) are BLOCKING for Phase 4; (f)–(l) are
+second-order / documentation.
+
+  (a) **θ-bookkeeping inconsistency (g-density terms vs profiled-BIC target).**
+      The target is θ-free (log-evidence = -BIC/2 at θ̂, Pólya prior), yet the
+      structural proposal corrections include continuous densities over θ:
+      point_mutation BIRTH adds log g(θ_new) to lqf / DEATH adds log g(θ_dying)
+      to lqr; _eval_build_density and ETR add Σ log g(θ) terms. That bookkeeping
+      is exact ONLY if θ is retained as part of the chain state (product-space
+      RJMCMC with an implicit improper-uniform θ-measure). It is NOT retained:
+      the scorer (`_log_marginal_bic(optimize=True)` / the BIC cache) overwrites
+      θ with θ̂ immediately, and parameter_refresh diffuses θ under a *different*
+      target (raw tempered likelihood). The g(θ) factors therefore inject noise
+      into the acceptance ratio that does not cancel in expectation
+      (Monte-Carlo-within-Metropolis, not pseudo-marginal) → the topology
+      marginal is biased.
+      FIX (recommended, minimal): treat the chain as living on TOPOLOGY space
+      only, with θ̂ a deterministic per-topology statistic (the _bic_cache
+      already enforces first-visit determinism per y). Then all proposal
+      corrections must be PURELY STRUCTURAL: delete the log g terms from
+      _point_mutation (birth/death), _eval_build_density (keep the Bernoulli
+      p_par and uniform-choice factors), and _etr_mutation; the birth draw
+      θ_new ~ g remains as optimizer warm-start randomness that integrates
+      to 1 in q. parameter_refresh then no longer affects the topology
+      chain's correctness (it only perturbs warm starts) and may be kept.
+      Alternative (NOT recommended, bigger change): abandon BIC and score
+      L(y|T,θ) at the CURRENT θ with explicit priors g(θ) in the target —
+      full product-space RJMCMC; then the g bookkeeping is right but
+      optimize/refresh must be removed or reworked into valid kernels.
+      Cross-refs: Phase 1.3, 1.6, 2.7(b). Update test_phase23 3.3(b)/(c)
+      expected densities accordingly.
+
+  (b) **Within-grove subtree_crossover violates reversibility.**
+      _propose deep-copies a donor, swaps subtrees, and on accept installs
+      ONLY slot i; the donor copy (which received S_v) is discarded. From the
+      new state the reverse proposal density is generally ZERO — S_v no longer
+      exists anywhere — yet the code uses the pair-swap counts
+      (-log n_int(a')-log n_int(b')) as lqr. Detailed balance is broken.
+      FIX: either (i) make it a genuine pair move: install BOTH children in
+      slots i and j of the SAME grove with joint acceptance
+      ΔU_i/T + ΔU_j/T + (lqr - lqf) [both slots share T, so this is the
+      within-grove analog of the Forest crossover, which is CORRECT]; or
+      (ii) drop within-grove crossover from the kernel (Forest trans-grove
+      crossover already supplies recombination).
+
+  (c) **Pólya auto-register ordering bias in _step.**
+      old_prior is evaluated BEFORE new_path extraction. When the candidate
+      introduces an unregistered symbol, extract_path(cand) auto-registers it
+      and grows every Dirichlet (n_total += 1), so new_prior is evaluated on a
+      LARGER vocabulary than old_prior within the same acceptance ratio —
+      systematically favoring the incumbent by ~(#unvisited steps)·log((n+1)/n).
+      FIX: extract BOTH paths first (letting registration happen), then
+      evaluate both log_priors against the same Θ. Same ordering issue exists
+      in legacy_step and in the Forest swap/crossover prior evaluations
+      (harmless there only when both trees are already covered).
+
+  (d) **NaN root_posteriors when Grove is built with node_list (or any path
+      that skips scoring).** The lazy cache-fill in _step is commented out
+      (deprecated block), so old_post = NaN → log_alpha = NaN → every
+      comparison is False → the slot can never accept anything, silently.
+      FIX: restore the lazy fill via log_marginal_bic (mirror _score_post),
+      and/or score in _init_trees for the node_list branch too.
+
+  (e) **_propose retry loop (max_attempts=2) is an unaccounted proposal
+      mixture.** On validity failure a SECOND move is drawn and only its
+      (lqf, lqr) enters the ratio; the effective kernel q_eff includes the
+      retry mixture, which differs between forward and reverse states.
+      FIX: max_attempts=1 — an invalid candidate is a hard reject (the
+      None path already does this). Cheap and exact.
+
+  (f) **`operations` plumbing is consistent ONLY for the default 6-op set.**
+      build_tree draws internal ops from the HARDCODED
+      ['add','sub','mul','div','pow','compose'] (function_treeC.pyx:1001),
+      ignoring the caller's list; PolyaTree.__init__ likewise overrides the
+      `operations` argument with module _OPERATIONS (polya_treeC.pyx:77).
+      But _eval_build_density and the move densities use O = len(operations)
+      as passed by the Grove. With any non-default operations list (e.g. the
+      +,-,*,/ used by test_phase29 fixtures) the build densities are WRONG
+      (claim 1/4 per op, sample 1/6) and grown subtrees can contain ops the
+      Grove kernel cannot produce elsewhere. FIX: honor `operations` in
+      build_tree/_build_subtree_with_params (thread it through), or assert
+      at Grove.__init__ that operations == the canonical 6 until then.
+
+  (g) **Single-leaf-root edge case breaks pairing.** subtree_mutation on a
+      leaf root silently delegates to add_node but is selected with
+      p_subtree ≠ p_leaf_hoist, so the Green move-choice factor no longer
+      cancels for that transition. FIX: return (0, -inf) (no-op) from
+      subtree_mutation on single-leaf trees, or dispatch add_node under its
+      own name/probability.
+
+  (h) **nanmean hides partial-domain invalidity in the BIC.** objective/
+      fitness use np.nanmean((y-f)^2): a model NaN on part of the domain is
+      scored on the finite subset while the BIC penalty uses full N —
+      inflating evidence for partially-defined expressions, and the optimizer
+      can actively exploit it. is_valid gates only at pre-optimization θ.
+      FIX: re-validate at θ̂ (or replace nanmean with mean so any NaN →
+      non-finite → reject) before caching/accepting.
+
+  (i) **Profiled-σ BIC omits the promised k+1.** _shortcut_bic /
+      _log_marginal_bic use k = #params in BOTH σ modes; Phase 2.7(a) says
+      σ=None should penalize k+1. Constant shift (every model pays the same
+      +σ), so MH ratios are unaffected — but reported evidences and any
+      cross-mode comparison are off by 0.5·log N. Fix or document.
+
+  (j) **Burn-in scores have no complexity penalty.** _process_candidate and
+      mpi_worker._evaluate_tree call root._log_marginal_bic(y) with
+      params=None → k=0 → pure-fit ranking. Acceptable (burn-in is
+      initialization only, per the user's design: trees built regardless of
+      score), but document that "post" wire values from burn-in are NOT the
+      Phase 2.7 log-evidence and must be re-scored before use in acceptance
+      ratios (run_mpi_spawn currently ships them as-is into swap ratios on
+      round 0 if compute_posteriors was not called first).
+
+  (k) **Proposal-path multiplicity ignored (document in Phase 1.3).** q is
+      computed as the density of ONE generative path; symmetric trees admit
+      multiple (leaf, subtree) choices mapping T→T'. Standard practice, but
+      the writeup must state the convention (single-path densities with
+      matched forward/reverse path pairing).
+
+  (l) **Pólya adaptation limit (writeup care, Phase 1.2).** Σ γ_t = Σ 1/(1+t)
+      diverges, so total urn mass grows without bound and Θ need not converge
+      to a deterministic limit; diminishing adaptation + containment (finite
+      support under the depth cap) still give ergodicity in the R&R 2007
+      sense, but the "self-consistent posterior" limit language needs a
+      stochastic-approximation argument or should be weakened. Propriety of
+      the prior is NOT an issue given the depth-cap-restricted support
+      (finite space).
+
+  Verified-correct (no action): untempered q_corr with tempered target;
+  birth/death pair probability equality preserved under 2.8 adaptation;
+  Forest swap (1/Ta-1/Tb)(Ub-Ua) with U = post+prior on shared Θ; trans-grove
+  crossover acceptance form; prior re-evaluation of the incumbent every step
+  under evolving Θ; depth caps as bounded support (restriction, not bias);
+  BIC cache θ̂ re-install (helps determinism, required by fix (a));
+  MPI deterministic replay / delayed adaptation; AMState Robbins-Monro
+  update-on-every-step; subtree_mutation size-ratio correction with
+  perfect-binary support gate; add_node↔leaf_hoist and split↔internal_hoist
+  density pairing (selection, op, trunc-geom depth, side, build factors all
+  mirrored).
+
+  Implementation order for 2.13: (e) → (d) → (c) → (b) → (a) → (g) → (h) →
+  (f), then recompile + rerun test_phase23 (adjusting 3.3(b)/(c) expectations
+  for (a)), test_phase28, test_phase29, test_phase2mpi. (i)–(l) are
+  docs/flags. Phase 4 remains gated until (a)–(e) land.
+
+  STATUS 2026-07-09: (a) ✅ IMPLEMENTED as (a1) — g-density terms removed
+  from _point_mutation birth/death, _eval_build_density, _etr_mutation;
+  θ~g draws retained as optimizer warm starts; test_phase23 3.3(b)/(c)
+  re-targeted to the structural contract. Pending recompile + full test run
+  on the Linux box. Formal derivation: THEORY_2_13.md §1. Technical change
+  log: AUDIT_2_13_FIXES.md. (b)–(e) still open.
+
 ---
 
 ## Phase 2.9 — Evolutionary Monte Carlo: population-coherent moves (rigorous, Bayesian)
@@ -558,4 +718,7 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
 - ✅ 2.11 ETR move (etr_mutation) implemented + wired (8th move) + density tests
 - ⏳ 3.1 MPI keep/drop decision
 - ⏳ 3.4 dead-code removal (legacy_* moves, root_replacement, replace_with_subtree)
-- ⏳ Phase 4 experiments (4.1 sanity → 4.3 ablations → 4.2 hero) — gate now open after verification
+- ⏳ **2.13 soundness-audit fixes (a)–(e)** — NEW hard gate (2026-07-09): θ/g-density
+  bookkeeping, within-grove crossover reversibility, Pólya auto-register ordering,
+  NaN root_posteriors on node_list init, _propose retry mixture
+- ⏳ Phase 4 experiments (4.1 sanity → 4.3 ablations → 4.2 hero) — gate REOPENS after 2.13(a)–(e)
