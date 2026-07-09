@@ -14,10 +14,20 @@ cdef class Node:
     cdef int node_depth
     cdef bint is_valid(self, object x=?, double max_abs=?)
     cdef public cnp.float64_t value    
-    cdef reinit_to_par(self, list existent_pars, str user_prefix=?, double value=?) 
+    cdef reinit_to_par(self, list existent_pars, str user_prefix=?, double value=?)
     cdef _rebuild_ancestor_functions(self, Node node)
     cpdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
+    # Phase 2.10 Stage 2: internal-parameter values of an opaque atomic leaf
+    # (dict name -> float), None on every other node. Lives on the Node so
+    # tree deepcopies isolate it, exactly like parameter-leaf .value.
+    cdef public object theta
+    cpdef is_atomic(self)
+    cpdef int leaf_k(self)
+    cpdef list leaf_param_names(self)
+    cpdef str vocab_symbol(self)
+    cdef rename_atomic(self, dict name_map)
+    cdef sort_params_by_names(self, list names)
     cdef object fitness
     cdef object posterior
     cdef object prior

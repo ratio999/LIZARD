@@ -622,7 +622,37 @@ User-registrable indivisible basis functions (e.g. A·sin(ω·x)) treated as ONE
 Touches: function_treeC (Node opaque flag + is_leaf/is_param semantics), gp_movesC (moves
 skip opaque internals when picking targets), real_functionC (primitive definition), Pólya
 prior (assign each primitive a symbol/mass). Paradigm-independent; highest value/lowest risk.
-OPEN: exact prior-mass treatment for opaque primitives.
+STAGE 1 (DP completion in polya_treeC) ✅ IMPLEMENTED 2026-07-09, pending
+compile+run: remainder cell + carve-on-register + neutrality restriction +
+state round-trip; theorem-tests in test_phase210.py; legacy mode
+(remainder_mass=0 default) bit-identical.
+STAGE 2 (atomic-leaf object, DESIGN §9 items 2-3) ✅ IMPLEMENTED 2026-07-09,
+pending compile+run: AtomSpec template + instantiate_atom/rename_leaf_params
+(real_functionC); Node.theta + is_atomic/leaf_k/leaf_param_names/vocab_symbol
++ name_values absorbs θ_ψ (so _shortcut_bic's k = len(name_values) IS the
+DESIGN §5 effective dimension) + optimizer/apply write-backs (function_treeC);
+extract_path/assert_covers key on vocab_symbol — ONE Pólya cell per template
+(polya_treeC); every leaf-choice cardinality M+1 → M+1+A via a trailing
+`atoms` arg on point_mutation/ETR/add_node/split/hoists (None = A=0 =
+bit-identical legacy), force-rejects where a reverse move can't rebuild an
+atom (subtree_mutation always; death moves when A=0), crossover renames
+opaque internals, parameter_refresh treats θ_ψ as ordinary coordinates
+(gp_movesC). Stage-2 tests (h)-(n) in test_phase210.py.
+STAGE 3 (grove/MPI plumbing) PENDING: vocabulary freeze at construction
+(pre-register param pool + user primitives with G_Ψ masses; auto_register →
+guarded error), pass `atoms` uniformly to ALL kernel moves, build AMState
+from list(tree.name_values.keys()) (until then PR safely no-ops on opaque
+trees), generalize the BIC-cache theta install + tree wire format
+(_expr_to_tree would DECOMPOSE an opaque leaf — wire must carry atom
+symbols), end-to-end Ψ₂ recovery test.
+PRIOR-MASS QUESTION RESOLVED (2026-07-09): see DESIGN_2_10_PRIMITIVES.md —
+DP(c, G₀) formalization; registration = partition refinement carving mass
+from a remainder cell (replaces the append-α₀ scheme, which is NOT
+registration-invariant); parameter leaves unify as k=1 constant primitives;
+k_ψ enters the BIC dimension count only. Implementation order in that doc §9.
+Corollaries: settles Phase 2.3 (freeze vocabulary at construction;
+auto_register demoted to guarded fallback) and corrects Phase 1.5 (append-
+growth invariance is FALSE as implemented; true under the splitting rule).
 
 ---
 

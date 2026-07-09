@@ -2,22 +2,42 @@ cimport numpy as cnp
 import sympy as sp
 
 
+cdef class AtomSpec:
+    # Phase 2.10 Stage 2: a user-registered opaque primitive TEMPLATE
+    # (DESIGN_2_10_PRIMITIVES.md par.1): an atom of Psi_k, k >= 1. `name` is
+    # the canonical Polya-vocabulary symbol (ONE cell per template, however
+    # many instantiations exist); `template` the expression string in x and
+    # k placeholder parameters; `slots` the placeholder names in a fixed
+    # deterministic (natural) order used positionally by instantiate_atom.
+    cdef public str name
+    cdef public str template
+    cdef public object expr
+    cdef public list slots
+    cdef public int k
+
 
 cdef class RealFunctionC:
     cdef str mode
-    cdef object func  
-    cdef object expr, symbols 
-    cdef bint regular  
-    cdef object domain 
-    cdef str description  
+    cdef object func
+    cdef object expr, symbols
+    cdef bint regular
+    cdef object domain
+    cdef str description
     cdef list params
     cdef list params_strs
     cdef object prior
-    cdef list variables 
+    cdef list variables
     cdef object cfit
     cdef object cfit_expr
     cdef dict grad_funcs
     cdef object constant_value
+    # Phase 2.10 Stage 2 (opaque atomic leaves): non-None ONLY on functions
+    # built by instantiate_atom. atom_symbol = the template's canonical
+    # vocabulary name; theta0 = {internal name: reference value} fallback
+    # used by evaluate() when a params dict omits the internal names
+    # (mirrors the parameter-leaf constant_value convention).
+    cdef public str atom_symbol
+    cdef public dict theta0
     
     cdef _update_symbols(self)
     cdef evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = ?)   
@@ -96,5 +116,15 @@ cdef class RealFunctionC:
 
 cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept
 
-cpdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer( 
+cpdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer(
                     cnp.ndarray[cnp.float64_t, ndim=1] domain)
+
+# Phase 2.10 Stage 2: opaque-leaf factory + rename helper. Both cpdef so
+# gp_movesC / function_treeC call them across the cimport boundary --
+# POSITIONAL ARGS ONLY at cross-module call sites (kwargs on cpdef across
+# cimport raise NameError at runtime; see gp_movesC build_tree note).
+cpdef RealFunctionC instantiate_atom(AtomSpec spec,
+                    cnp.ndarray[cnp.float64_t, ndim=1] domain,
+                    list fresh_names)
+
+cpdef RealFunctionC rename_leaf_params(RealFunctionC rf, dict name_map)

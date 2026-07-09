@@ -49,8 +49,9 @@ cpdef tuple get_rng():
 
 cdef class Node:
     '''Node of a Tree: either a leaf, or an operation on two other nodes'''    
-    def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None, 
-            str symbol=None, double alpha = 0.01, object sigma = 1.00, object value = None):
+    def __init__(self, real_functionC.RealFunctionC function=None, object left=None, object right=None,
+            str symbol=None, double alpha = 0.01, object sigma = 1.00, object value = None,
+            object theta = None):
         self.left = left
         self.right = right
         self.op_symbol = symbol
@@ -68,21 +69,36 @@ cdef class Node:
             self.value = value
         else:
             self.value = np.nan
+        # Phase 2.10 Stage 2: internal-parameter values of an opaque atomic
+        # leaf live on the Node (deepcopy-safe, like parameter-leaf .value
+        # above). Auto-init from the function's reference theta0 so
+        # hand-built Nodes are immediately consistent; move code overwrites
+        # with its warm-start draws.
+        if theta is not None:
+            self.theta = dict(theta)
+        elif (self.function is not None
+                and self.function.atom_symbol is not None):
+            self.theta = dict(self.function.theta0) \
+                if self.function.theta0 is not None else {}
+        else:
+            self.theta = None
         self.fitness = None
         self.posterior = None
         self.prior = None
         self.alpha = alpha #keep alpha as it could weight an externally computed prior
         self.sigma = sigma
-        
+
     def __copy__(self):
         return Node(copy(self.function), copy(self.left), copy(self.right),
-            self.op_symbol, alpha=self.alpha, sigma=self.sigma)
+            self.op_symbol, alpha=self.alpha, sigma=self.sigma,
+            theta=(None if self.theta is None else dict(self.theta)))
 
     def __deepcopy__(self, memo1):
         cdef Node node_copy = Node(deepcopy(self.function, memo1),
                 deepcopy(self.left, memo1), deepcopy(self.right, memo1),
-                self.op_symbol, alpha=self.alpha, sigma=self.sigma, 
-                value=self.value
+                self.op_symbol, alpha=self.alpha, sigma=self.sigma,
+                value=self.value,
+                theta=(None if self.theta is None else dict(self.theta))
                 )
         memo1[id(self)] = node_copy
         return node_copy
@@ -117,6 +133,79 @@ cdef class Node:
     
     cpdef is_constant(self):
         return (len(self.function.variables)==0) and not self.is_leaf()
+
+    # ------------------------------------------------------------------
+    # Phase 2.10 Stage 2 — the atomic-leaf taxonomy (DESIGN §1, §9 item 2).
+    # ONE object class: an atomic leaf carrying k >= 0 internal parameters.
+    #   function leaf   : k = 0                  (is_param False, is_atomic False)
+    #   parameter leaf  : k = 1, expr == symbol  (is_param True,  is_atomic False)
+    #   opaque leaf     : k = k_psi >= 1, from an AtomSpec template
+    #                                            (is_param False, is_atomic True)
+    # ------------------------------------------------------------------
+    cpdef is_atomic(self):
+        '''Is this leaf an opaque atomic primitive (instantiated from an
+        AtomSpec template)? Plain parameter leaves and function leaves
+        return False.'''
+        return (self.is_leaf() and self.function is not None
+                and self.function.atom_symbol is not None)
+
+    cpdef int leaf_k(self):
+        '''Continuous parameters this LEAF contributes to the tree's
+        effective dimension (the k_psi of DESIGN §5): 0 for a function
+        leaf, 1 for a plain parameter leaf, k_psi for an opaque leaf.
+        0 on internal nodes (their functions merely inherit leaf
+        parameters; counting there would double-count).'''
+        if not self.is_leaf() or self.function is None:
+            return 0
+        if self.function.atom_symbol is not None:
+            return len(self.function.params_strs)
+        if self.bis_param:
+            return 1
+        return 0
+
+    cpdef list leaf_param_names(self):
+        '''Names of the parameters carried by this leaf, in the leaf's
+        deterministic order: [] for a function leaf, [description] for a
+        plain parameter leaf, the instantiated internal names for an
+        opaque leaf.'''
+        if not self.is_leaf() or self.function is None:
+            return []
+        if self.function.atom_symbol is not None:
+            return list(self.function.params_strs)
+        if self.bis_param:
+            return [self.function.get_description()]
+        return []
+
+    cpdef str vocab_symbol(self):
+        '''Canonical Pólya-vocabulary key of this leaf: the atom template's
+        registered symbol for opaque leaves (ONE cell per template — the
+        instantiated description varies with the fresh parameter names and
+        must never be registered), the plain description otherwise.'''
+        if self.function is not None and self.function.atom_symbol is not None:
+            return self.function.atom_symbol
+        return self.function.get_description()
+
+    cdef rename_atomic(self, dict name_map):
+        '''Rename this opaque leaf's internal parameters (function expr AND
+        theta keys) per name_map (old -> new). No-op on non-atomic nodes.'''
+        cdef dict new_theta
+        cdef str key
+        if not self.is_atomic():
+            return
+        self.function = real_functionC.rename_leaf_params(self.function, name_map)
+        new_theta = {}
+        if self.theta is not None:
+            for key in self.theta:
+                new_theta[name_map.get(key, key)] = self.theta[key]
+        self.theta = new_theta
+
+    cdef sort_params_by_names(self, list names):
+        '''Impose `names` (str list) as this node's function's parameter
+        order. Generalizes sort_params to plain name lists so opaque-leaf
+        internal names — which have no dedicated parameter Node — can be
+        appended after the plain parameter leaves' names.'''
+        cdef list syms = [sp.symbols(n) for n in names]
+        self.function.sort_params_list(syms)
 
     cdef set_alpha(self, double newalpha):
         self.alpha = newalpha
@@ -538,6 +627,8 @@ cdef class Tree:
 
         cdef dict params_values = {}
         cdef Node par
+        cdef Node leaf
+        cdef str nm
         cdef dict names_values = {}
         cdef double par_value = 0.0
         cdef double penalty = 0.0
@@ -547,6 +638,17 @@ cdef class Tree:
             params_values[par] = par_value
             names_values[par.function.get_description()] = par_value
             penalty += 1 #np.abs(par_value)
+        # Phase 2.10 Stage 2: merge the opaque leaves' internal parameters,
+        # AFTER the plain ones (matching the order get_params imposed on the
+        # root function). Each internal parameter counts 1 toward the
+        # penalty, exactly like a plain parameter leaf — this is what makes
+        # _shortcut_bic's k = len(name_values) the DESIGN §5 effective
+        # dimension k(T) + sum_j k_psi_j with no further changes.
+        for leaf in self.leaves:
+            if leaf.is_atomic():
+                for nm in leaf.leaf_param_names():
+                    names_values[nm] = leaf.theta[nm]
+                    penalty += 1
         return params_values, names_values, penalty
 
     def get_param_dicts(self):
@@ -581,14 +683,25 @@ cdef class Tree:
         """How many constants in the Tree?"""
         if params_list is None:
             params_list = []
-        
+        cdef list order_names = []
         for leaf in self.leaves:
             #print(leaf.get_fun().get_description())
             if leaf.is_param():
-                
-               
+
+
                 params_list.append(leaf)
-        self.root.sort_params(params_list)        
+                order_names.append(leaf.get_fun().get_description())
+        # Phase 2.10 Stage 2: opaque atomic leaves carry internal parameters
+        # with no dedicated parameter Node. Append their names AFTER the
+        # plain ones, in leaf (pre-order) order — the identical order
+        # get_param_values inserts them into name_values, so the root
+        # function's parameter order, name_values, and the optimizer's flat
+        # vector stay aligned. With no atomic leaves this reduces exactly to
+        # the historical sort_params(params_list) call.
+        for leaf in self.leaves:
+            if leaf.is_atomic():
+                order_names.extend(leaf.leaf_param_names())
+        self.root.sort_params_by_names(order_names)
         return params_list
     #def?
 
@@ -752,7 +865,12 @@ cdef class Tree:
                                   str method_str='L-BFGS-B'):
         cdef double mse
         self.bic_loss_is_param_loss = True #placeholder to remove when using custom defined loss functions
-        if self.bic_loss_is_param_loss and optimize and len(self.params)>0:
+        # Phase 2.10 Stage 2: gate on name_values, not self.params — an
+        # opaque-leaf tree can carry continuous parameters (k_psi >= 1) with
+        # ZERO plain parameter Nodes, and its theta must still be optimized.
+        # For atom-free trees the two gates are equivalent (every parameter
+        # Node inserts a name), so legacy behaviour is unchanged.
+        if self.bic_loss_is_param_loss and optimize and len(self.name_values)>0:
             mse = self._update_parameters_and_fitness(self.domain, y,
                                         method_str, use_gradients)
             # Phase 2.13(h): re-validate at theta_hat. The optimizer's
@@ -768,7 +886,7 @@ cdef class Tree:
                 mse /= (<double>self.sigma*<double>self.sigma)
             return self._shortcut_bic(y, mse)
 
-        if optimize and len(self.params) > 0:
+        if optimize and len(self.name_values) > 0:
 
             self._update_parameters(self.domain, y,
                                     method_str, use_gradients)
@@ -786,26 +904,36 @@ cdef class Tree:
         cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
         str method_str='L-BFGS-B', bint use_gradients=False):
         '''Finds optimal parameters and sets them in the tree'''
-        
+
         cdef dict input_pars = self.name_values
         cdef object result
         cdef dict optimized_params
         cdef Node par
+        cdef Node leaf
+        cdef str nm
         #print(f'EXPR: {self.tree_get_description()}')
         #print(f'input_pars id: {id(input_pars)}, value: {input_pars}')
         #print(f'self.name_values id: {id(self.name_values)}')
-        if not hasattr(self.sigma, '__len__'): 
+        if not hasattr(self.sigma, '__len__'):
             result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         else:
-            result = self.root.optimize_sigma(x_data, y_data, 
+            result = self.root.optimize_sigma(x_data, y_data,
             input_pars, method_str, use_gradients, self.sigma)
         optimized_params = dict(zip(input_pars.keys(), result.x))
         #print(self.tree_get_description(), result)
         for par in self.params:
             par.set_value(optimized_params[par.function.get_description()])
-        
+        # Phase 2.10 Stage 2: write the optimizer's values back into the
+        # opaque leaves (their names are keys of name_values, hence of
+        # optimized_params).
+        for leaf in self.leaves:
+            if leaf.is_atomic():
+                for nm in leaf.leaf_param_names():
+                    if nm in optimized_params:
+                        leaf.theta[nm] = optimized_params[nm]
+
         self.param_values, self.name_values, self.penalty = self.get_param_values()
-	
+
         self.tree_update(self.root)
         #print('Updated parameters to: ', self.name_values) #comment out in production
        
@@ -818,20 +946,28 @@ cdef class Tree:
         cdef object result
         cdef dict optimized_params
         cdef Node par
+        cdef Node leaf
+        cdef str nm
         #print(f'EXPR: {self.tree_get_description()}')
         #print(f'input_pars id: {id(input_pars)}, value: {input_pars}')
         #print(f'self.name_values id: {id(self.name_values)}')
-        if not hasattr(self.sigma, '__len__'): 
+        if not hasattr(self.sigma, '__len__'):
             result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         else:
-            result = self.root.optimize_sigma(x_data, y_data, 
+            result = self.root.optimize_sigma(x_data, y_data,
             input_pars, method_str, use_gradients, self.sigma)
         optimized_params = dict(zip(input_pars.keys(), result.x))
         #print(self.tree_get_description(), result)
         cdef double mse=result.fun
         for par in self.params:
             par.set_value(optimized_params[par.function.get_description()])
-        
+        # Phase 2.10 Stage 2: same opaque-leaf write-back as _update_parameters.
+        for leaf in self.leaves:
+            if leaf.is_atomic():
+                for nm in leaf.leaf_param_names():
+                    if nm in optimized_params:
+                        leaf.theta[nm] = optimized_params[nm]
+
         self.param_values, self.name_values, self.penalty = self.get_param_values()
         self.tree_update(self.root)
         return mse
@@ -887,11 +1023,19 @@ cdef class Tree:
         in sync. Names not present in new_name_values are left untouched.
         """
         cdef Node par
+        cdef Node leaf
         cdef str name
         for par in self.params:
             name = par.function.get_description()
             if name in new_name_values:
                 par.set_value(float(new_name_values[name]))
+        # Phase 2.10 Stage 2: opaque leaves' internal parameters are ordinary
+        # coordinates of the refresh vector (DESIGN §5) — install them too.
+        for leaf in self.leaves:
+            if leaf.is_atomic():
+                for name in leaf.leaf_param_names():
+                    if name in new_name_values:
+                        leaf.theta[name] = float(new_name_values[name])
         self.tree_update(self.root)
 
     cdef _root_replacement(self, object replacement=None, int replace_all = 0, dict kwargs= None,

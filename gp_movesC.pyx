@@ -210,7 +210,14 @@ cdef double _eval_build_density(function_treeC.Node S, int d,
     (no log g terms). The chain is topology-marginal — theta is optimizer
     warm-start randomness, not retained state, so its density integrates
     to 1 in q_struct. `g_tau` is kept in the signature for .pxd stability
-    but is no longer read."""
+    but is no longer read.
+
+    Phase 2.10 Stage 2: when the kernel carries A atom templates, pass
+    M_eff = M + A here. Opaque leaves sit in the same non-parameter bucket
+    as function leaves (each charged (1 - p_par)/M_eff — matching the
+    generalized _build_subtree_with_params draw), and K_S counts PLAIN
+    parameter leaves only (is_param is False on opaque leaves), so the
+    formula below is unchanged."""
     cdef int n_leaves = 1 << d           # 2^d
     cdef int n_int    = n_leaves - 1     # 2^d - 1
     cdef list param_leaves = _collect_parameter_leaves(S, [])
@@ -224,7 +231,8 @@ cdef double _eval_build_density(function_treeC.Node S, int d,
 
 cdef function_treeC.Node _build_subtree_with_params(
         int d, list functions, list operations, object domain,
-        double p_par, list existing_param_names, double g_tau):
+        double p_par, list existing_param_names, double g_tau,
+        list atoms=None):
     """Build a perfect-binary subtree of height d with per-leaf Bernoulli
     parameter assignment. Parameter names extend `existing_param_names`.
 
@@ -234,7 +242,15 @@ cdef function_treeC.Node _build_subtree_with_params(
     hardcoded 6-op set while the density used O = len(operations), so any
     non-default kernel (e.g. the 4 safe ops in the 2.8c/2.9c fixtures) had
     biased build densities — a weight-dependent bias that the 2.8c
-    target-invariance test detects."""
+    target-invariance test detects.
+
+    Phase 2.10 Stage 2: with `atoms` (list of AtomSpec, size A > 0) the
+    NON-parameter bucket is uniform over M + A options — the leaf symbol is
+    REDRAWN from that combined space, overriding build_tree's function
+    choice, so each option's density is exactly (1 - p_par)/(M + A): the
+    factor _eval_build_density charges when called with M_eff = M + A.
+    atoms=None skips the redraw entirely (no extra RNG consumption;
+    bit-identical legacy stream)."""
     # NB: a cpdef function called ACROSS a cimport boundary cannot take
     # keyword arguments (Cython falls back to a Python-name lookup of
     # 'build_tree' in THIS module -> NameError at runtime). Call fully
@@ -248,7 +264,11 @@ cdef function_treeC.Node _build_subtree_with_params(
     cdef list leaves = root.get_leaves(leaves_list=[])
     cdef list pool = list(existing_param_names)
     cdef function_treeC.Node leaf
+    cdef function_treeC.Node atom_leaf
     cdef str new_name
+    cdef int A = 0 if atoms is None else len(atoms)
+    cdef int M = len(functions)
+    cdef int j
     for leaf in leaves:
         if _PY_RNG.random() < p_par:
             new_name = function_treeC.new_par(pool, "a")
@@ -259,6 +279,18 @@ cdef function_treeC.Node _build_subtree_with_params(
             # Phase 2.1.PM: birth from g = N(0, tau^2). Same draw is what
             # _eval_build_density(...) reads back via leaf.value.
             leaf.set_value(_sample_g(g_tau))
+        elif A > 0:
+            j = _PY_RNG.randrange(M + A)
+            if j < M:
+                leaf.function = real_functionC.RealFunctionC.from_string(
+                    functions[j], domain, compute_grad=False)
+                leaf.theta = None
+                leaf.bis_param = leaf.is_param()
+            else:
+                atom_leaf = _make_atom_leaf(atoms[j - M], domain, pool, g_tau)
+                leaf.function = atom_leaf.function
+                leaf.theta = atom_leaf.theta
+                leaf.bis_param = False
     function_treeC._post_order_update(root)
     return root
 
@@ -273,6 +305,55 @@ cdef list _collect_parameter_leaves(function_treeC.Node node, list out):
     _collect_parameter_leaves(node.left,  out)
     _collect_parameter_leaves(node.right, out)
     return out
+
+
+# --- Phase 2.10 Stage 2: opaque atomic primitives (DESIGN §6, §9 item 3) --
+# Every leaf-choice cardinality generalizes M + 1 -> M + 1 + A, where A is
+# the number of registered AtomSpec templates passed to the move via the
+# trailing `atoms` argument. atoms=None (the default at every existing call
+# site) means A = 0: no extra RNG draws, bit-identical legacy densities.
+# CONSISTENCY REQUIREMENT: within one kernel, either EVERY move receives the
+# same `atoms` list or none does — mixed wiring breaks the birth/death
+# density pairing exactly like a functions/operations mismatch would
+# (cf. Phase 2.13(f)).
+
+cdef bint _contains_atomic(function_treeC.Node node):
+    """True iff the subtree rooted at `node` contains an opaque atomic leaf."""
+    if node is None:
+        return False
+    if node.is_leaf():
+        return node.is_atomic()
+    return _contains_atomic(node.left) or _contains_atomic(node.right)
+
+
+cdef function_treeC.Node _make_atom_leaf(object spec_obj, object domain,
+                                         list name_pool, double g_tau):
+    """Instantiate one opaque atomic leaf from an AtomSpec template.
+
+    Draws k_psi fresh parameter names via new_par (`name_pool` is extended
+    IN PLACE so sibling draws stay collision-free — pass the tree's FULL
+    name pool, i.e. list(tree.name_values.keys()), which includes opaque
+    internal names) and a warm-start theta ~ g = N(0, tau^2) per coordinate.
+    Phase 2.13(a) discipline: the theta draws are optimizer warm-start
+    randomness ONLY and contribute no density terms to any proposal (they
+    integrate to 1 in q_struct); the structural choice OF the template is
+    what the M + 1 + A cardinalities charge."""
+    cdef real_functionC.AtomSpec spec = <real_functionC.AtomSpec> spec_obj
+    cdef list fresh = []
+    cdef str nm
+    cdef int j
+    for j in range(spec.k):
+        nm = function_treeC.new_par(name_pool, "a")
+        name_pool.append(nm)
+        fresh.append(nm)
+    cdef real_functionC.RealFunctionC rf = real_functionC.instantiate_atom(
+        spec, domain, fresh)
+    cdef function_treeC.Node leaf = function_treeC.Node(rf)
+    cdef dict th = {}
+    for nm in fresh:
+        th[nm] = _sample_g(g_tau)
+    leaf.theta = th
+    return leaf
 
 cdef int _count_selectable(function_treeC.Node node):
     """Count nodes that are valid selection targets for subtree_mutation:
@@ -325,6 +406,10 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions,
       * random_depth removed (was not p_md-symmetric).
       * No NEW parameter symbols introduced; K of the tree is preserved by
         this move (it can change via add_node / hoist_mutation).
+      * Phase 2.10 Stage 2: this move takes NO `atoms` argument by design —
+        its rebuild is function-leaf-only, so a subtree containing an opaque
+        atomic leaf is off-support (force-reject, no mutation). ETR and
+        point_mutation carry the opaque create/destroy traffic.
     """
     cdef function_treeC.Node v, parent_node, new_subtree, old_subtree, n
     cdef function_treeC.Node target_leaf, parent_of_leaf, new_param_node, src
@@ -369,6 +454,15 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions,
     # total tree depth) and force-reject taller selections. Density-safe: the
     # subtree_mutation density test only reaches d_max <= 2.
     if d_max > _SUBTREE_REBUILD_MAX_HEIGHT:
+        return 0.0, -np.inf
+
+    # Phase 2.10 Stage 2: the rebuild below draws FUNCTION leaves only, so
+    # the reverse rebuild can never re-create an opaque atomic leaf — if
+    # the selected subtree contains one, the reverse density is zero.
+    # Force-reject WITHOUT mutating (the 2.13(g) no-op convention).
+    # Irreducibility is unaffected: ETR and point_mutation create/destroy
+    # opaque leaves.
+    if _contains_atomic(old_subtree):
         return 0.0, -np.inf
 
     # ---- 3. Build a fresh non-parametric subtree of height d_max --------
@@ -654,12 +748,23 @@ cpdef tuple subtree_crossover(function_treeC.Tree parent1,
 cpdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
     '''Renames parameters of a tree using a new prefix'''
     cdef function_treeC.Node node
-    
-    
+    cdef dict amap
+    cdef str nm
+
+
     for node in tree.params:
         old_rep = node.function.get_description()
         param_suffix = old_rep[1:]
         node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain, compute_grad = False)
+    # Phase 2.10 Stage 2: opaque leaves' internal names move to the new
+    # prefix too — crossover relies on this rename to make the two trees'
+    # label spaces disjoint, and opaque internals are part of that space.
+    for node in tree.leaves:
+        if node.is_atomic():
+            amap = {}
+            for nm in node.leaf_param_names():
+                amap[nm] = f"{new_prefix}{nm[1:]}"
+            node.rename_atomic(amap)
     tree.tree_update(tree.root)
     
 cdef _compact_param_labels(function_treeC.Tree tree, str prefix='a'):
@@ -687,10 +792,13 @@ cdef _compact_param_labels(function_treeC.Tree tree, str prefix='a'):
     single shared label by going through the rename_map.
     """
     cdef function_treeC.Node node
+    cdef function_treeC.Node leaf
     cdef list params = list(tree.params)
     cdef dict rename_map = {}
+    cdef dict amap
+    cdef bint changed
     cdef int counter = 0
-    cdef str old_name, new_name
+    cdef str old_name, new_name, nm
     # Pass 1: build the map in tree.params order. tree.params has already
     # been canonicalised by name via sort_params during tree_update, so
     # the resulting indexing is deterministic given the structure.
@@ -699,6 +807,15 @@ cdef _compact_param_labels(function_treeC.Tree tree, str prefix='a'):
         if old_name not in rename_map:
             rename_map[old_name] = f"{prefix}{counter}"
             counter += 1
+    # Pass 1b (Phase 2.10 Stage 2): opaque leaves' internal names, in leaf
+    # (pre-order) order, continue the same counter — mirroring the
+    # plain-params-then-atomic-names order of name_values.
+    for leaf in tree.leaves:
+        if leaf.is_atomic():
+            for nm in leaf.leaf_param_names():
+                if nm not in rename_map:
+                    rename_map[nm] = f"{prefix}{counter}"
+                    counter += 1
     # Pass 2: apply. Reading node.function.get_description() inside the
     # loop is safe even with renames-in-flight, because each Node owns
     # its own RealFunctionC and renaming one Node never aliases another.
@@ -709,6 +826,18 @@ cdef _compact_param_labels(function_treeC.Tree tree, str prefix='a'):
             continue
         node.function = real_functionC.RealFunctionC.from_string(
             new_name, tree.domain, compute_grad=False)
+    # Pass 2b (Phase 2.10 Stage 2): apply to opaque leaves (expr and theta
+    # keys together, via rename_atomic).
+    for leaf in tree.leaves:
+        if leaf.is_atomic():
+            amap = {}
+            changed = False
+            for nm in leaf.leaf_param_names():
+                amap[nm] = rename_map.get(nm, nm)
+                if amap[nm] != nm:
+                    changed = True
+            if changed:
+                leaf.rename_atomic(amap)
     # Rebuild internal functions bottom-up + refresh tree metadata.
     function_treeC._post_order_update(tree.root)
     tree.update_tree_description()
@@ -754,11 +883,20 @@ cdef refresh_params(function_treeC.Tree tree):
 cpdef rename_prefix_downwards(function_treeC.Tree tree, str new_prefix = 'b'):
     '''Renames parameters of a tree using a new prefix'''
     cdef function_treeC.Node node
-    
+    cdef dict amap
+    cdef str nm
+
     for node in tree.params:
         old_rep = node.function.get_description()
         param_suffix = old_rep[1:]
         node.function = real_functionC.RealFunctionC.from_string(f"{new_prefix}{param_suffix}", tree.domain, compute_grad = False)
+    # Phase 2.10 Stage 2: opaque leaves' internal names too (see rename_prefix).
+    for node in tree.leaves:
+        if node.is_atomic():
+            amap = {}
+            for nm in node.leaf_param_names():
+                amap[nm] = f"{new_prefix}{nm[1:]}"
+            node.rename_atomic(amap)
     # Bottom-up rebuild all intermediate functions, then refresh metadata
     function_treeC._post_order_update(tree.root)
     tree.update_tree_description()
@@ -798,7 +936,8 @@ cdef refresh_params_downwards(function_treeC.Tree tree):
     tree.param_values, tree.name_values, tree.penalty = tree.get_param_values()
 
 @cython.boundscheck(True)
-cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operations):
+cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operations,
+                           list atoms=None):
     """
     point_mutation v2: RJMCMC-aware label resampling at one node.
 
@@ -808,28 +947,35 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
     never adds or removes nodes, |N(T')| = |N(T)| and the 1/|N(T)| factor
     cancels between forward and reverse.
 
-    Branching on the chosen node v
+    Branching on the chosen node v (Phase 2.10 Stage 2: "atomic-kind" =
+    plain parameter leaf OR opaque atomic leaf; the cross-kind target set
+    has 1 + A members — the parameter option plus the A atom templates —
+    realizing DESIGN §6's M + 1 -> M + R' with R' = 1 + A. A = 0 reproduces
+    the historical factors exactly: -log(1 + 0) = 0.)
     ------------------------------
       * v internal: kind-preserving op resample, uniform from `operations`
         (size O). Symmetric -> contributes (0, 0).
       * v function leaf:
           - prob (1 - p_cross): sub-move A, pick uniform from F (size M).
             Symmetric. (0, 0).
-          - prob p_cross: sub-move B, case (c) BIRTH. Replace with a fresh
-            parameter leaf a_new, value theta_new ~ g = N(0, tau^2) used as
-            optimizer WARM START only (Phase 2.13(a): the chain is
-            topology-marginal; the theta-draw integrates out of q_struct).
-              log_q_fwd contribution =  0
+          - prob p_cross: sub-move B, case (c) BIRTH. Pick the target
+            uniformly among the 1 + A atomic options; instantiate it with
+            fresh names and theta ~ g = N(0, tau^2) used as optimizer WARM
+            START only (Phase 2.13(a): the chain is topology-marginal; the
+            theta-draws integrate out of q_struct).
+              log_q_fwd contribution = -log(1 + A)
               log_q_rev contribution = -log M
-      * v parameter leaf:
-          - prob (1 - p_cross): identity. Parameter relabel/refresh is
+      * v atomic-kind leaf (parameter or opaque):
+          - prob (1 - p_cross): identity. Value relabel/refresh is
             handled by the dedicated parameter-refresh move (Phase 2.1.PR).
           - prob p_cross: sub-move B, case (d) DEATH. Pick a new function
-            uniform from F; the parameter value theta_j is discarded
-            (Phase 2.13(a): no g(theta_j) reverse-birth density — theta is
+            uniform from F; the values theta are discarded
+            (Phase 2.13(a): no g(theta) reverse-birth density — theta is
             not retained state).
               log_q_fwd contribution = -log M
-              log_q_rev contribution =  0
+              log_q_rev contribution = -log(1 + A)
+        An opaque leaf in a kernel WITHOUT atoms (A = 0) force-rejects:
+        the reverse birth could not re-create it (zero reverse density).
 
     The selection factor 1/|N(T)| and the mixture weight log p are common
     to forward and reverse and therefore omitted.
@@ -844,10 +990,11 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
     cdef function_treeC.Node v, parent
     cdef int O = len(operations)
     cdef int M = len(functions)
+    cdef int A = 0 if atoms is None else len(atoms)
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
     cdef str new_func_str, new_name
-    #cdef int new_idx
+    cdef int j
     cdef bint do_cross
     cdef double g_tau = tree.g_tau
     if tree.root is None:
@@ -874,8 +1021,8 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
 
     if not do_cross:
         # Sub-move A.
-        if v.is_param():
-            # Identity for parameter leaves (refresh is its own move).
+        if v.is_param() or v.is_atomic():
+            # Identity for atomic-kind leaves (refresh is its own move).
             return (0.0, 0.0)
         # Function leaf: pick uniform from F. Symmetric.
         new_func_str = _PY_RNG.choice(functions)
@@ -890,60 +1037,89 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
 
     # 4. Sub-move B: kind-crossing.
     cdef double theta_new
-    if v.is_param():
-        # Case (d): DEATH of theta_j. Replace with a function leaf.
+    if v.is_param() or v.is_atomic():
+        # Case (d): DEATH of the atomic-kind leaf. Replace with a function
+        # leaf drawn uniformly from F.
         # Phase 2.13(a): the chain is TOPOLOGY-MARGINAL. theta is not
         # retained chain state (the scorer overwrites it with theta_hat),
-        # so the reverse-birth density g(theta_j) must NOT appear here:
+        # so the reverse-birth density g(theta) must NOT appear here:
         # the reverse birth's theta-draw integrates to 1 in q_struct.
-        # Only structural factors survive. Forward picks the new function
-        # uniformly (1/M); the reverse birth is structurally forced given
-        # the node/kind coin (which cancel), so log_q_rev stays 0 and
-        # q_corr = log_q_rev - log_q_fwd = +log M.
+        # Only structural factors survive: forward picks the new function
+        # uniformly (1/M); the reverse birth picks THIS atomic option among
+        # the 1 + A available ones, so log_q_rev gets -log(1 + A) (== 0,
+        # the historical value, when A == 0).
+        if v.is_atomic() and A == 0:
+            # No atom templates in this kernel: the reverse birth cannot
+            # re-create the opaque leaf -> zero reverse density.
+            # Force-reject WITHOUT mutating.
+            return (0.0, -np.inf)
         new_func_str = _PY_RNG.choice(functions)
         v.function = real_functionC.RealFunctionC.from_string(
             new_func_str, tree.domain, compute_grad=False)
+        v.theta = None
         v.bis_param = v.is_param()
         if parent is None:
             tree.tree_update(tree.root)
         else:
             tree.tree_update(parent)
         log_q_fwd += -np.log(<double> M)
+        log_q_rev += -np.log(<double> (1 + A))
         return (log_q_fwd, log_q_rev)
 
-    # Function leaf -> parameter leaf: case (c) BIRTH of theta_new.
-    cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
-    new_name = function_treeC.new_par(existing_names, "a")
-    v.function = real_functionC.RealFunctionC.from_string(
-        new_name, tree.domain, compute_grad=False)
-    # set_value gates on bis_param; flip flag BEFORE assigning the value.
-    v.bis_param = v.is_param()
-    # Phase 2.13(a): theta_new ~ g is WARM-START randomness only. It does
-    # not influence which topology results, so it integrates to 1 in
-    # q_struct and contributes NOTHING to log_q_fwd (the scorer replaces
-    # it with theta_hat before the accept/reject anyway). The reverse
-    # (death) picks the original function uniformly: log_q_rev = -log M.
-    theta_new = _sample_g(g_tau)
-    v.set_value(theta_new)
+    # Function leaf -> atomic-kind leaf: case (c) BIRTH. Target uniform over
+    # the 1 + A atomic options (j == 0: plain parameter; j >= 1: atom
+    # template j - 1). With A == 0 no choice draw is made — the legacy RNG
+    # stream is bit-identical.
+    # The name pool is name_values' keys (NOT tree.params descriptions):
+    # opaque internal names live in name_values only, and a fresh name must
+    # avoid those too.
+    cdef list existing_names = list(tree.name_values.keys())
+    cdef function_treeC.Node atom_leaf
+    j = 0
+    if A > 0:
+        j = _PY_RNG.randrange(1 + A)
+    if j == 0:
+        new_name = function_treeC.new_par(existing_names, "a")
+        v.function = real_functionC.RealFunctionC.from_string(
+            new_name, tree.domain, compute_grad=False)
+        # set_value gates on bis_param; flip flag BEFORE assigning the value.
+        v.bis_param = v.is_param()
+        # Phase 2.13(a): theta_new ~ g is WARM-START randomness only. It does
+        # not influence which topology results, so it integrates to 1 in
+        # q_struct and contributes NOTHING to log_q_fwd (the scorer replaces
+        # it with theta_hat before the accept/reject anyway). The reverse
+        # (death) picks the original function uniformly: log_q_rev = -log M.
+        theta_new = _sample_g(g_tau)
+        v.set_value(theta_new)
+    else:
+        atom_leaf = _make_atom_leaf(atoms[j - 1], tree.domain,
+                                    existing_names, g_tau)
+        v.function = atom_leaf.function
+        v.theta = atom_leaf.theta
+        v.bis_param = False
     if parent is None:
         tree.tree_update(tree.root)
     else:
         tree.tree_update(parent)
+    log_q_fwd += -np.log(<double> (1 + A))
     log_q_rev += -np.log(<double> M)
     return (log_q_fwd, log_q_rev)
 
 
 @cython.boundscheck(True)
 cpdef tuple point_mutation(function_treeC.Tree tree, list functions= None, list operations=None,
-                           function_treeC.Node node_to_mutate=None):
+                           function_treeC.Node node_to_mutate=None,
+                           list atoms=None):
     """Public entry point. The legacy `node_to_mutate` keyword is kept for
     backward compatibility but is IGNORED in v2: selection must be uniform
-    over all nodes for the proposal-density bookkeeping to be correct."""
+    over all nodes for the proposal-density bookkeeping to be correct.
+    Phase 2.10 Stage 2: `atoms` = list of real_functionC.AtomSpec templates
+    (None = no opaque primitives, bit-identical legacy)."""
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
     if functions is None:
         functions = tree.functions
-    return _point_mutation(tree, functions, list(operations))
+    return _point_mutation(tree, functions, list(operations), atoms)
 
 
 
@@ -1062,7 +1238,8 @@ cpdef legacy_hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_t
     
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operations):
+cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operations,
+                           list atoms=None):
     """
     hoist_mutation v2 (Phase 2.1.K). Lift a uniformly-chosen non-root node v;
     v takes its parent's place; the sibling subtree is dropped.
@@ -1085,6 +1262,7 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
     cdef function_treeC.Node v, parent, sibling, granpa
     cdef list non_root_nodes
     cdef int n_nodes_T,  M, O, d_S
+    cdef int A = 0 if atoms is None else len(atoms)
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
     cdef bint v_is_leaf
@@ -1133,10 +1311,15 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
     if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
         log_q_rev = -np.inf
         return (log_q_fwd, log_q_rev)
+    # Phase 2.10 Stage 2: without atom templates the reverse rebuild cannot
+    # re-create a dropped opaque leaf -> zero reverse density.
+    if A == 0 and _contains_atomic(sibling):
+        log_q_rev = -np.inf
+        return (log_q_fwd, log_q_rev)
 
     cdef list internal_Tnew
     cdef int n_int_Tnew
-    
+
     if v_is_leaf:
         n_leaves_Tnew = len(tree.root.get_leaves(leaves_list=[]))
         if n_leaves_Tnew <= 0:
@@ -1158,14 +1341,15 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
                  + _truncated_geometric_log_pmf(d_S, _ADD_NODE_DEPTH_RHO,
                                                 _ADD_NODE_DEPTH_MAX)
                  - np.log(2.0)
-                 + _eval_build_density(sibling, d_S, M, O, _ADD_NODE_PARAM_PROB, g_tau))
+                 + _eval_build_density(sibling, d_S, M + A, O, _ADD_NODE_PARAM_PROB, g_tau))
 
     return (log_q_fwd, log_q_rev)
 
 
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cpdef tuple hoist_mutation(function_treeC.Tree tree, list functions=None, list operations=None):
+cpdef tuple hoist_mutation(function_treeC.Tree tree, list functions=None, list operations=None,
+                           list atoms=None):
     """DEPRECATED (Phase 3.3 split). Unified hoist kept only for the legacy
     `test_cython4.py` smoke test. The Grove sampler now uses the two exact
     death moves `leaf_hoist` (reverse of add_node) and `internal_hoist`
@@ -1174,12 +1358,13 @@ cpdef tuple hoist_mutation(function_treeC.Tree tree, list functions=None, list o
         functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    return _hoist_mutation(tree, list(functions), list(operations))
+    return _hoist_mutation(tree, list(functions), list(operations), atoms)
 
 
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations):
+cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations,
+                       list atoms=None):
     """
     leaf_hoist (Phase 3.3). Lift a uniformly-chosen non-root LEAF v; v takes
     its parent's place; the sibling subtree S is dropped. Exact reverse of
@@ -1207,6 +1392,7 @@ cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations
     cdef function_treeC.Node v, parent, sibling, granpa
     cdef list non_root_leaves
     cdef int n_leaves_T, M, O, d_S
+    cdef int A = 0 if atoms is None else len(atoms)
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
 
@@ -1252,6 +1438,11 @@ cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations
     if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
         log_q_rev = -np.inf
         return (log_q_fwd, log_q_rev)
+    # Phase 2.10 Stage 2: without atom templates the reverse add_node
+    # rebuild cannot re-create a dropped opaque leaf -> zero reverse density.
+    if A == 0 and _contains_atomic(sibling):
+        log_q_rev = -np.inf
+        return (log_q_fwd, log_q_rev)
 
     n_leaves_Tnew = len(tree.root.get_leaves(leaves_list=[]))
     if n_leaves_Tnew <= 0:
@@ -1265,26 +1456,29 @@ cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations
                  + _truncated_geometric_log_pmf(d_S, _ADD_NODE_DEPTH_RHO,
                                                 _ADD_NODE_DEPTH_MAX)
                  - np.log(2.0)
-                 + _eval_build_density(sibling, d_S, M, O, _ADD_NODE_PARAM_PROB, g_tau))
+                 + _eval_build_density(sibling, d_S, M + A, O, _ADD_NODE_PARAM_PROB, g_tau))
 
     return (log_q_fwd, log_q_rev)
 
 
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cpdef tuple leaf_hoist(function_treeC.Tree tree, list functions=None, list operations=None):
+cpdef tuple leaf_hoist(function_treeC.Tree tree, list functions=None, list operations=None,
+                       list atoms=None):
     """Phase 3.3 public entry point (leaf branch). Exact reverse of add_node.
-    Returns (log_q_fwd, log_q_rev)."""
+    Phase 2.10 Stage 2: pass the SAME `atoms` list add_node receives, or the
+    birth/death densities decouple. Returns (log_q_fwd, log_q_rev)."""
     if functions is None:
         functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    return _leaf_hoist(tree, list(functions), list(operations))
+    return _leaf_hoist(tree, list(functions), list(operations), atoms)
 
 
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operations):
+cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operations,
+                           list atoms=None):
     """
     internal_hoist (Phase 3.3). Lift a uniformly-chosen non-root INTERNAL
     node v; v takes its parent's place; the sibling subtree S is dropped.
@@ -1313,6 +1507,7 @@ cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operat
     cdef function_treeC.Node v, parent, sibling, granpa
     cdef list non_root_internal
     cdef int n_nonroot_int_T, M, O, d_S
+    cdef int A = 0 if atoms is None else len(atoms)
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
 
@@ -1363,6 +1558,11 @@ cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operat
     if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
         log_q_rev = -np.inf
         return (log_q_fwd, log_q_rev)
+    # Phase 2.10 Stage 2: without atom templates the reverse split rebuild
+    # cannot re-create a dropped opaque leaf -> zero reverse density.
+    if A == 0 and _contains_atomic(sibling):
+        log_q_rev = -np.inf
+        return (log_q_fwd, log_q_rev)
 
     # Reverse is split: selects from ALL internal nodes of T' (root included).
     internal_Tnew = [n for n in _flatten_nodes(tree.root, [])
@@ -1378,21 +1578,23 @@ cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operat
                  + _truncated_geometric_log_pmf(d_S, _ADD_NODE_DEPTH_RHO,
                                                 _ADD_NODE_DEPTH_MAX)
                  - np.log(2.0)
-                 + _eval_build_density(sibling, d_S, M, O, _ADD_NODE_PARAM_PROB, g_tau))
+                 + _eval_build_density(sibling, d_S, M + A, O, _ADD_NODE_PARAM_PROB, g_tau))
 
     return (log_q_fwd, log_q_rev)
 
 
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cpdef tuple internal_hoist(function_treeC.Tree tree, list functions=None, list operations=None):
+cpdef tuple internal_hoist(function_treeC.Tree tree, list functions=None, list operations=None,
+                           list atoms=None):
     """Phase 3.3 public entry point (internal branch). Exact reverse of split.
-    Returns (log_q_fwd, log_q_rev)."""
+    Phase 2.10 Stage 2: pass the SAME `atoms` list split receives, or the
+    birth/death densities decouple. Returns (log_q_fwd, log_q_rev)."""
     if functions is None:
         functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    return _internal_hoist(tree, list(functions), list(operations))
+    return _internal_hoist(tree, list(functions), list(operations), atoms)
 
 #@cython.boundscheck(False)
 #@cython.wraparound(False)
@@ -1513,7 +1715,8 @@ cpdef legacy_add_node( function_treeC.Tree tree, functions, operations=None, ran
         tree.tree_update(parent_node)
 
 @cython.boundscheck(True)
-cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
+cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations,
+                     list atoms=None):
     """
     add_node v2 (Phase 2.1.K). Wraps a uniformly-chosen LEAF L of T with
     op(L, S) or op(S, L), where:
@@ -1539,13 +1742,18 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
     cdef int n_leaves_T = len(leaves)
     cdef int M = len(functions)
     cdef int O = len(operations)
+    cdef int A = 0 if atoms is None else len(atoms)
     cdef function_treeC.Node L, parent, new_internal, S
     cdef str op
     cdef int d, n_nodes_Tp
     cdef double log_p_d
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
-    cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
+    # Phase 2.10 Stage 2: the fresh-name pool is name_values' keys (NOT
+    # tree.params descriptions) — opaque internal names live only there,
+    # and a fresh name must avoid them too. Identical new_par outcome for
+    # atom-free trees (same max index per prefix).
+    cdef list existing_names = list(tree.name_values.keys())
     cdef bint side_left
     cdef double g_tau = tree.g_tau
 
@@ -1554,7 +1762,7 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 1. pick leaf, op, depth, side ----
     #parent = None
-    
+
     L = tree.root.select_random_leaf()
     parent = tree.root.find_parent(L)
     #L = leaves[random.randrange(n_leaves_T)]
@@ -1564,7 +1772,8 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 2. build subtree S ----
     S = _build_subtree_with_params(d, functions, operations, tree.domain,
-                                   _ADD_NODE_PARAM_PROB, existing_names, g_tau)
+                                   _ADD_NODE_PARAM_PROB, existing_names, g_tau,
+                                   atoms)
 
     # ---- 3. wrap L ----
     parent = tree.root.find_parent(L)   # None iff L is the root (single-node T)
@@ -1605,7 +1814,7 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
                  - np.log(<double> O)
                  + log_p_d
                  - np.log(2.0)
-                 + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB, g_tau))
+                 + _eval_build_density(S, d, M + A, O, _ADD_NODE_PARAM_PROB, g_tau))
 
     # Reverse: leaf_hoist of L on T'. leaf_hoist selects uniformly over the
     # LEAVES of T' (every leaf is non-root), so the reverse selection density
@@ -1621,21 +1830,25 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations):
 
 @cython.boundscheck(True)
 cpdef tuple add_node(function_treeC.Tree tree, list functions=None, list operations=None,
-                     random_depth=False):
+                     random_depth=False, list atoms=None):
     """Phase 2.1.K public entry point.
     Legacy `random_depth` kept for back-compat; ignored (depth is sampled
-    from the truncated-geometric distribution by design)."""
+    from the truncated-geometric distribution by design).
+    Phase 2.10 Stage 2: `atoms` = list of real_functionC.AtomSpec; the built
+    subtree's non-parameter leaves draw uniformly from functions + atoms
+    (M + A options). Pass the SAME list to leaf_hoist."""
     if functions is None:
         functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    return _add_node(tree, functions, operations)
+    return _add_node(tree, functions, operations, atoms)
 
 # ---------------------------------------------------------------------------
 # Phase 2.1.K v3: Split move (inverse of internal hoist_mutation)
 # ---------------------------------------------------------------------------
 @cython.boundscheck(True)
-cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
+cdef tuple _split(function_treeC.Tree tree, list functions, list operations,
+                  list atoms=None):
     """
     Split move: paired inverse of the internal-node branch of hoist_mutation.
 
@@ -1675,13 +1888,15 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
     cdef int n_int_T = len(internal_nodes)
     cdef int M = len(functions)
     cdef int O = len(operations)
+    cdef int A = 0 if atoms is None else len(atoms)
     cdef function_treeC.Node u, parent, new_internal, S
     cdef str op
     cdef int d, n_nodes_Tp
     cdef double log_p_d
     cdef double log_q_fwd = 0.0
     cdef double log_q_rev = 0.0
-    cdef list existing_names = [p.get_fun().get_description() for p in tree.params]
+    # Phase 2.10 Stage 2: name pool = name_values keys (see _add_node).
+    cdef list existing_names = list(tree.name_values.keys())
     cdef bint side_left
     cdef double g_tau = tree.g_tau
 
@@ -1697,7 +1912,8 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
 
     # ---- 2. build subtree S ----
     S = _build_subtree_with_params(d, functions, operations, tree.domain,
-                                   _ADD_NODE_PARAM_PROB, existing_names, g_tau)
+                                   _ADD_NODE_PARAM_PROB, existing_names, g_tau,
+                                   atoms)
 
     # ---- 3. wrap u with a fresh internal node ----
     parent = tree.root.find_parent(u)   # None iff u is the root
@@ -1736,7 +1952,7 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
                  - np.log(<double> O)
                  + log_p_d
                  - np.log(2.0)
-                 + _eval_build_density(S, d, M, O, _ADD_NODE_PARAM_PROB, g_tau))
+                 + _eval_build_density(S, d, M + A, O, _ADD_NODE_PARAM_PROB, g_tau))
 
     # Reverse: internal_hoist of (the former) u on T'. internal_hoist selects
     # uniformly over the NON-ROOT internal nodes of T'. u is internal and
@@ -1753,17 +1969,18 @@ cdef tuple _split(function_treeC.Tree tree, list functions, list operations):
 
 
 @cython.boundscheck(True)
-cpdef tuple split(function_treeC.Tree tree, list functions=None, list operations=None):
+cpdef tuple split(function_treeC.Tree tree, list functions=None, list operations=None,
+                  list atoms=None):
     """Phase 2.1.K v3 public entry point. Returns (log_q_fwd, log_q_rev).
 
     Paired inverse of the internal-node branch of hoist_mutation. See
     `_split` docstring for full mathematical content.
-    """
+    Phase 2.10 Stage 2: pass the SAME `atoms` list to internal_hoist."""
     if functions is None:
         functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    return _split(tree, functions, operations)
+    return _split(tree, functions, operations, atoms)
 
 # ---------------------------------------------------------------------------
 # Phase 2.11: Elementary Tree Replacement (ETR) -- BMS-inspired local rewrite
@@ -1793,15 +2010,20 @@ cdef list _collect_ets(function_treeC.Node node, list out):
 
 
 cdef tuple _draw_leaf_et(list functions, object domain, list name_pool,
-                         double g_tau):
+                         double g_tau, list atoms=None):
     """Draw one 0-ET (leaf) uniformly over the M function leaves + 1 parameter
-    option (N0 = M + 1 structural choices). Returns (leaf, log_g): log_g is 0
-    for a function leaf, or log g(theta) for a freshly-born parameter leaf
-    (theta ~ g = N(0, tau^2), same convention as add_node / point_mutation).
-    `name_pool` is extended in place so sibling leaves of a 2-ET get distinct,
-    collision-free parameter names."""
+    option + A atom templates (N0 = M + 1 + A structural choices; DESIGN §6's
+    M + 1 -> M + R'). Returns (leaf, log_g): log_g is 0 for a function leaf,
+    or log g(theta) for a freshly-born parameter leaf (theta ~ g =
+    N(0, tau^2), same convention as add_node / point_mutation); for an atom
+    leaf the warm-start draws carry no density (Phase 2.13(a)) and 0.0 is
+    returned — the log_g bookkeeping is vestigial either way (the ETR
+    densities are purely structural). `name_pool` is extended in place so
+    sibling leaves of a 2-ET get distinct, collision-free parameter names.
+    atoms=None -> A = 0, bit-identical legacy stream."""
     cdef int M = len(functions)
-    cdef int idx = _PY_RNG.randrange(M + 1)    # 0..M-1 -> function ; M -> param
+    cdef int A = 0 if atoms is None else len(atoms)
+    cdef int idx = _PY_RNG.randrange(M + 1 + A)  # 0..M-1 -> function ; M -> param ; > M -> atom
     cdef function_treeC.Node leaf
     cdef str new_name
     cdef double theta
@@ -1809,6 +2031,10 @@ cdef tuple _draw_leaf_et(list functions, object domain, list name_pool,
         leaf = function_treeC.Node(
             function=real_functionC.RealFunctionC.from_string(
                 functions[idx], domain, compute_grad=False))
+        return (leaf, 0.0)
+    if idx > M:
+        # Opaque atomic leaf (Phase 2.10 Stage 2).
+        leaf = _make_atom_leaf(atoms[idx - M - 1], domain, name_pool, g_tau)
         return (leaf, 0.0)
     # Parameter leaf: fresh name (unique vs the whole current tree) + theta ~ g.
     new_name = function_treeC.new_par(name_pool, "a")
@@ -1823,7 +2049,8 @@ cdef tuple _draw_leaf_et(list functions, object domain, list name_pool,
 
 
 cdef tuple _build_random_et(int arity, list functions, list operations,
-                            object domain, list name_pool, double g_tau):
+                            object domain, list name_pool, double g_tau,
+                            list atoms=None):
     """Build a fresh elementary tree of the given arity and return
     (root_node, sum_log_g). arity 0 -> a single 0-ET leaf; arity 2 ->
     op(leaf, leaf) with op ~ Uniform(operations) and each child an independent
@@ -1832,12 +2059,12 @@ cdef tuple _build_random_et(int arity, list functions, list operations,
     cdef double lgL, lgR
     cdef str op
     if arity == 0:
-        node, lgL = _draw_leaf_et(functions, domain, name_pool, g_tau)
+        node, lgL = _draw_leaf_et(functions, domain, name_pool, g_tau, atoms)
         return (node, lgL)
     # arity == 2
     op = _PY_RNG.choice(operations)
-    childL, lgL = _draw_leaf_et(functions, domain, name_pool, g_tau)
-    childR, lgR = _draw_leaf_et(functions, domain, name_pool, g_tau)
+    childL, lgL = _draw_leaf_et(functions, domain, name_pool, g_tau, atoms)
+    childR, lgR = _draw_leaf_et(functions, domain, name_pool, g_tau, atoms)
     node = function_treeC.Node()
     node.assign_left(childL, brute_force=True)
     node.assign_right(childR, brute_force=True)
@@ -1848,7 +2075,8 @@ cdef tuple _build_random_et(int arity, list functions, list operations,
 
 @cython.boundscheck(True)
 @cython.wraparound(True)
-cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operations):
+cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operations,
+                         list atoms=None):
     """
     Elementary Tree Replacement (Phase 2.11, BMS-inspired).
 
@@ -1861,7 +2089,9 @@ cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operatio
 
     Densities
     ---------
-      N0 = M + 1                 # structural 0-ETs: M functions + 1 parameter
+      N0 = M + 1 + A             # structural 0-ETs: M functions + 1 parameter
+                                 # + A atom templates (Phase 2.10 Stage 2;
+                                 # A = 0 without `atoms`)
       N2 = O * N0 * N0           # structural 2-ETs
       s(arity) = N0 if arity == 0 else N2
 
@@ -1884,10 +2114,13 @@ cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operatio
     """
     cdef int M = len(functions)
     cdef int O = len(operations)
+    cdef int A = 0 if atoms is None else len(atoms)
     if tree.root is None or M <= 0 or O <= 0:
         return (0.0, 0.0)
 
-    cdef int N0 = M + 1
+    # Phase 2.10 Stage 2: N0 = M + 1 + A (function leaves + the parameter
+    # option + the A atom templates; DESIGN §6). A = 0 -> historical counts.
+    cdef int N0 = M + 1 + A
     cdef int N2 = O * N0 * N0
 
     # ---- 1. uniform ET selection over all ETs of T ----
@@ -1898,6 +2131,12 @@ cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operatio
     cdef function_treeC.Node v = ets_T[_PY_RNG.randrange(omega_i)]
     cdef int o_i = 0 if v.is_leaf() else 2
 
+    # Phase 2.10 Stage 2: in a kernel WITHOUT atom templates, the reverse
+    # ETR cannot re-draw an opaque leaf contained in the old ET -> zero
+    # reverse density. Force-reject WITHOUT mutating.
+    if A == 0 and _contains_atomic(v):
+        return (0.0, -np.inf)
+
     # ---- 2. old-ET arity was captured above; Phase 2.13(a): the old ET's
     # parameter VALUES are irrelevant to the reverse density (topology-
     # marginal chain; the reverse re-birth's theta-draw integrates to 1).
@@ -1907,11 +2146,14 @@ cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operatio
     cdef int o_f = 0 if (_PY_RNG.random() < 0.5) else 2
     # Fresh parameter names must avoid EVERY current tree parameter (the old ET
     # included); the old ET's parameters vanish on splice, so no aliasing.
-    cdef list name_pool = [p.get_fun().get_description() for p in tree.params]
+    # Phase 2.10 Stage 2: pool = name_values keys, which include opaque
+    # internal names (tree.params descriptions would miss them).
+    cdef list name_pool = list(tree.name_values.keys())
     cdef function_treeC.Node new_et
     cdef double log_g_new
     new_et, log_g_new = _build_random_et(o_f, functions, operations,
-                                         tree.domain, name_pool, g_tau)
+                                         tree.domain, name_pool, g_tau,
+                                         atoms)
 
     # ---- 4. splice new_et in place of v ----
     cdef function_treeC.Node parent = tree.root.find_parent(v)
@@ -1949,14 +2191,17 @@ cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operatio
 
 @cython.boundscheck(True)
 cpdef tuple etr_mutation(function_treeC.Tree tree, list functions=None,
-                         list operations=None):
+                         list operations=None, list atoms=None):
     """Phase 2.11 public entry point (Elementary Tree Replacement).
+    Phase 2.10 Stage 2: `atoms` = list of real_functionC.AtomSpec; 0-ET
+    draws become uniform over N0 = M + 1 + A options. ETR is self-inverse,
+    so a single consistent `atoms` list suffices.
     Returns (log_q_fwd, log_q_rev)."""
     if functions is None:
         functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    return _etr_mutation(tree, list(functions), list(operations))
+    return _etr_mutation(tree, list(functions), list(operations), atoms)
 
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Generates a random subtree with chosen size"""
@@ -2098,15 +2343,40 @@ cdef tuple _parameter_refresh(function_treeC.Tree tree,
     SHOULD BE SAFE BUT CHECK THAT THIS FUNCTION LEAVES TREES UNCHANGED
     BEFORE _apply_param_values AND THAT IT CHANGES THE SPECIFIED TREE ONLY!
     """
-    cdef int K = len(tree.params)
-    if K == 0:
-        return (True, 0.0, 0.0)
+    # Phase 2.10 Stage 2: opaque leaves' internal parameters are ordinary
+    # refresh coordinates (DESIGN §5). For a tree WITH atomic leaves the
+    # coordinate vector is name_values (plain parameters first, then the
+    # opaque internal names — the canonical tree order); for atom-free
+    # trees the historical tree.params path is kept bit-identical.
+    # NOTE (Stage 3 wiring): the Grove currently builds AMState from
+    # tree.params descriptions only, so on an opaque tree am_state.K
+    # mismatches K below and PR returns (False, 0, 0) — a safe no-op that
+    # preserves detailed balance until groveC constructs AMState from
+    # list(tree.name_values.keys()).
+    cdef bint has_atomic = False
+    cdef function_treeC.Node lf
+    for lf in tree.leaves:
+        if lf.is_atomic():
+            has_atomic = True
+            break
 
-    if am_state is None or am_state.K != K:
-        # Topology changed under our feet; caller must rebuild AMState.
-        return (False, 0.0, 0.0)
-
-    cdef list names = list(am_state.param_names)
+    cdef int K
+    cdef list names
+    if not has_atomic:
+        K = len(tree.params)
+        if K == 0:
+            return (True, 0.0, 0.0)
+        if am_state is None or am_state.K != K:
+            # Topology changed under our feet; caller must rebuild AMState.
+            return (False, 0.0, 0.0)
+        names = list(am_state.param_names)
+    else:
+        K = len(tree.name_values)
+        if K == 0:
+            return (True, 0.0, 0.0)
+        if am_state is None or am_state.K != K:
+            return (False, 0.0, 0.0)
+        names = list(tree.name_values.keys())
     cdef int j
     cdef cnp.ndarray[cnp.float64_t, ndim=1] theta_old = np.empty(K, dtype=np.float64)
     cdef dict cur_nv = tree.name_values

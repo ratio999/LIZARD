@@ -21,6 +21,9 @@ cpdef list flatten_nodes(function_treeC.Node node, list out=?)
 cdef function_treeC.Node _select_uniform_node(function_treeC.Tree tree)
 cdef bint _is_perfect_binary(function_treeC.Node node, int h)
 cdef list _collect_parameter_leaves(function_treeC.Node node, list out)
+cdef bint _contains_atomic(function_treeC.Node node)
+cdef function_treeC.Node _make_atom_leaf(object spec_obj, object domain,
+                                         list name_pool, double g_tau)
 cdef int _count_selectable(function_treeC.Node node)
 cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions,
                              list operations)
@@ -30,16 +33,24 @@ cpdef legacy_subtree_mutation(function_treeC.Tree tree, functions, random_depth=
 cpdef legacy_subtree_crossover(function_treeC.Tree parent1, function_treeC.Tree parent2)
 cdef tuple _subtree_crossover(function_treeC.Tree parent1, function_treeC.Tree parent2)
 cpdef tuple subtree_crossover(function_treeC.Tree parent1, function_treeC.Tree parent2)
-cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operations)
-cpdef tuple point_mutation(function_treeC.Tree tree, list functions=?, list operations=?, function_treeC.Node node_to_mutate=?)
+cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operations,
+                           list atoms=?)
+cpdef tuple point_mutation(function_treeC.Tree tree, list functions=?, list operations=?, function_treeC.Node node_to_mutate=?,
+                           list atoms=?)
 cpdef legacy_point_mutation(function_treeC.Tree tree, functions,operations=?, function_treeC.Node node_to_mutate=?)
 cpdef legacy_hoist_mutation(function_treeC.Tree tree, function_treeC.Node node_to_lift=?)
-cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operations)
-cpdef tuple hoist_mutation(function_treeC.Tree tree, list functions=?, list operations=?)
-cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations)
-cpdef tuple leaf_hoist(function_treeC.Tree tree, list functions=?, list operations=?)
-cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operations)
-cpdef tuple internal_hoist(function_treeC.Tree tree, list functions=?, list operations=?)
+cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operations,
+                           list atoms=?)
+cpdef tuple hoist_mutation(function_treeC.Tree tree, list functions=?, list operations=?,
+                           list atoms=?)
+cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations,
+                       list atoms=?)
+cpdef tuple leaf_hoist(function_treeC.Tree tree, list functions=?, list operations=?,
+                       list atoms=?)
+cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operations,
+                           list atoms=?)
+cpdef tuple internal_hoist(function_treeC.Tree tree, list functions=?, list operations=?,
+                           list atoms=?)
 #cpdef size_fair_mutation(tree, functions, x)
 #cpdef replace_with_subtree(tree, functions, x)
 #cpdef add_node(function_treeC.Tree tree, functions, operations)
@@ -51,18 +62,26 @@ cdef double _eval_build_density(function_treeC.Node S, int d,
                                 int M, int O, double p_par, double g_tau)
 cdef function_treeC.Node _build_subtree_with_params(
         int d, list functions, list operations, object domain,
-        double p_par, list existing_param_names, double g_tau)
-cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations)
+        double p_par, list existing_param_names, double g_tau,
+        list atoms=?)
+cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations,
+                     list atoms=?)
 cpdef tuple add_node(function_treeC.Tree tree, list functions=?, list operations=?,
-                     random_depth=?)
-cdef tuple _split(function_treeC.Tree tree, list functions, list operations)
-cpdef tuple split(function_treeC.Tree tree, list functions=?, list operations=?)
+                     random_depth=?, list atoms=?)
+cdef tuple _split(function_treeC.Tree tree, list functions, list operations,
+                  list atoms=?)
+cpdef tuple split(function_treeC.Tree tree, list functions=?, list operations=?,
+                  list atoms=?)
 cdef list _collect_ets(function_treeC.Node node, list out)
-cdef tuple _draw_leaf_et(list functions, object domain, list name_pool, double g_tau)
+cdef tuple _draw_leaf_et(list functions, object domain, list name_pool, double g_tau,
+                         list atoms=?)
 cdef tuple _build_random_et(int arity, list functions, list operations,
-                            object domain, list name_pool, double g_tau)
-cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operations)
-cpdef tuple etr_mutation(function_treeC.Tree tree, list functions=?, list operations=?)
+                            object domain, list name_pool, double g_tau,
+                            list atoms=?)
+cdef tuple _etr_mutation(function_treeC.Tree tree, list functions, list operations,
+                         list atoms=?)
+cpdef tuple etr_mutation(function_treeC.Tree tree, list functions=?, list operations=?,
+                         list atoms=?)
 #cpdef select_random_node(node)
 #cpdef find_parent(root, child)
 #cpdef compute_subtree_size(node)

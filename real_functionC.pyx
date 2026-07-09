@@ -62,6 +62,11 @@ cdef class RealFunctionC:
         else:
             self.constant_value = None
         self.grad_funcs = self._build_gradient_functions() if compute_grad else None
+        # Phase 2.10 Stage 2: opaque-leaf metadata. Plain constructions carry
+        # None; ONLY instantiate_atom (and rename_leaf_params on its output)
+        # sets these after construction.
+        self.atom_symbol = None
+        self.theta0 = None
         #self.fit = self.fitness()
         if not isinstance(domain, (np.ndarray)):  # is domain one single element? 
             if self.is_defined(domain):
@@ -82,7 +87,11 @@ cdef class RealFunctionC:
     
     def __copy__(self):
         cdef object copy_func = lambda input_x, params: self.func(input_x, params)
-        return RealFunctionC(copy_func, self.expr, copy(self.domain), copy(self.params))
+        cdef RealFunctionC copy_rf = RealFunctionC(copy_func, self.expr, copy(self.domain), copy(self.params))
+        # Phase 2.10 Stage 2: opaque-leaf identity travels with the function.
+        copy_rf.atom_symbol = self.atom_symbol
+        copy_rf.theta0 = None if self.theta0 is None else dict(self.theta0)
+        return copy_rf
 
     def __deepcopy__(self, memo2):
         cdef object copy_func = lambda input_x, params: self.func(input_x, params)
@@ -96,6 +105,17 @@ cdef class RealFunctionC:
         cdef RealFunctionC copy_rf = RealFunctionC(
                 copy_func, self.expr, deepcopy(self.domain, memo2))
                 #,deepcopy(self.params, memo2)
+        # Phase 2.10 Stage 2: forward the opaque-leaf metadata (theta0 is a
+        # fixed reference dict, but copy it anyway so no tree copy can ever
+        # alias another's state).
+        copy_rf.atom_symbol = self.atom_symbol
+        copy_rf.theta0 = None if self.theta0 is None else dict(self.theta0)
+        # classify_symbols iterates a sympy SET; re-impose the original
+        # deterministic parameter order on the copy (instantiate_atom fixed
+        # it on the source; plain functions get their order re-sorted by
+        # Tree.get_params anyway, so this is a no-op for them).
+        copy_rf.params = list(self.params)
+        copy_rf.params_strs = list(self.params_strs)
         memo2[id(self)] = copy_rf
         return copy_rf
 
@@ -203,6 +223,21 @@ cdef class RealFunctionC:
         if params is None:
             #print('params is NONE')
             params = {}
+        # Phase 2.10 Stage 2: opaque atomic leaf. theta0 (set only by
+        # instantiate_atom) supplies reference values for any internal
+        # parameter missing from `params`, so params-free probes (is_valid,
+        # bare evaluate) are well-defined on opaque leaves — the exact
+        # analogue of the parameter-leaf constant_value fallback below.
+        # A fresh merged dict is built so the caller's dict is never mutated.
+        cdef str _nm
+        cdef dict _merged
+        if self.theta0 is not None:
+            for _nm in self.params_strs:
+                if _nm not in params:
+                    _merged = dict(self.theta0)
+                    _merged.update(params)
+                    params = _merged
+                    break
         #print('params in eval ', params)
         #print('in evaluate: ', self.func(x, params=params))
         if self.is_param():
@@ -792,6 +827,152 @@ cdef class RealFunctionC:
         """Access function symbols from Python"""
         return self.symbols
     
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.10 Stage 2 — opaque atomic primitives (DESIGN_2_10_PRIMITIVES.md §1,
+# §5, §9 item 2). A user primitive is an atom of Psi_k: ONE leaf symbol
+# carrying k >= 1 internal parameters. The parameter leaf is the k = 1
+# constant special case; function leaves are k = 0 — one object class.
+# ---------------------------------------------------------------------------
+
+cdef _slot_sort_key(str s):
+    """Natural order for placeholder names: ('c', 2) < ('c', 10)."""
+    m = re.fullmatch(r'([a-zA-Z]+)(\d+)', s)
+    return (m.group(1), int(m.group(2)))
+
+
+cdef class AtomSpec:
+    """A user-registered opaque primitive TEMPLATE.
+
+    Parameters
+    ----------
+    name : str
+        Canonical vocabulary symbol (the Pólya cell key). ONE cell per
+        template — instantiations share it regardless of the fresh parameter
+        names they receive.
+    template : str
+        Expression in the variable `x` and k >= 1 placeholder parameters
+        matching the codebase's parameter pattern [a-zA-Z]\\d+
+        (e.g. "c0*sin(c1*x)"). Every free symbol must be `x` or a
+        placeholder; `x` must appear (a template without x is the constant
+        map — that is the ordinary parameter leaf, already in the
+        vocabulary); k = 0 templates belong in the plain `functions` list.
+    """
+
+    def __init__(self, str name, str template):
+        if name is None or len(name) == 0:
+            raise ValueError("AtomSpec: name must be a non-empty string")
+        cdef object expr = sp.sympify(template)
+        cdef list slots = []
+        cdef bint has_x = False
+        cdef str s_str
+        for s in expr.free_symbols:
+            s_str = str(s)
+            if re.fullmatch(r'[a-zA-Z]\d+', s_str):
+                slots.append(s_str)
+            elif s_str == 'x':
+                has_x = True
+            else:
+                raise ValueError(
+                    "AtomSpec %r: free symbol %r is neither the variable 'x' "
+                    "nor a placeholder parameter ([a-zA-Z]<digits>)"
+                    % (name, s_str))
+        if not has_x:
+            raise ValueError(
+                "AtomSpec %r: template must depend on x. A constant template "
+                "IS the ordinary parameter leaf (Psi_1), already registered."
+                % name)
+        if len(slots) == 0:
+            raise ValueError(
+                "AtomSpec %r: template has no internal parameters (k = 0). "
+                "Register it in the plain `functions` vocabulary instead."
+                % name)
+        slots.sort(key=_slot_sort_key)
+        self.name = name
+        self.template = template
+        self.expr = expr
+        self.slots = slots
+        self.k = len(slots)
+
+
+cpdef RealFunctionC instantiate_atom(AtomSpec spec,
+                    cnp.ndarray[cnp.float64_t, ndim=1] domain,
+                    list fresh_names):
+    """Instantiate `spec` as a concrete opaque-leaf RealFunctionC whose
+    internal parameters carry `fresh_names` (positionally matched to
+    spec.slots — the caller draws them from the tree's name pool via
+    function_treeC.new_par so they never collide with existing tree
+    parameters).
+
+    The result is a PLAIN RealFunctionC (same compiled-evaluate path as
+    from_string) plus the two opaque markers: atom_symbol = spec.name (the
+    stable vocabulary key) and theta0 = {name: 1.0} (reference values for
+    params-free validity probes; the sampling-time values live on the GP
+    Node, exactly like parameter-leaf values do).
+
+    Cross-module callers: POSITIONAL ARGS ONLY (cpdef + cimport + kwargs is
+    the known NameError trap)."""
+    cdef int i
+    cdef str nm
+    if fresh_names is None or len(fresh_names) != spec.k:
+        raise ValueError(
+            "instantiate_atom(%r): expected %d fresh names, got %r"
+            % (spec.name, spec.k, fresh_names))
+    if len(set(fresh_names)) != spec.k:
+        raise ValueError(
+            "instantiate_atom(%r): fresh names must be distinct, got %r"
+            % (spec.name, fresh_names))
+    for nm in fresh_names:
+        if not re.fullmatch(r'[a-zA-Z]\d+', nm):
+            raise ValueError(
+                "instantiate_atom(%r): %r does not match the parameter "
+                "pattern [a-zA-Z]<digits>" % (spec.name, nm))
+    cdef dict sym_map = {}
+    for i in range(spec.k):
+        sym_map[sp.Symbol(spec.slots[i])] = sp.Symbol(fresh_names[i])
+    cdef object new_expr = spec.expr.subs(sym_map, simultaneous=True)
+    cdef RealFunctionC rf = RealFunctionC.from_string(
+        str(new_expr), domain, compute_grad=False)
+    rf.atom_symbol = spec.name
+    cdef dict th0 = {}
+    for nm in fresh_names:
+        th0[nm] = 1.0
+    rf.theta0 = th0
+    # classify_symbols iterates a sympy set: pin the parameter order to the
+    # deterministic fresh_names order (MPI replicas must agree bit-exactly).
+    rf.sort_params_list([sp.symbols(nm) for nm in fresh_names])
+    return rf
+
+
+cpdef RealFunctionC rename_leaf_params(RealFunctionC rf, dict name_map):
+    """Return a NEW RealFunctionC equal to `rf` with its parameter names
+    renamed per name_map (old -> new; names absent from the map are kept).
+    Preserves atom_symbol, theta0 (keys remapped) and the deterministic
+    parameter order. Used by the label-canonicalisation passes in gp_movesC
+    (crossover / compaction) on opaque leaves, where the plain-leaf
+    from_string(new_name) rebuild does not apply.
+
+    Cross-module callers: POSITIONAL ARGS ONLY."""
+    cdef dict sym_map = {}
+    cdef str old, new
+    for old in name_map:
+        new = name_map[old]
+        if old != new:
+            sym_map[sp.Symbol(old)] = sp.Symbol(new)
+    cdef object new_expr = rf.expr.subs(sym_map, simultaneous=True) if sym_map else rf.expr
+    cdef RealFunctionC out = RealFunctionC.from_string(
+        str(new_expr), rf.domain, compute_grad=False)
+    out.atom_symbol = rf.atom_symbol
+    cdef dict th0
+    if rf.theta0 is not None:
+        th0 = {}
+        for old in rf.theta0:
+            th0[name_map.get(old, old)] = rf.theta0[old]
+        out.theta0 = th0
+    out.sort_params_list(
+        [sp.symbols(name_map.get(s, s)) for s in rf.params_strs])
+    return out
 
 
 cdef is_parameter(str name):

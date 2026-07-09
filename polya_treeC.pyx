@@ -36,6 +36,12 @@ cdef class PolyaNode:
         self.depth = depth
         self.alphas = np.ones(n_choices, dtype=np.float64) * alpha_0
         self.alpha_total = float(n_choices) * alpha_0
+        # Phase 2.10: base mass of the unregistered remainder cell. Set by
+        # PolyaTree after construction in dp_mode; 0.0 = legacy. EXCLUDED
+        # from alpha_total (restriction by neutrality: the predictive
+        # normaliser runs over REGISTERED cells only, THEORY_2_13.md §5.4),
+        # so log_prob / sample_choice / update need no changes at all.
+        self.alpha_rem = 0.0
         # Children indexed by (kind, choice_idx). Use a dict so we can have
         # both 'op' and 'prim' continuations from the same decision point.
         self.children = {}
@@ -73,7 +79,8 @@ cdef class PolyaTree:
     """
 
     def __init__(self, list operations, list primitives, double alpha_0=1.0,
-                 bint auto_register=True, bint strict_ops=True):
+                 bint auto_register=True, bint strict_ops=True,
+                 double remainder_mass=0.0):
         self.operations = _OPERATIONS
         self.primitives = list(primitives)
         self.alpha_0 = alpha_0
@@ -86,9 +93,25 @@ cdef class PolyaTree:
         # Root: a "virtual" decision over n_ops + n_prims (op vs prim + which one).
         self.auto_register = auto_register
         self.strict_ops = strict_ops
+        # Phase 2.10 (DP completion, THEORY_2_13.md §5): remainder_mass > 0
+        # activates DP mode. The node-level prior is then the projection of
+        # ONE DP(c, G0) with total base mass
+        #     c = (n_ops + n_prims) * alpha_0 + remainder_mass,
+        # onto {registered cells} + {remainder R}. `base_alphas` holds the
+        # per-cell base masses used to initialise fresh nodes; `rem_base`
+        # the unallocated remainder. add_primitive CARVES mass out of the
+        # remainder (conserving c) instead of appending new mass.
+        # remainder_mass == 0.0 -> legacy mode, bit-identical behaviour.
+        if remainder_mass < 0.0:
+            raise ValueError("PolyaTree: remainder_mass must be >= 0")
+        self.dp_mode = remainder_mass > 0.0
+        self.rem_base = remainder_mass
+        self.base_alphas = [alpha_0] * (self.n_ops + self.n_prims)
+        self.base_reg_total = alpha_0 * (self.n_ops + self.n_prims)
         self.root = PolyaNode(
             'root', self.n_ops + self.n_prims, depth=0, alpha_0=alpha_0
         )
+        self.root.alpha_rem = self.rem_base
 
     # ------------------------------------------------------------------
     # Tree navigation (lazy construction)
@@ -107,6 +130,14 @@ cdef class PolyaTree:
             n_total = self.n_ops + self.n_prims
             child = PolyaNode('mixed', n_total, depth=parent.depth + 1,
                               alpha_0=self.alpha_0)
+            if self.dp_mode:
+                # Fresh nodes inherit the CURRENT base masses (registered
+                # primitives may carry custom carved masses) and the current
+                # unallocated remainder — this is what keeps every node a
+                # projection of the same DP(c, G0).
+                child.alphas = np.asarray(self.base_alphas, dtype=np.float64).copy()
+                child.alpha_total = self.base_reg_total
+                child.alpha_rem = self.rem_base
             parent.children[key] = child
         return parent.children[key]
 
@@ -124,9 +155,11 @@ cdef class PolyaTree:
     # ------------------------------------------------------------------
     # Prior evaluation (READ-ONLY)
     # ------------------------------------------------------------------
-    cdef double log_prior(self, list construction_path):
+    cpdef double log_prior(self, list construction_path):
         """
         Compute log pi(T | Theta) for a tree with given construction path.
+        (cpdef since Phase 2.10 so tests can probe the prior on hand-built
+        paths without constructing GP trees.)
 
         Pure function of the current Pólya tree: does NOT create new nodes.
         Steps that fall in unvisited subtrees contribute -log(n_total) under
@@ -146,8 +179,16 @@ cdef class PolyaTree:
             flat_idx = self._root_index(kind, idx)
 
             if current is None:
-                # Unvisited region: symmetric default over the combined space.
-                log_p += -log(<double> n_total)
+                if self.dp_mode:
+                    # Unvisited region, DP mode: base-measure predictive
+                    # G0(cell | registered) — registered cells may carry
+                    # heterogeneous carved masses. Reduces to -log(n_total)
+                    # exactly when all base masses are equal.
+                    log_p += (log(<double> self.base_alphas[flat_idx])
+                              - log(self.base_reg_total))
+                else:
+                    # Legacy: symmetric default over the combined space.
+                    log_p += -log(<double> n_total)
                 continue
 
             log_p += current.log_prob(flat_idx)
@@ -197,28 +238,65 @@ cdef class PolyaTree:
     # ------------------------------------------------------------------
     # Vocabulary growth
     # ------------------------------------------------------------------
-    cpdef int add_primitive(self, str desc):
+    cpdef int add_primitive(self, str desc, object mass=None):
         """
         Register a new primitive description in the Pólya vocabulary.
-        Grows EVERY existing Pólya node's Dirichlet by appending a fresh
-        alpha_0 slot at the end of the prim block. Existing children stay
-        addressable because their root_index = n_ops + choice_idx and we
-        only append (we don't shift).
         Returns the (possibly pre-existing) primitive index.
+
+        LEGACY mode (dp_mode False): grows EVERY node's Dirichlet by
+        appending a fresh alpha_0 slot — total mass GROWS, so every
+        registration perturbs every symbol's predictive (the historical
+        behaviour; kept bit-exact for existing tests/users).
+
+        DP mode (Phase 2.10, THEORY_2_13.md §5): registration is a
+        MASS-CONSERVING partition refinement. The new cell's base mass
+        (`mass`, default alpha_0) is CARVED out of the remainder cell at
+        every node: alpha_rem -= mass, new slot = mass, so the total base
+        mass c = alpha_total + alpha_rem is invariant at every node
+        (Lemma 5.2), registrations commute (Theorem 5.3), and the prior is
+        one fixed measure rather than a registration-history-indexed
+        family. Raises ValueError when the remainder is exhausted.
+
+        NB (cross-module callers): cpdef + cimport + KEYWORD args is the
+        known NameError trap — pass `mass` positionally from other modules.
         """
         cdef int idx
+        cdef double new_mass
         if desc in self._prim_to_idx:
             return self._prim_to_idx[desc]
+        if self.dp_mode:
+            new_mass = self.alpha_0 if mass is None else <double> float(mass)
+            if new_mass <= 0.0:
+                raise ValueError(
+                    "add_primitive: mass must be > 0 (got %r)" % mass)
+            if new_mass > self.rem_base * (1.0 + 1e-12):
+                raise ValueError(
+                    "add_primitive: remainder exhausted — requested mass "
+                    "%g > unallocated remainder %g. Construct the PolyaTree "
+                    "with a larger remainder_mass, or register with a "
+                    "smaller per-primitive mass." % (new_mass, self.rem_base))
+        else:
+            if mass is not None:
+                raise ValueError(
+                    "add_primitive: custom mass requires DP mode "
+                    "(construct with remainder_mass > 0)")
+            new_mass = self.alpha_0
         idx = self.n_prims
         self.primitives.append(desc)
         self._prim_to_idx[desc] = idx
         self.n_prims += 1
-        # Walk all nodes and append a fresh alpha_0 slot.
-        self._grow_all_nodes()
+        self.base_alphas.append(new_mass)
+        self.base_reg_total += new_mass
+        if self.dp_mode:
+            self.rem_base -= new_mass
+        # Walk all nodes and append the new cell (carving in dp_mode).
+        self._grow_all_nodes(new_mass)
         return idx
 
-    cdef void _grow_all_nodes(self):
-        """BFS: append one alpha_0 slot to every node's Dirichlet."""
+    cdef void _grow_all_nodes(self, double new_mass):
+        """BFS: append one `new_mass` slot to every node's Dirichlet.
+        In dp_mode the same mass is simultaneously removed from the node's
+        remainder cell, conserving alpha_total + alpha_rem per node."""
         cdef list stack = [self.root]
         cdef PolyaNode node
         cdef cnp.ndarray new_alphas
@@ -226,10 +304,12 @@ cdef class PolyaTree:
             node = stack.pop()
             new_alphas = np.empty(node.n_choices + 1, dtype=np.float64)
             new_alphas[:node.n_choices] = node.alphas
-            new_alphas[node.n_choices] = self.alpha_0
+            new_alphas[node.n_choices] = new_mass
             node.alphas = new_alphas
             node.n_choices += 1
-            node.alpha_total += self.alpha_0
+            node.alpha_total += new_mass
+            if self.dp_mode:
+                node.alpha_rem -= new_mass
             for child in node.children.values():
                 stack.append(child)
 
@@ -247,7 +327,12 @@ cdef class PolyaTree:
         if node is None:
             return
         if node.is_leaf():
-            desc = node.get_fun().get_description()
+            # Phase 2.10 Stage 2: vocab_symbol == description for plain
+            # leaves; for opaque atomic leaves it is the template's canonical
+            # symbol (one vocabulary cell per template, NOT per
+            # instantiation — instantiated descriptions carry tree-specific
+            # parameter names and must never enter the vocabulary).
+            desc = node.vocab_symbol()
             idx = self._prim_to_idx.get(desc, -1)
             if idx >= 0:
                 path.append(('prim', idx))
@@ -267,7 +352,9 @@ cdef class PolyaTree:
             if node is None:
                 return
             if node.is_leaf():
-                desc = node.get_fun().get_description()
+                # Phase 2.10 Stage 2: canonical vocabulary key (atom template
+                # symbol for opaque leaves, description otherwise).
+                desc = node.vocab_symbol()
                 idx = self._prim_to_idx.get(desc, -1)
                 if idx < 0:
                     if self.auto_register:
@@ -357,7 +444,8 @@ cdef class PolyaTree:
         if node is None:
             return
         if node.is_leaf():
-            desc = node.get_fun().get_description()
+            # Phase 2.10 Stage 2: check the canonical vocabulary key.
+            desc = node.vocab_symbol()
             if desc not in self._prim_to_idx:
                 raise KeyError(
                     f"PolyaTree.assert_covers: leaf primitive '{desc}' "
@@ -387,7 +475,8 @@ cdef class PolyaTree:
     # ------------------------------------------------------------------
     cpdef dict get_state(self):
         """Deep, picklable snapshot of the whole Pólya tree (vocabulary,
-        urn counter t, and every node's Dirichlet alphas + children)."""
+        urn counter t, and every node's Dirichlet alphas + children).
+        Phase 2.10: includes the DP-mode fields."""
         return {
             'operations': list(self.operations),
             'primitives': list(self.primitives),
@@ -396,11 +485,16 @@ cdef class PolyaTree:
             'auto_register': bool(self.auto_register),
             'strict_ops': bool(self.strict_ops),
             'root': _node_to_state(self.root),
+            'dp_mode': bool(self.dp_mode),
+            'rem_base': float(self.rem_base),
+            'base_alphas': list(self.base_alphas),
         }
 
     cpdef void set_state(self, dict state) except *:
         """Restore a snapshot produced by get_state(). Overwrites the
-        vocabulary, counter and the entire node tree in place."""
+        vocabulary, counter and the entire node tree in place.
+        Phase 2.10: DP-mode fields read with legacy-safe defaults, so
+        snapshots produced by pre-2.10 builds restore as legacy trees."""
         self.operations = list(state['operations'])
         self.primitives = list(state['primitives'])
         self.alpha_0 = <double> state['alpha_0']
@@ -411,6 +505,12 @@ cdef class PolyaTree:
         self.n_prims = len(self.primitives)
         self._op_to_idx = {op: i for i, op in enumerate(self.operations)}
         self._prim_to_idx = {p: i for i, p in enumerate(self.primitives)}
+        self.dp_mode = <bint> state.get('dp_mode', False)
+        self.rem_base = <double> state.get('rem_base', 0.0)
+        self.base_alphas = list(state.get(
+            'base_alphas',
+            [self.alpha_0] * (self.n_ops + self.n_prims)))
+        self.base_reg_total = float(sum(self.base_alphas))
         self.root = _node_from_state(state['root'])
 
     cpdef void replay_paths(self, list paths) except *:
@@ -431,17 +531,20 @@ cdef dict _node_to_state(PolyaNode node):
         'depth': int(node.depth),
         'alphas': np.asarray(node.alphas, dtype=np.float64).copy(),
         'alpha_total': float(node.alpha_total),
+        'alpha_rem': float(node.alpha_rem),
         'children': {key: _node_to_state(child)
                      for key, child in node.children.items()},
     }
 
 
 cdef PolyaNode _node_from_state(dict s):
-    """Rebuild a PolyaNode (and its subtree) from _node_to_state output."""
+    """Rebuild a PolyaNode (and its subtree) from _node_to_state output.
+    'alpha_rem' read with a legacy-safe default (pre-2.10 snapshots)."""
     cdef PolyaNode node = PolyaNode(
         <str> s['kind'], <int> s['n_choices'], <int> s['depth'], alpha_0=1.0)
     node.alphas = np.asarray(s['alphas'], dtype=np.float64).copy()
     node.alpha_total = <double> s['alpha_total']
+    node.alpha_rem = <double> s.get('alpha_rem', 0.0)
     node.children = {key: _node_from_state(child)
                      for key, child in (<dict> s['children']).items()}
     return node
