@@ -169,9 +169,12 @@ cdef class Forest:
                              object subtree_rebuild_max_height=*)
     cpdef function_treeC.Tree best_tree(self)
 
-cdef tuple _tree_to_wire(function_treeC.Tree tree, double post)
-cdef function_treeC.Tree _tree_from_wire(object expr, dict name_values,
-                                         object domain, list funcs,
-                                         object sigma, double g_tau)
+# Phase 2.10 Stage 3b: cpdef (mpi_worker delegates here; tests drive them).
+# Cross-module callers: POSITIONAL ARGS ONLY.
+cpdef tuple _tree_to_wire(function_treeC.Tree tree, double post)
+cpdef function_treeC.Tree _tree_from_wire(object expr, dict name_values,
+                                          object domain, list funcs,
+                                          object sigma, double g_tau,
+                                          object atom_specs=?)
 
 cdef _bis2_parallel_helper(object x)

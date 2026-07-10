@@ -194,6 +194,12 @@ cdef class Tree:
 
 cdef _post_order_update(Node node)
 
+# Phase 2.10 Stage 3b: structural (skeleton) serialization for the MPI wire.
+cpdef object tree_to_skel(Node node)
+cpdef Node node_from_skel(object skel,
+                          cnp.ndarray[cnp.float64_t, ndim=1] domain,
+                          dict atom_specs)
+
 cpdef build_tree(int depth, list functions,
     cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?,
     int Npars=?, object leaves_count=?, object arr_indices=?,

@@ -287,36 +287,20 @@ def worker_main():
 # only the addressed rank acts on the point-to-point parts, so no
 # interleaving can deadlock. `worker_main` (burn-in) is untouched.
 # ===========================================================================
+# Phase 2.10 Stage 3b: the wire has ONE implementation — groveC's cpdef
+# pair (dual payload: legacy sympy expr for atom-free trees, 'skel3b'
+# structural skeleton for atom-bearing ones). These wrappers only keep the
+# historical local names; calls are POSITIONAL (cpdef across cimport).
 cdef tuple _sampler_tree_to_wire(function_treeC.Tree tree, double post):
-    return (tree.root.function.expr,
-            dict(tree.name_values) if tree.name_values else {},
-            float(post))
+    return groveC._tree_to_wire(tree, post)
 
 
 cdef function_treeC.Tree _sampler_tree_from_wire(
         object expr, dict name_values,
         cnp.ndarray[cnp.float64_t, ndim=1] domain, list funcs,
-        object sigma, double g_tau):
-    cdef function_treeC.Tree tree
-    cdef function_treeC.Node param
-    cdef str desc
-    try:
-        tree = function_treeC._expr_to_tree(expr, domain, funcs)
-    except Exception:
-        return None
-    if tree is None:
-        return None
-    if name_values:
-        for param in tree.params:
-            desc = param.get_fun().get_description()
-            if desc in name_values:
-                param.set_value(<double> name_values[desc])
-    tree.set_sigma(sigma)
-    tree.set_g_tau(g_tau)
-    tree.tree_update(tree.get_root())
-    if tree.tree_get_description() != str(expr):
-        return None
-    return tree
+        object sigma, double g_tau, object atom_specs=None):
+    return groveC._tree_from_wire(expr, name_values, domain, funcs,
+                                  sigma, g_tau, atom_specs)
 
 
 cdef void _sampler_main():
@@ -354,6 +338,20 @@ cdef void _sampler_main():
             alpha_0=float(pstate['alpha_0']))
         polya.set_state(pstate)
 
+    # ---- Phase 2.10 Stage 3b: opaque-primitive templates --------------------
+    # Shipped in the config (AtomSpec pickles via __reduce__). They go to
+    # (a) the Grove, so this worker's kernel moves propose/retire opaque
+    # leaves with the same M+1+A densities as the master's, and (b) every
+    # wire rebuild, so 'skel3b' payloads reconstruct atoms as units. The
+    # atom SYMBOLS are already in polya_state's vocabulary, so the
+    # ('kind', idx) path mapping is identical on every replica.
+    cdef list atoms = config.get('atoms')
+    cdef dict atom_specs = None
+    if atoms:
+        atom_specs = {}
+        for _spec_obj in atoms:
+            atom_specs[_spec_obj.name] = _spec_obj
+
     # ---- build MY grove -----------------------------------------------------
     cdef groveC.Grove grove = groveC.Grove(
         x, y, my_T, int(ctor['size']), int(ctor['depth']),
@@ -365,7 +363,8 @@ cdef void _sampler_main():
         use_gradients=bool(ctor['use_gradients']),
         burn_in=False, use_mpi=0,
         polya=polya, seed=my_seed, g_tau=ctor['g_tau'],
-        adapt_moves=bool(ctor['adapt_moves']))
+        adapt_moves=bool(ctor['adapt_moves']),
+        atoms=atoms)
     grove.polya_defer = True
 
     # Install the master's CURRENT trees (start exactly where it stands).
@@ -376,7 +375,7 @@ cdef void _sampler_main():
     for s in range(len(wires)):
         t = _sampler_tree_from_wire(wires[s][0], wires[s][1],
                                     grove.domain, list(ctor['funcs']),
-                                    grove.sigma, grove.g_tau)
+                                    grove.sigma, grove.g_tau, atom_specs)
         if t is None:
             # Fall back to the locally built tree for this slot (the master
             # will simply rescore it through the round replies).
@@ -418,7 +417,8 @@ cdef void _sampler_main():
             for slot in range(min(grove.size, len(new_wires))):
                 nt = _sampler_tree_from_wire(
                     new_wires[slot][0], new_wires[slot][1], grove.domain,
-                    list(ctor['funcs']), grove.sigma, grove.g_tau)
+                    list(ctor['funcs']), grove.sigma, grove.g_tau,
+                    atom_specs)
                 if nt is not None:
                     grove.set_single_tree(nt, slot)
                     grove.root_posteriors[slot] = float(new_wires[slot][2])

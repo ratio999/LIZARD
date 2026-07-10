@@ -657,22 +657,64 @@ NotImplementedError when atoms are set (wire format is Stage 3b).
 End-to-end test 2.10(o): single-rung Forest with Asin template + safe-4
 ops (frequency unreachable by composition) recovers 2.3·sin(1.3x) to
 mse ~5e-28. Full suite green on the final build (210 a–o, 23, 29).
-DEFERRED from item 4 (documented decision): the FULL vocabulary freeze
-(auto_register=False) is NOT flipped — the a/b parameter-name pool cap
-(Npars or 8) does not cover the names new_par can legally mint under the
-depth cap (up to a255), so auto_register is load-bearing; and in legacy
-mode pre-registering a 512-name pool would shift every -log(n_total)
-unvisited default. Atom symbols never rely on auto_register (frozen at
-construction, the actual 2.10 requirement); the parameter-pool freeze is
-Phase 2.3 residue to revisit with DP-mode defaults.
-STAGE 3b (MPI wire format) PENDING: _tree_to_wire/_tree_from_wire ship
-raw sympy exprs rebuilt via _expr_to_tree, which would DECOMPOSE an
-opaque leaf (a0*sin(a1*x) is a sympy Mul) — the wire must carry
-(atom_symbol, internal names) per opaque leaf or use a sympy Function
-placeholder _expr_to_tree treats atomically; then an MPI-replica
-round-trip test and lifting the run_mpi_spawn guard. Also: burn-in
-enumeration stays atom-free by design (moves introduce atoms); revisit
-if burn-in should seed atom-bearing depth-1 trees.
+STAGE 3c (FULL vocabulary freeze) ✅ IMPLEMENTED + COMPILED + TESTED
+2026-07-10 — settles Phase 2.3 / DESIGN §9 item 4's deferred half. Key
+realization: NO finite parameter-name pool can be frozen — new_par
+ratchets indices upward without bound (births after deaths raise the max
+index; only crossover compaction resets it), so the pre-registered-pool
+idea is unsound in principle, not just under-sized. The correct object is
+DESIGN §1's own unification: the parameter leaf is ONE atom of Ψ₁
+(ψ_const); names are bound labels chosen deterministically by new_par and
+carry no prior mass. Implementation: PolyaTree(..., unify_params=True)
+appends the reserved cell PARAM_CELL_TOKEN ("<param>") and maps EVERY
+plain parameter leaf to it in extract/assert (opaque leaves keep their
+template cells; guards reject the token as a primitive/registration);
+get_state/set_state carry the flag (MPI replicas). Forest(...,
+freeze_vocab=True) then builds a CLOSED vocabulary {ops} ∪ {funcs} ∪
+{ψ_const} ∪ {atom templates} with auto_register=False — unknown symbols
+raise the guarded KeyError instead of growing the prior; run_mpi_spawn
+skips the legacy 32-name pool when unified (it would only shift the
+symmetric prior). Payoffs: the prior is a fixed measure from t=0 AND
+renaming-invariant (α-equivalent trees get equal mass — test 2.10(r)
+asserts lp(a0-tree) == lp(b7-tree) exactly, before and after
+reinforcement, which now lands on the shared ψ_const urn cell); MPI path
+indices are replica-stable by construction, not best-effort. Defaults
+UNCHANGED (freeze_vocab=False, unify_params=False → bit-identical legacy,
+whole suite green); freeze is opt-in like DP mode — the paper runs use
+Forest(freeze_vocab=True) (+ a caller polya with remainder_mass>0 for DP).
+Tests: 2.10(r) (α-equivalence, closed-vocab KeyError, token guards, atom
+coexistence, state round-trip, 300-step frozen Forest run with vocab
+bit-stable); test_phase2mpi (e) now runs in the frozen paper mode
+(freeze+atoms+skeleton wire, vocabulary bit-stable across all replicas).
+Still open (minor): burn-in enumeration stays atom-free by design (moves
+introduce atoms); revisit if burn-in should seed atom-bearing depth-1
+trees.
+STAGE 3b (MPI wire format) ✅ IMPLEMENTED + COMPILED + TESTED 2026-07-10:
+the wire stays a (payload, name_values, post) 3-tuple; payload is the raw
+sympy expr for atom-free trees (HISTORICAL format, bit-identical) or
+('skel3b', skeleton, description) for atom-bearing ones, where the
+skeleton (function_treeC.tree_to_skel / node_from_skel) is a picklable
+recursive tuple — ('L', desc) | ('A', atom_symbol, names) | ('O', op,
+left, right) — that preserves the EXACT tree shape and reconstructs
+opaque leaves as units (a raw expr cannot: a0*sin(a1*x) is a sympy Mul
+and _expr_to_tree would decompose it). groveC._tree_to_wire/_tree_from_wire
+promoted to cpdef with an atom_specs registry arg; mpi_worker's duplicate
+pair now DELEGATES to them (one wire implementation); AtomSpec pickles
+via __reduce__ and rides the worker startup config (Grove kernels +
+rebuilds on every rank); run_mpi_spawn guard lifted. Rebuild failures
+(unknown template, fidelity mismatch) keep the REJECT-the-exchange
+convention. Tests: 2.10(p) wire round-trip unit (both payloads, pickle,
+exact-shape, reject-on-missing-registry); 2.10(q) in test_phase2mpi —
+live 2-rung run_mpi_spawn with a planted Asin tree: startup wire ships a
+skeleton, atom PROPAGATES across the population (5/6 final slots atomic,
+2 accepted swaps), best = b0*sin(b1*x) at mse 0.0. Legacy 2.12 tests
+unchanged-green on the dual wire. NB singleton MPI_Comm_spawn is not
+configured in the WSL env — run the MPI suite as
+`mpiexec -n 1 python test_phase2mpi.py`.
+Still open (minor): burn-in enumeration stays atom-free by design (moves
+introduce atoms); revisit if burn-in should seed atom-bearing depth-1
+trees. Full parameter-pool vocabulary freeze remains deferred (see the
+Stage 3a note).
 PRIOR-MASS QUESTION RESOLVED (2026-07-09): see DESIGN_2_10_PRIMITIVES.md —
 DP(c, G₀) formalization; registration = partition refinement carving mass
 from a remainder cell (replaces the append-α₀ scheme, which is NOT

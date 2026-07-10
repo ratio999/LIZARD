@@ -45,6 +45,15 @@ cdef class PolyaTree:
     cdef public double rem_base
     cdef public list base_alphas
     cdef public double base_reg_total
+    # Phase 2.10 Stage 3c (vocabulary freeze): unify_params=True maps every
+    # PLAIN parameter leaf to the single canonical psi_const cell
+    # (PARAM_CELL_TOKEN, appended to `primitives` at construction) instead
+    # of one cell per parameter name — names are bound labels whose indices
+    # new_par can ratchet without bound, so per-name cells can neither be
+    # frozen nor assign alpha-equivalent trees equal mass. _param_idx is
+    # psi_const's flat primitive index (-1 when not unified).
+    cdef public bint unify_params
+    cdef public int _param_idx
 
     cdef PolyaNode _ensure_child(self, PolyaNode parent, str kind, int choice_idx)
     cdef PolyaNode _get_child_or_none(self, PolyaNode parent, str kind, int choice_idx)

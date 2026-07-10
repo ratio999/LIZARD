@@ -895,6 +895,13 @@ cdef class AtomSpec:
         self.slots = slots
         self.k = len(slots)
 
+    def __reduce__(self):
+        # Phase 2.10 Stage 3b: AtomSpec crosses the MPI wire (worker startup
+        # config ships the Forest's atoms). A template is fully determined
+        # by (name, template); rebuilding through __init__ re-validates and
+        # re-derives expr/slots/k deterministically.
+        return (AtomSpec, (self.name, self.template))
+
 
 cpdef RealFunctionC instantiate_atom(AtomSpec spec,
                     cnp.ndarray[cnp.float64_t, ndim=1] domain,

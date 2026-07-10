@@ -1087,6 +1087,68 @@ cdef _post_order_update(Node node):
         _post_order_update(node.right)
     node.update_func()
 
+
+# ---------------------------------------------------------------------------
+# Phase 2.10 Stage 3b — structural (skeleton) tree serialization.
+#
+# The MPI wire cannot ship a raw sympy expression for an atom-bearing tree:
+# _expr_to_tree rebuilds from the EXPRESSION structure, and an opaque leaf's
+# contribution (e.g. a0*sin(a1*x)) is indistinguishable from a Mul subtree —
+# atomicity, the Polya vocabulary key, and the description round-trip would
+# all break. The skeleton is a picklable recursive tuple that preserves the
+# EXACT tree shape and the opaque leaves' identity:
+#     ('L', description)                      plain leaf (function/parameter)
+#     ('A', atom_symbol, (name1, name2, ...)) opaque atomic leaf
+#     ('O', op_symbol, left_skel, right_skel) internal node
+# Parameter VALUES travel separately (name_values), exactly like the legacy
+# wire. Both cpdef so groveC / mpi_worker call them across the cimport
+# boundary — POSITIONAL ARGS ONLY at those call sites.
+# ---------------------------------------------------------------------------
+
+cpdef object tree_to_skel(Node node):
+    """Serialize the (sub)tree rooted at `node` to a skeleton tuple."""
+    if node.is_leaf():
+        if node.is_atomic():
+            return ('A', node.function.atom_symbol,
+                    tuple(node.leaf_param_names()))
+        return ('L', node.function.get_description())
+    return ('O', node.op_symbol,
+            tree_to_skel(node.left), tree_to_skel(node.right))
+
+
+cpdef Node node_from_skel(object skel,
+                          cnp.ndarray[cnp.float64_t, ndim=1] domain,
+                          dict atom_specs):
+    """Rebuild a Node tree from a skeleton tuple.
+
+    `atom_specs` maps atom_symbol -> real_functionC.AtomSpec; a skeleton
+    that references a template absent from the map raises KeyError (the
+    wire consumers turn that into their reject-the-exchange convention).
+    Values are NOT installed here — the caller applies name_values
+    afterwards (plain params via set_value, opaque theta via the leaf
+    dicts) and runs tree_update."""
+    cdef str tag = <str> skel[0]
+    cdef Node left, right
+    cdef real_functionC.RealFunctionC rf
+    if tag == 'L':
+        return Node(real_functionC.RealFunctionC.from_string(
+            <str> skel[1], domain, compute_grad=False))
+    if tag == 'A':
+        if atom_specs is None or skel[1] not in atom_specs:
+            raise KeyError(
+                "node_from_skel: unknown atom template %r — pass the "
+                "atom_specs dict covering every template on the wire"
+                % (skel[1],))
+        rf = real_functionC.instantiate_atom(
+            <real_functionC.AtomSpec> atom_specs[skel[1]], domain,
+            list(skel[2]))
+        return Node(rf)
+    if tag != 'O':
+        raise ValueError("node_from_skel: bad skeleton tag %r" % (tag,))
+    left = node_from_skel(skel[2], domain, atom_specs)
+    right = node_from_skel(skel[3], domain, atom_specs)
+    return Node(None, left, right, <str> skel[1])
+
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x,
         str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None,

@@ -28,6 +28,14 @@ round.
       (run_all + attempt_swaps + attempt_crossovers) without error --
       guarding against any accidental behavioural change to the serial
       path from the polya_defer / _ctor additions (both default-off).
+  (e) Phase 2.10 Stage 3b: opaque atomic primitives cross the wire as
+      ('skel3b', skeleton, description) payloads -- a seeded atom tree
+      survives the startup wire, the per-round gathers/scatters, and the
+      final collection, and the sampler keeps fitting the signal only the
+      atom can represent.
+
+NOTE: in environments where singleton MPI_Comm_spawn is not configured,
+run under the launcher instead:  mpiexec -n 1 python test_phase2mpi.py
 """
 
 import os
@@ -165,6 +173,88 @@ def test_serial_reference(n_rounds=10, n_steps=4, seed=7):
     print("[2.12d] PASS  serial loop unchanged (polya.t=%d)" % forest.polya.t)
 
 
+def test_mpi_atoms(n_rounds=6, n_steps=25, seed=5):
+    """(e) Phase 2.10 Stage 3b: opaque atomic primitives cross the MPI wire.
+
+    A two-rung Forest carries the Asin = c0*sin(c1*x) template and a signal
+    only the atom can fit (safe-4 ops: no compose/pow, so a frequency-scaled
+    sinusoid is unreachable by combining the plain vocabulary). Slot 0 of
+    the cold grove is seeded with the PLANTED atom tree (theta at the true
+    values), so the STARTUP wire for that slot must already be a 'skel3b'
+    skeleton payload; workers rebuild it as a unit, run their kernels with
+    atoms, and the per-round gathers + final collection must bring opaque
+    leaves home intact.
+    """
+    print("[2.10q] MPI wire with opaque primitives (Stage 3b)")
+    import real_functionC as rfc
+    import function_treeC as ftc
+
+    x = np.linspace(0.1, 6.0, 50).astype(np.float64)
+    y = (2.3 * np.sin(1.3 * x)).astype(np.float64)
+    spec = rfc.AtomSpec("Asin", "c0*sin(c1*x)")
+    funcs = ["sin(x)", "x"]
+
+    # freeze_vocab=True: this is the "paper mode" combination — closed
+    # psi_const vocabulary (Stage 3c) + atoms + the skeleton wire — so the
+    # test also exercises the worker-side set_state restore of
+    # unify_params and the master's pool-registration skip.
+    forest = Forest(x, y, np.asarray([1.0, 2.0]), 3, 1, list(funcs),
+                    sigma=1.0, Npars=1, init_value=1.0,
+                    operations=["+", "-", "*", "/"], base_temp=1.0,
+                    use_gradients=False, seed=seed, atoms=[spec],
+                    freeze_vocab=True)
+    assert forest.polya.primitives.count("Asin") == 1
+    assert forest.polya.unify_params and not forest.polya.auto_register
+    vocab0 = list(forest.polya.primitives)
+
+    # Plant the true atom in the cold grove: the startup wire for this slot
+    # is a skeleton payload by construction.
+    g0 = forest.groves[0]
+    anode = ftc.Node(rfc.instantiate_atom(spec, x, ["a0", "a1"]))
+    atree = ftc.Tree(0, list(funcs), x, node=anode, sigma=g0.sigma)
+    anode.theta["a0"] = 2.3
+    anode.theta["a1"] = 1.3
+    atree.tree_update(atree.get_root())
+    atree.set_g_tau(g0.g_tau)
+    g0.set_single_tree(atree, 0)
+    g0.root_posteriors[0] = atree.log_marginal_bic(y, optimize=False)
+    assert np.isfinite(g0.root_posteriors[0])
+
+    stats = forest.run_mpi_spawn(y, n_rounds, n_steps, seed=seed + 1,
+                                 max_tree_depth=4,
+                                 subtree_rebuild_max_height=2)
+    print("[2.10q] stats:", stats)
+
+    # (i) machinery sane after the run
+    for gi, g in enumerate(forest.groves):
+        for si, t in enumerate(g.trees):
+            assert t is not None and t.is_valid(x), \
+                "grove %d slot %d broken after atom-MPI run" % (gi, si)
+    # (ii) the frozen vocabulary is BIT-STABLE across the whole MPI run
+    #      (master replay + every worker replica): no second Asin cell, no
+    #      instantiated description, no parameter name — nothing at all.
+    assert list(forest.polya.primitives) == vocab0, \
+        "frozen vocabulary changed during the MPI run"
+    for prim in forest.polya.primitives:
+        assert "*" not in prim, "instantiated atom leaked: %r" % prim
+    # (iii) opaque leaves came home: the planted near-perfect atom tree
+    #       dominates everything the safe-4 vocabulary can build, so at
+    #       least one final tree must be atomic.
+    n_atomic = sum(
+        1 for g in forest.groves for t in g.trees
+        if any(lf.is_atomic() for lf in t.get_leaves()))
+    assert n_atomic >= 1, "opaque leaf lost across the MPI wire"
+    # (iv) and the master's best tree still fits the signal only the atom
+    #      can represent
+    best = forest.best_tree()
+    resid = y - np.asarray(best.evaluate(), dtype=np.float64)
+    mse = float(np.nanmean(resid * resid))
+    assert mse < 0.05, "best tree %r mse %.4f" % (
+        best.tree_get_description(), mse)
+    print("[2.10q] PASS  n_atomic=%d best=%s mse=%.2e"
+          % (n_atomic, best.tree_get_description(), mse))
+
+
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -173,4 +263,5 @@ if __name__ == "__main__":
 
     test_serial_reference()
     test_mpi_sampler()
+    test_mpi_atoms()
     print("\nAll Phase 2.12 (MPI sampling) tests passed.")

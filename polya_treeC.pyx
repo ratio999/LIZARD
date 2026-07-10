@@ -24,6 +24,14 @@ from libc.math cimport log
 
 cdef list _OPERATIONS = ["+", "-", "*", "/", "o", "**"]
 
+# Phase 2.10 Stage 3c (vocabulary freeze): the reserved vocabulary key of
+# the SINGLE canonical parameter cell psi_const under unify_params=True.
+# DESIGN_2_10_PRIMITIVES.md §1: the parameter leaf is ONE atom of Psi_1 —
+# parameter NAMES (a0, b3, ...) are bound labels chosen deterministically
+# by new_par and carry no prior mass of their own. '<' cannot appear in a
+# leaf description or a sane atom symbol, so the token cannot collide.
+PARAM_CELL_TOKEN = "<param>"
+
 # ---------------------------------------------------------------------------
 # PolyaNode
 # ---------------------------------------------------------------------------
@@ -80,9 +88,30 @@ cdef class PolyaTree:
 
     def __init__(self, list operations, list primitives, double alpha_0=1.0,
                  bint auto_register=True, bint strict_ops=True,
-                 double remainder_mass=0.0):
+                 double remainder_mass=0.0, bint unify_params=False):
+        # Phase 2.10 Stage 3c (vocabulary freeze): unify_params=True maps
+        # EVERY plain parameter leaf onto the single canonical psi_const
+        # cell PARAM_CELL_TOKEN (appended to the vocabulary here) instead
+        # of one cell per parameter NAME. Names are bound labels — new_par
+        # ratchets their indices upward without bound (births after deaths
+        # raise the max index; only crossover compaction resets it), so NO
+        # finite name pool covers the reachable names, and per-name cells
+        # weight alpha-equivalent trees differently. With unify_params the
+        # vocabulary {ops} + {function leaves} + {psi_const} + {atom
+        # templates} is FINITE and CLOSED: auto_register can be False and
+        # the prior is one fixed measure from t = 0 (the Phase 2.3 /
+        # DESIGN §9 item 4 freeze). Default False = bit-identical legacy.
+        cdef list prims = list(primitives)
+        self.unify_params = unify_params
+        if unify_params:
+            if PARAM_CELL_TOKEN in prims:
+                raise ValueError(
+                    "PolyaTree: %r is the reserved canonical parameter "
+                    "cell and may not appear in `primitives`"
+                    % PARAM_CELL_TOKEN)
+            prims.append(PARAM_CELL_TOKEN)
         self.operations = _OPERATIONS
-        self.primitives = list(primitives)
+        self.primitives = prims
         self.alpha_0 = alpha_0
         self.t = 0
         self.n_ops = len(self.operations)
@@ -108,6 +137,10 @@ cdef class PolyaTree:
         self.rem_base = remainder_mass
         self.base_alphas = [alpha_0] * (self.n_ops + self.n_prims)
         self.base_reg_total = alpha_0 * (self.n_ops + self.n_prims)
+        # psi_const's flat index (symmetric alpha_0 mass like every other
+        # initially registered atom, DESIGN §2). -1 when not unified.
+        self._param_idx = self._prim_to_idx[PARAM_CELL_TOKEN] \
+            if unify_params else -1
         self.root = PolyaNode(
             'root', self.n_ops + self.n_prims, depth=0, alpha_0=alpha_0
         )
@@ -262,6 +295,13 @@ cdef class PolyaTree:
         """
         cdef int idx
         cdef double new_mass
+        # Phase 2.10 Stage 3c: the psi_const token is reserved — silently
+        # returning its index would let e.g. an atom template named like it
+        # merge into the parameter cell.
+        if self.unify_params and desc == PARAM_CELL_TOKEN:
+            raise ValueError(
+                "add_primitive: %r is the reserved canonical parameter "
+                "cell" % desc)
         if desc in self._prim_to_idx:
             return self._prim_to_idx[desc]
         if self.dp_mode:
@@ -327,6 +367,11 @@ cdef class PolyaTree:
         if node is None:
             return
         if node.is_leaf():
+            # Phase 2.10 Stage 3c: psi_const unification (see
+            # _extract_recursive).
+            if self.unify_params and node.is_param():
+                path.append(('prim', self._param_idx))
+                return
             # Phase 2.10 Stage 2: vocab_symbol == description for plain
             # leaves; for opaque atomic leaves it is the template's canonical
             # symbol (one vocabulary cell per template, NOT per
@@ -352,6 +397,13 @@ cdef class PolyaTree:
             if node is None:
                 return
             if node.is_leaf():
+                # Phase 2.10 Stage 3c: under unify_params every PLAIN
+                # parameter leaf is the single psi_const cell — the name is
+                # a bound label with no prior mass of its own. Opaque
+                # leaves keep their template cells via vocab_symbol below.
+                if self.unify_params and node.is_param():
+                    path.append(('prim', self._param_idx))
+                    return
                 # Phase 2.10 Stage 2: canonical vocabulary key (atom template
                 # symbol for opaque leaves, description otherwise).
                 desc = node.vocab_symbol()
@@ -444,6 +496,10 @@ cdef class PolyaTree:
         if node is None:
             return
         if node.is_leaf():
+            # Phase 2.10 Stage 3c: a plain parameter leaf is always covered
+            # by the psi_const cell under unify_params.
+            if self.unify_params and node.is_param():
+                return
             # Phase 2.10 Stage 2: check the canonical vocabulary key.
             desc = node.vocab_symbol()
             if desc not in self._prim_to_idx:
@@ -488,6 +544,9 @@ cdef class PolyaTree:
             'dp_mode': bool(self.dp_mode),
             'rem_base': float(self.rem_base),
             'base_alphas': list(self.base_alphas),
+            # Phase 2.10 Stage 3c: psi_const unification travels with the
+            # state so MPI replicas map parameter leaves identically.
+            'unify_params': bool(self.unify_params),
         }
 
     cpdef void set_state(self, dict state) except *:
@@ -511,6 +570,11 @@ cdef class PolyaTree:
             'base_alphas',
             [self.alpha_0] * (self.n_ops + self.n_prims)))
         self.base_reg_total = float(sum(self.base_alphas))
+        # Phase 2.10 Stage 3c: legacy-safe default False; the token is
+        # already inside state['primitives'] when it was ever enabled.
+        self.unify_params = <bint> state.get('unify_params', False)
+        self._param_idx = self._prim_to_idx.get(PARAM_CELL_TOKEN, -1) \
+            if self.unify_params else -1
         self.root = _node_from_state(state['root'])
 
     cpdef void replay_paths(self, list paths) except *:

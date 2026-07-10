@@ -2130,24 +2130,71 @@ cdef class Grove:
 # ---------------------------------------------------------------------------
 # Phase 2.12 (MPI sampling): tree wire format
 # ---------------------------------------------------------------------------
-# Same serialization the burn-in spawn path uses: (sympy_expr, name_values,
-# post). Trees are cdef classes (not picklable); sympy exprs + dicts of
-# floats are. Rebuild goes through function_treeC._expr_to_tree, then param
-# values, sigma and g_tau are restored. A rebuilt tree whose description
+# The wire is a 3-tuple (payload, name_values, post) — trees are cdef
+# classes (not picklable); payloads + dicts of floats are. Two payload
+# forms (Phase 2.10 Stage 3b):
+#   * atom-free tree : the raw sympy expr (the HISTORICAL format,
+#     bit-identical — rebuild via function_treeC._expr_to_tree);
+#   * atom-bearing   : ('skel3b', skeleton, description) — a structural
+#     skeleton (function_treeC.tree_to_skel) that preserves the exact tree
+#     shape and each opaque leaf's (atom_symbol, internal names). A raw
+#     expr CANNOT carry an opaque leaf: a0*sin(a1*x) is a sympy Mul and
+#     _expr_to_tree would decompose it into an ordinary subtree.
+# Values travel in name_values for both forms. A rebuild whose description
 # does not round-trip is reported as None and the caller must treat the
-# exchange as REJECTED (self-loop; target-preserving).
-cdef tuple _tree_to_wire(function_treeC.Tree tree, double post):
+# exchange as REJECTED (self-loop; target-preserving). Both cpdef since
+# Stage 3b: mpi_worker delegates here (ONE wire implementation) and the
+# unit tests drive them directly — cross-module calls POSITIONAL ONLY.
+cpdef tuple _tree_to_wire(function_treeC.Tree tree, double post):
+    cdef function_treeC.Node lf
+    cdef bint has_atomic = False
+    for lf in tree.leaves:
+        if lf.is_atomic():
+            has_atomic = True
+            break
+    if has_atomic:
+        return (('skel3b',
+                 function_treeC.tree_to_skel(tree.root),
+                 tree.tree_get_description()),
+                dict(tree.name_values) if tree.name_values else {},
+                float(post))
     return (tree.root.function.expr,
             dict(tree.name_values) if tree.name_values else {},
             float(post))
 
 
-cdef function_treeC.Tree _tree_from_wire(object expr, dict name_values,
-                                         object domain, list funcs,
-                                         object sigma, double g_tau):
+cpdef function_treeC.Tree _tree_from_wire(object expr, dict name_values,
+                                          object domain, list funcs,
+                                          object sigma, double g_tau,
+                                          object atom_specs=None):
     cdef function_treeC.Tree tree
     cdef function_treeC.Node param
+    cdef function_treeC.Node root
     cdef str desc
+    cdef bint is_skel = (isinstance(expr, tuple) and len(expr) == 3
+                         and expr[0] == 'skel3b')
+    if is_skel:
+        # Stage 3b skeleton payload: exact-shape rebuild, opaque leaves
+        # reconstructed as units from their templates. `atom_specs` maps
+        # atom_symbol -> AtomSpec; a missing template (or any rebuild
+        # error) is a REJECT (None), the same convention as below.
+        try:
+            root = function_treeC.node_from_skel(
+                expr[1], np.ascontiguousarray(domain, dtype=np.float64),
+                <dict> atom_specs if atom_specs is not None else None)
+            tree = function_treeC.Tree(0, list(funcs), domain, node=root)
+        except Exception:
+            return None
+        if name_values:
+            # Plain params AND opaque theta — same installer as the BIC
+            # cache hits.
+            _install_cached_theta(tree, name_values)
+        tree.set_sigma(sigma)
+        tree.set_g_tau(g_tau)
+        tree.tree_update(tree.get_root())
+        if tree.tree_get_description() != <str> expr[2]:
+            return None
+        return tree
     try:
         tree = function_treeC._expr_to_tree(expr, domain, funcs)
     except Exception:
@@ -2220,7 +2267,8 @@ cdef class Forest:
                  object polya=None,
                  double alpha_0=1.0,
                  bint adapt_moves=False,
-                 list atoms=None):
+                 list atoms=None,
+                 bint freeze_vocab=False):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
@@ -2238,13 +2286,35 @@ cdef class Forest:
         # build_tree / crossover may emit (a0.., b0..), else extract_path
         # silently drops those leaves from the prior.
         if polya is None:
-            polya = polya_treeC.PolyaTree(
-                operations, list(funcs), alpha_0=alpha_0,
-                auto_register=True, strict_ops=True)
-            cap = Npars if Npars > 0 else 8
-            param_names = [f"a{k}" for k in range(cap)] + \
-                          [f"b{k}" for k in range(cap)]
-            polya.add_primitives(param_names)
+            if freeze_vocab:
+                # Phase 2.10 Stage 3c — the FULL vocabulary freeze (settles
+                # Phase 2.3 / DESIGN §9 item 4). The vocabulary is CLOSED
+                # at construction: operations + function leaves + the ONE
+                # canonical psi_const parameter cell (unify_params —
+                # parameter NAMES are bound labels whose indices new_par
+                # ratchets without bound, so no finite name pool covers
+                # them) + the atom templates registered below. Nothing
+                # unknown can then appear during sampling, so auto_register
+                # is OFF: any out-of-vocabulary symbol raises the guarded
+                # KeyError instead of silently growing the prior. The prior
+                # is one fixed measure from t = 0, and MPI path indices are
+                # replica-stable by construction. (DP mode composes via a
+                # caller-supplied polya built with remainder_mass > 0 and
+                # unify_params=True.)
+                polya = polya_treeC.PolyaTree(
+                    operations, list(funcs), alpha_0=alpha_0,
+                    auto_register=False, strict_ops=True,
+                    remainder_mass=0.0, unify_params=True)
+            else:
+                # Legacy (default): per-name parameter cells + mid-run
+                # auto-registration — bit-identical historical behaviour.
+                polya = polya_treeC.PolyaTree(
+                    operations, list(funcs), alpha_0=alpha_0,
+                    auto_register=True, strict_ops=True)
+                cap = Npars if Npars > 0 else 8
+                param_names = [f"a{k}" for k in range(cap)] + \
+                              [f"b{k}" for k in range(cap)]
+                polya.add_primitives(param_names)
         self.polya = polya
         # --- Phase 2.10 Stage 3a: opaque-primitive templates ----------------
         # Register each atom's canonical SYMBOL in the shared Polya HERE,
@@ -2513,15 +2583,20 @@ cdef class Forest:
             every worker replays it identically -> all Theta replicas stay
             bit-identical. Within-round priors use the last-synced Theta
             (delayed adaptation: gamma_t -> 0 and containment still hold).
-            The master's vocabulary is frozen up-front (parameter names
-            pre-registered) so ('kind', idx) tuples mean the same thing on
-            every replica.
+            The master's vocabulary is stabilized up-front so ('kind', idx)
+            tuples mean the same thing on every replica: under the Stage 3c
+            freeze (Forest(freeze_vocab=True)) it is CLOSED by construction
+            (psi_const cell, auto_register off); in legacy mode a generous
+            parameter-name pool is pre-registered (best-effort).
           * Exchange + crossover are computed ON THE MASTER with the synced
             Theta and the master RNG, using exactly the serial acceptance
             forms (_attempt_swap_pair / _attempt_crossover_pair math).
-            Trees cross the wire as (sympy expr, name_values, post) — the
-            burn-in spawn format — and any rebuild-fidelity failure turns
-            the exchange into a REJECT (self-loop; target-preserving).
+            Trees cross the wire as (payload, name_values, post): payload
+            is the raw sympy expr for atom-free trees (the burn-in spawn
+            format) or a ('skel3b', skeleton, description) structural
+            payload for atom-bearing trees (Phase 2.10 Stage 3b). Any
+            rebuild-fidelity failure turns the exchange into a REJECT
+            (self-loop; target-preserving).
           * Control flow is bcast-driven (every worker sees every command;
             only the addressed rank acts on point-to-point pieces), so no
             interleaving can deadlock.
@@ -2533,30 +2608,29 @@ cdef class Forest:
         cdef int G = len(self.groves)
         if G < 2:
             raise ValueError("run_mpi_spawn needs >= 2 temperature rungs")
-        # Phase 2.10 Stage 3a guard: the tree wire format ships raw sympy
-        # expressions and rebuilds them through _expr_to_tree, which would
-        # DECOMPOSE an opaque atomic leaf (a0*sin(a1*x) is a sympy Mul)
-        # into an ordinary subtree — silently breaking atomicity, the
-        # Polya vocabulary mapping, and the round-trip fidelity check.
-        # Stage 3b extends the wire with atom symbols; until then opaque
-        # primitives are single-process only.
+        # Phase 2.10 Stage 3b: opaque primitives cross the wire as
+        # ('skel3b', ...) payloads (see _tree_to_wire). The master-side
+        # rebuilds below need the template registry; workers receive the
+        # same atoms through the startup config and build their own.
+        cdef dict atom_specs = None
         if self.atoms:
-            raise NotImplementedError(
-                "run_mpi_spawn does not yet support opaque atomic "
-                "primitives (Phase 2.10 Stage 3b: the tree wire format "
-                "must carry atom symbols). Run single-process "
-                "(run_all/attempt_swaps/attempt_crossovers) instead.")
+            atom_specs = {}
+            for _spec_obj in self.atoms:
+                atom_specs[_spec_obj.name] = _spec_obj
         cdef Grove g0 = self.groves[0]
 
         # --- Freeze the Polya vocabulary so path indices are stable ------
-        # Pre-register a generous fixed parameter-name pool BEFORE the state
-        # snapshot. Workers then never auto-register mid-round, so the
-        # ('kind', idx) mapping is identical on every replica for the whole
-        # run (Phase 1.5 growth-invariance makes the pre-registration
-        # well-defined).
+        # LEGACY (per-name) vocabularies: pre-register a generous fixed
+        # parameter-name pool BEFORE the state snapshot, so workers rarely
+        # auto-register mid-round and the ('kind', idx) mapping stays
+        # replica-stable (best-effort: new_par can in principle exceed any
+        # fixed pool). Phase 2.10 Stage 3c: under unify_params the
+        # vocabulary is CLOSED (psi_const covers every parameter leaf), the
+        # mapping is exactly stable with no pool at all — and registering
+        # names would only shift the symmetric prior — so skip.
         cdef list param_pool = [f"a{k}" for k in range(32)] + \
                                [f"b{k}" for k in range(32)]
-        if self.polya is not None:
+        if self.polya is not None and not self.polya.unify_params:
             self.polya.add_primitives(param_pool)
 
         # --- Per-worker seeds (reproducible from `seed`) ------------------
@@ -2600,6 +2674,12 @@ cdef class Forest:
             'init_trees': init_trees,
             'max_tree_depth': max_tree_depth,
             'subtree_rebuild_max_height': subtree_rebuild_max_height,
+            # Phase 2.10 Stage 3b: ship the templates (AtomSpec is
+            # picklable via __reduce__). Workers pass them to their Grove
+            # (kernel moves) and to every wire rebuild. The atom SYMBOLS
+            # are already registered in polya_state's vocabulary, so the
+            # ('kind', idx) path mapping is identical on every replica.
+            'atoms': self.atoms,
         }
         intercomm.bcast(config, root=MPI.ROOT)
 
@@ -2662,9 +2742,11 @@ cdef class Forest:
                         wireA = all_wires[gsel][i]
                         wireB = all_wires[gsel + 1][i]
                         treeA = _tree_from_wire(wireA[0], wireA[1],
-                                                domain, funcs, sigma, g_tau)
+                                                domain, funcs, sigma, g_tau,
+                                                atom_specs)
                         treeB = _tree_from_wire(wireB[0], wireB[1],
-                                                domain, funcs, sigma, g_tau)
+                                                domain, funcs, sigma, g_tau,
+                                                atom_specs)
                         if treeA is not None and treeB is not None:
                             priorA_old = 0.0
                             priorB_old = 0.0
@@ -2695,9 +2777,11 @@ cdef class Forest:
                         wireA = all_wires[gsel][i]
                         wireB = all_wires[gsel + 1][j]
                         treeA = _tree_from_wire(wireA[0], wireA[1],
-                                                domain, funcs, sigma, g_tau)
+                                                domain, funcs, sigma, g_tau,
+                                                atom_specs)
                         treeB = _tree_from_wire(wireB[0], wireB[1],
-                                                domain, funcs, sigma, g_tau)
+                                                domain, funcs, sigma, g_tau,
+                                                atom_specs)
                         if treeA is not None and treeB is not None:
                             priorA_old = 0.0
                             priorB_old = 0.0
@@ -2752,10 +2836,12 @@ cdef class Forest:
                                         wireB = _tree_to_wire(treeB, postB_new)
                                         if (_tree_from_wire(wireA[0], wireA[1],
                                                             domain, funcs, sigma,
-                                                            g_tau) is None or
+                                                            g_tau, atom_specs)
+                                                is None or
                                             _tree_from_wire(wireB[0], wireB[1],
                                                             domain, funcs, sigma,
-                                                            g_tau) is None):
+                                                            g_tau, atom_specs)
+                                                is None):
                                             print("[run_mpi_spawn] crossover "
                                                   "child failed wire round-trip; "
                                                   "skipping exchange (round %d)"
@@ -2781,7 +2867,8 @@ cdef class Forest:
                 wires = final_states[gidx]
                 for s in range(min(gr.size, len(wires))):
                     t = _tree_from_wire(wires[s][0], wires[s][1],
-                                        domain, funcs, sigma, g_tau)
+                                        domain, funcs, sigma, g_tau,
+                                        atom_specs)
                     if t is not None:
                         gr.trees[s] = t
                         gr.root_posteriors[s] = wires[s][2]
