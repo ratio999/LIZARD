@@ -333,10 +333,15 @@ cdef function_treeC.Node _make_atom_leaf(object spec_obj, object domain,
     Draws k_psi fresh parameter names via new_par (`name_pool` is extended
     IN PLACE so sibling draws stay collision-free — pass the tree's FULL
     name pool, i.e. list(tree.name_values.keys()), which includes opaque
-    internal names) and a warm-start theta ~ g = N(0, tau^2) per coordinate.
-    Phase 2.13(a) discipline: the theta draws are optimizer warm-start
-    randomness ONLY and contribute no density terms to any proposal (they
-    integrate to 1 in q_struct); the structural choice OF the template is
+    internal names) and a warm-start theta ~ theta0 + N(0, tau^2) per
+    coordinate: centred at the template's UNIT REFERENCE (theta0 == 1.0),
+    not at zero — internal parameters are typically scale/frequency-like,
+    and a zero-centred start regularly drops Powell into a degenerate
+    basin (e.g. frequency ~ 0 makes the leaf flat and unfixable), which
+    the description-keyed BIC cache would then freeze for the whole run.
+    Phase 2.13(a) discipline: the warm-start law is ANY fixed density
+    (DESIGN §5) — it contributes no terms to any proposal density (it
+    integrates to 1 in q_struct); the structural choice OF the template is
     what the M + 1 + A cardinalities charge."""
     cdef real_functionC.AtomSpec spec = <real_functionC.AtomSpec> spec_obj
     cdef list fresh = []
@@ -350,8 +355,10 @@ cdef function_treeC.Node _make_atom_leaf(object spec_obj, object domain,
         spec, domain, fresh)
     cdef function_treeC.Node leaf = function_treeC.Node(rf)
     cdef dict th = {}
+    cdef double ref
     for nm in fresh:
-        th[nm] = _sample_g(g_tau)
+        ref = <double> rf.theta0[nm] if rf.theta0 is not None else 1.0
+        th[nm] = ref + _sample_g(g_tau)
     leaf.theta = th
     return leaf
 
@@ -2322,6 +2329,32 @@ cdef class AMState:
     cpdef void update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs):
         self._update(theta_after, accepted, alpha_obs)
 
+cpdef list pr_coord_names(function_treeC.Tree tree):
+    """Phase 2.10 Stage 3a: the refresh-coordinate names for `tree` —
+    EXACTLY the vector _parameter_refresh below will operate on. Callers
+    that construct an AMState (groveC._step_parameter_refresh) MUST build
+    it from this list, or the am_state.K dimension check inside
+    parameter_refresh turns PR into a permanent no-op for that topology.
+
+    Atom-free trees keep the HISTORICAL list — one entry per plain
+    parameter Node, duplicates included (bit-compatible with every
+    pre-2.10 AMState); trees carrying opaque atomic leaves use
+    name_values' keys (plain parameters first, then the theta_psi
+    internal names, in canonical tree order — DESIGN §5's 'theta_psi are
+    ordinary coordinates').
+
+    Cross-module callers: POSITIONAL ARGS ONLY (cpdef + cimport)."""
+    cdef bint has_atomic = False
+    cdef function_treeC.Node lf
+    for lf in tree.leaves:
+        if lf.is_atomic():
+            has_atomic = True
+            break
+    if not has_atomic:
+        return [p.get_fun().get_description() for p in tree.params]
+    return list(tree.name_values.keys())
+
+
 cdef tuple _parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
                               double sigma,
@@ -2348,11 +2381,11 @@ cdef tuple _parameter_refresh(function_treeC.Tree tree,
     # coordinate vector is name_values (plain parameters first, then the
     # opaque internal names — the canonical tree order); for atom-free
     # trees the historical tree.params path is kept bit-identical.
-    # NOTE (Stage 3 wiring): the Grove currently builds AMState from
-    # tree.params descriptions only, so on an opaque tree am_state.K
-    # mismatches K below and PR returns (False, 0, 0) — a safe no-op that
-    # preserves detailed balance until groveC constructs AMState from
-    # list(tree.name_values.keys()).
+    # The coordinate lists below MUST agree with pr_coord_names(tree)
+    # (defined above) — that helper is what groveC builds the AMState
+    # from (Stage 3a wiring). If am_state was built any other way the
+    # K checks return (False, 0, 0): a safe, detailed-balance-preserving
+    # no-op.
     cdef bint has_atomic = False
     cdef function_treeC.Node lf
     for lf in tree.leaves:

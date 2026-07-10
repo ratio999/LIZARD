@@ -638,13 +638,41 @@ bit-identical legacy), force-rejects where a reverse move can't rebuild an
 atom (subtree_mutation always; death moves when A=0), crossover renames
 opaque internals, parameter_refresh treats θ_ψ as ordinary coordinates
 (gp_movesC). Stage-2 tests (h)-(n) in test_phase210.py.
-STAGE 3 (grove/MPI plumbing) PENDING: vocabulary freeze at construction
-(pre-register param pool + user primitives with G_Ψ masses; auto_register →
-guarded error), pass `atoms` uniformly to ALL kernel moves, build AMState
-from list(tree.name_values.keys()) (until then PR safely no-ops on opaque
-trees), generalize the BIC-cache theta install + tree wire format
-(_expr_to_tree would DECOMPOSE an opaque leaf — wire must carry atom
-symbols), end-to-end Ψ₂ recovery test.
+STAGE 3a (single-process grove wiring) ✅ IMPLEMENTED + COMPILED + TESTED
+2026-07-10: Forest/Grove gain `atoms=` (list of AtomSpec); Forest
+pre-registers each template symbol in the shared Pólya at construction
+(one cell, registration-invariant; pass a pre-registered `polya=` to
+control per-atom G_Ψ masses in DP mode); Grove._propose threads `atoms`
+into ALL atom-aware moves (point, both hoists, add_node, split, ETR —
+the ONLY place atoms enter the kernel); AMState is built from
+gp_movesC.pr_coord_names(tree) (single source of truth with
+parameter_refresh — PR now refreshes θ_ψ); BIC cache hits install opaque
+θ̂ via _install_cached_theta (was plain-params-only: installed tree and
+cached score could disagree); optimize gate in _step switched
+param_values→name_values (atomic-only trees now optimized); atom-birth
+warm start re-centred at the template reference θ₀=1 (zero-centred draws
+regularly dropped Powell into a degenerate frequency basin that the
+description-keyed cache then froze); run_mpi_spawn raises
+NotImplementedError when atoms are set (wire format is Stage 3b).
+End-to-end test 2.10(o): single-rung Forest with Asin template + safe-4
+ops (frequency unreachable by composition) recovers 2.3·sin(1.3x) to
+mse ~5e-28. Full suite green on the final build (210 a–o, 23, 29).
+DEFERRED from item 4 (documented decision): the FULL vocabulary freeze
+(auto_register=False) is NOT flipped — the a/b parameter-name pool cap
+(Npars or 8) does not cover the names new_par can legally mint under the
+depth cap (up to a255), so auto_register is load-bearing; and in legacy
+mode pre-registering a 512-name pool would shift every -log(n_total)
+unvisited default. Atom symbols never rely on auto_register (frozen at
+construction, the actual 2.10 requirement); the parameter-pool freeze is
+Phase 2.3 residue to revisit with DP-mode defaults.
+STAGE 3b (MPI wire format) PENDING: _tree_to_wire/_tree_from_wire ship
+raw sympy exprs rebuilt via _expr_to_tree, which would DECOMPOSE an
+opaque leaf (a0*sin(a1*x) is a sympy Mul) — the wire must carry
+(atom_symbol, internal names) per opaque leaf or use a sympy Function
+placeholder _expr_to_tree treats atomically; then an MPI-replica
+round-trip test and lifting the run_mpi_spawn guard. Also: burn-in
+enumeration stays atom-free by design (moves introduce atoms); revisit
+if burn-in should seed atom-bearing depth-1 trees.
 PRIOR-MASS QUESTION RESOLVED (2026-07-09): see DESIGN_2_10_PRIMITIVES.md —
 DP(c, G₀) formalization; registration = partition refinement carving mass
 from a remainder cell (replaces the append-α₀ scheme, which is NOT

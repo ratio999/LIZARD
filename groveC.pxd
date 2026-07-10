@@ -5,6 +5,11 @@ cimport polya_treeC
 
 cdef class Grove:
     cdef list operations
+    # Phase 2.10 Stage 3a: opaque-primitive templates (list of
+    # real_functionC.AtomSpec, or None). Passed UNIFORMLY to every
+    # atom-aware kernel move in _propose — mixed wiring would break the
+    # birth/death density pairing exactly like an operations mismatch.
+    cdef public list atoms
     cdef object data
     cdef public int size
     cdef int depth
@@ -142,6 +147,10 @@ cdef class Forest:
     cdef public object temperatures
     cdef int n_procs
     cdef bint use_mpi
+    # Phase 2.10 Stage 3a: shared opaque-primitive templates, forwarded to
+    # every Grove; their symbols are pre-registered in the shared Polya at
+    # construction (registration invariance, THEORY 5.3).
+    cdef public list atoms
     cdef public polya_treeC.PolyaTree polya
     cdef object _py_rng
     cdef object _np_rng

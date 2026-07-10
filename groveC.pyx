@@ -43,6 +43,36 @@ cdef inline double _accept_prob(double dlogpost, double T) nogil:
         return 1.0 if dlogpost >= 0.0 else 0.0
     return fmax(0.0, 1.0 if dlogpost >= 0.0 else _safe_exp(dlogpost / T))
 
+cdef bint _install_cached_theta(function_treeC.Tree cand, dict cached_nv):
+    """Phase 2.7(f) cache hit: install the cached theta_hat into `cand`.
+
+    Plain parameter Nodes via set_value; opaque atomic leaves via their
+    Node.theta dicts (Phase 2.10 Stage 3a — before this, a cache hit
+    restored only the plain parameters, so an opaque leaf silently kept
+    its warm-start theta while the cache reported the optimized evidence:
+    the installed tree and its score disagreed).
+
+    Returns True iff `cand` carries ANY parameter-bearing leaf — the
+    caller's cue to tree_update (the historical `if cand.params:` gate,
+    extended to atomic leaves; atom-free behaviour is bit-identical)."""
+    cdef function_treeC.Node par_node
+    cdef function_treeC.Node leaf
+    cdef str pname
+    cdef bint has_any = False
+    for par_node in cand.params:
+        has_any = True
+        pname = par_node.get_fun().get_description()
+        if pname in cached_nv:
+            par_node.set_value(<double> cached_nv[pname])
+    for leaf in cand.leaves:
+        if leaf.is_atomic():
+            has_any = True
+            for pname in leaf.leaf_param_names():
+                if pname in cached_nv:
+                    leaf.theta[pname] = float(cached_nv[pname])
+    return has_any
+
+
 cdef class Grove:
     """
     A set of Trees evolving at a single temperature T (Metropolis-Hastings).
@@ -87,7 +117,8 @@ cdef class Grove:
                  double adapt_t0=100.0,
                  double adapt_floor=0.02,
                  double adapt_logit_bound=4.0,
-                 double adapt_target=0.5):
+                 double adapt_target=0.5,
+                 list atoms=None):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -97,6 +128,19 @@ cdef class Grove:
         if operations is None:
             operations = ["+", "-", "*", "/", "**", "o"]
         self.operations = operations
+        # Phase 2.10 Stage 3a: opaque-primitive templates. None/[] -> A = 0,
+        # every move density reduces to the bit-identical legacy form.
+        # Validated here so a mistyped entry fails at construction, not as
+        # a cast error deep inside a move.
+        if atoms:
+            for _a in atoms:
+                if not isinstance(_a, real_functionC.AtomSpec):
+                    raise TypeError(
+                        "Grove: atoms entries must be real_functionC."
+                        "AtomSpec instances, got %r" % type(_a))
+            self.atoms = list(atoms)
+        else:
+            self.atoms = None
         self.sigma = sigma if sigma is not None else 1.0
         # Phase 2.1.PM birth density g(theta) = N(0, g_tau^2).
         # Default to std(y) when caller doesn't pass one explicitly;
@@ -518,21 +562,32 @@ cdef class Grove:
             cand2 = None
             donor_idx = -1
             move_name, kwargs = self._choose_move()
+            # Phase 2.10 Stage 3a: self.atoms rides along on EVERY
+            # atom-aware move (point, the two hoists, add_node, split,
+            # ETR) — always positionally (cpdef across cimport). Passing it
+            # to a birth move but not its death partner (or vice versa)
+            # breaks the M+1+A density pairing, so this block is the ONLY
+            # place atoms enter the kernel. subtree_mutation and
+            # subtree_crossover take no atoms by design (function-only
+            # rebuild / pure relocation).
             if move_name == "point_mutation":
                 lqf, lqr = gp_movesC.point_mutation(
-                    cand, self.funcs, kwargs.get("operations", None))
+                    cand, self.funcs, kwargs.get("operations", None),
+                    None, self.atoms)
             elif move_name == "leaf_hoist":
                 lqf, lqr = gp_movesC.leaf_hoist(
-                    cand, self.funcs, self.operations)
+                    cand, self.funcs, self.operations, self.atoms)
             elif move_name == "internal_hoist":
                 lqf, lqr = gp_movesC.internal_hoist(
-                    cand, self.funcs, self.operations)
+                    cand, self.funcs, self.operations, self.atoms)
             elif move_name == "add_node":
                 lqf, lqr = gp_movesC.add_node(
-                    cand, self.funcs, kwargs.get("operations", None))
+                    cand, self.funcs, kwargs.get("operations", None),
+                    False, self.atoms)
             elif move_name == "split":
                 lqf, lqr = gp_movesC.split(
-                    cand, self.funcs, kwargs.get("operations", None))
+                    cand, self.funcs, kwargs.get("operations", None),
+                    self.atoms)
             elif move_name == "subtree_mutation":
                     #print(kwargs.get('random_depth', False))
                 # Phase 2.13(f): pass the kernel's op vocabulary so the
@@ -554,14 +609,17 @@ cdef class Grove:
                     lqf, lqr = gp_movesC.subtree_crossover(cand, cand2)
                 else:
                     lqf, lqr = gp_movesC.point_mutation(
-                        cand, self.funcs, self.operations)
+                        cand, self.funcs, self.operations,
+                        None, self.atoms)
                     move_name = "point_mutation"
             elif move_name == "etr_mutation":
                 lqf, lqr = gp_movesC.etr_mutation(
-                    cand, self.funcs, kwargs.get("operations", None))
+                    cand, self.funcs, kwargs.get("operations", None),
+                    self.atoms)
             else:
                 lqf, lqr = gp_movesC.point_mutation(
-                    cand, self.funcs, self.operations)
+                    cand, self.funcs, self.operations,
+                    None, self.atoms)
                 move_name = "point_mutation"
 
             if cand.is_valid(self.domain) and (
@@ -616,7 +674,15 @@ cdef class Grove:
             return False
         cdef int i = self._py_rng.randrange(self.size)
         cdef function_treeC.Tree tree = self.trees[i]
-        cdef int K = len(tree.params)
+        # Phase 2.10 Stage 3a: the coordinate names (and hence K) come from
+        # pr_coord_names — the SAME derivation parameter_refresh uses
+        # internally, so the AMState dimension can never desync from PR.
+        # For atom-free trees this is bit-identical to the historical
+        # [p.desc for p in tree.params] (duplicates included); for trees
+        # with opaque leaves it is name_values' keys, which makes theta_psi
+        # refreshable coordinates (DESIGN §5).
+        cdef list names = gp_movesC.pr_coord_names(tree)
+        cdef int K = len(names)
 
         # Counters: PR is always "proposed" (even no-op K=0 case).
         self.proposal_count += 1.0
@@ -636,9 +702,7 @@ cdef class Grove:
         # the same key Phase 2.7(f) BIC cache will use.
         cdef str key = tree.tree_get_description()
         cdef gp_movesC.AMState am
-        cdef list names
         if key not in self._am_states:
-            names = [p.get_fun().get_description() for p in tree.params]
             am = gp_movesC.AMState(names)
             self._am_states[key] = am
         else:
@@ -647,7 +711,6 @@ cdef class Grove:
                 # Defensive: same description string but K mismatch.
                 # Should not occur if tree_get_description is canonical;
                 # rebuild to keep PR safe.
-                names = [p.get_fun().get_description() for p in tree.params]
                 am = gp_movesC.AMState(names)
                 self._am_states[key] = am
 
@@ -756,12 +819,16 @@ cdef class Grove:
             y, self.lambda_reg))
         '''    
         cdef double new_post
-        cdef bint optim_need = len(cand.param_values) > 0
+        # Phase 2.10 Stage 3a: gate on name_values, not param_values — an
+        # opaque-leaf tree can carry continuous parameters (theta_psi in
+        # name_values) with ZERO plain parameter Nodes, and skipping the
+        # optimizer for it would score the warm-start theta as if it were
+        # the MLE. Atom-free trees: identical truthiness (every parameter
+        # Node contributes a name), so legacy behaviour is unchanged.
+        cdef bint optim_need = len(cand.name_values) > 0
         cdef str cand_key
         cdef object cached
         cdef dict cached_nv
-        cdef function_treeC.Node par_node
-        cdef str pname
         if not cand.is_valid(self.domain):
             self._adapt_move(move_name, False)
             return False
@@ -779,13 +846,12 @@ cdef class Grove:
             # Hit: reuse stored log_evidence and install cached theta_hat
             # so the candidate inherits the MLE on accept (warm-starts
             # subsequent moves and keeps name_values consistent).
+            # Stage 3a: _install_cached_theta also restores opaque-leaf
+            # theta (plain-only before), and preserves the historical
+            # tree_update gate.
             new_post  = <double> cached[0]
             cached_nv = <dict>   cached[1]
-            for par_node in cand.params:
-                pname = par_node.get_fun().get_description()
-                if pname in cached_nv:
-                    par_node.set_value(<double> cached_nv[pname])
-            if cand.params:
+            if _install_cached_theta(cand, cached_nv):
                 cand.tree_update(cand.get_root())
         else:
             new_post = cand._log_marginal_bic(
@@ -997,8 +1063,6 @@ cdef class Grove:
         cdef str cand_key
         cdef object cached
         cdef dict cached_nv
-        cdef function_treeC.Node par_node
-        cdef str pname
         cdef double new_post
         if not cand.is_valid(self.domain):
             return -1.0e300
@@ -1011,11 +1075,8 @@ cdef class Grove:
         if cached is not None:
             new_post  = <double> cached[0]
             cached_nv = <dict>   cached[1]
-            for par_node in cand.params:
-                pname = par_node.get_fun().get_description()
-                if pname in cached_nv:
-                    par_node.set_value(<double> cached_nv[pname])
-            if cand.params:
+            # Stage 3a: restores opaque-leaf theta too (see the helper).
+            if _install_cached_theta(cand, cached_nv):
                 cand.tree_update(cand.get_root())
             return new_post
         new_post = cand._log_marginal_bic(
@@ -2158,7 +2219,8 @@ cdef class Forest:
                  object g_tau=None,
                  object polya=None,
                  double alpha_0=1.0,
-                 bint adapt_moves=False):
+                 bint adapt_moves=False,
+                 list atoms=None):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
@@ -2184,6 +2246,34 @@ cdef class Forest:
                           [f"b{k}" for k in range(cap)]
             polya.add_primitives(param_names)
         self.polya = polya
+        # --- Phase 2.10 Stage 3a: opaque-primitive templates ----------------
+        # Register each atom's canonical SYMBOL in the shared Polya HERE,
+        # once, before any sampling — so the opaque cells exist from t = 0
+        # in every grove's view of the one shared prior and never enter via
+        # mid-run auto_register (registration invariance, THEORY_2_13.md
+        # §5.3; in DP mode this is the carve-from-remainder with polya's
+        # default mass — pass a pre-registered `polya=` to control the
+        # per-atom G_Psi mass). A caller-supplied polya that already
+        # registered the symbols is respected (add_primitive is idempotent
+        # on known symbols). NB: add_primitive is cpdef across a cimport
+        # boundary — the mass argument MUST stay positional.
+        if atoms:
+            # Untyped dispatch on purpose: groveC compiles under a different
+            # language_level than polya_treeC (which pins level 3), so a
+            # C-level call with a typed-str argument trips Cython's
+            # str/unicode coercion rule. A Python-level call is resolved at
+            # runtime and is identical in behaviour (this runs once, at
+            # construction).
+            _polya_any = self.polya
+            for _spec_obj in atoms:
+                if not isinstance(_spec_obj, real_functionC.AtomSpec):
+                    raise TypeError(
+                        "Forest: atoms entries must be real_functionC."
+                        "AtomSpec instances, got %r" % type(_spec_obj))
+                _polya_any.add_primitive(_spec_obj.name, None)
+            self.atoms = list(atoms)
+        else:
+            self.atoms = None
         # --- Forest-level RNGs ---------------------------------------------
         # Fixes the previously-missing _py_rng (the old swap referenced it and
         # would AttributeError) and drives the R3 random consecutive-pair
@@ -2206,7 +2296,8 @@ cdef class Forest:
                       burn_in=burn_in, use_mpi=n_procs,
                       polya=self.polya,
                       seed=int(child_seeds[g].generate_state(1)[0]),
-                      g_tau=g_tau, adapt_moves=adapt_moves)
+                      g_tau=g_tau, adapt_moves=adapt_moves,
+                      atoms=self.atoms)
             )
         # Phase 2.12 (MPI sampling): stash the Grove constructor arguments so
         # run_mpi_spawn can ship them to spawned workers, which rebuild
@@ -2442,6 +2533,19 @@ cdef class Forest:
         cdef int G = len(self.groves)
         if G < 2:
             raise ValueError("run_mpi_spawn needs >= 2 temperature rungs")
+        # Phase 2.10 Stage 3a guard: the tree wire format ships raw sympy
+        # expressions and rebuilds them through _expr_to_tree, which would
+        # DECOMPOSE an opaque atomic leaf (a0*sin(a1*x) is a sympy Mul)
+        # into an ordinary subtree — silently breaking atomicity, the
+        # Polya vocabulary mapping, and the round-trip fidelity check.
+        # Stage 3b extends the wire with atom symbols; until then opaque
+        # primitives are single-process only.
+        if self.atoms:
+            raise NotImplementedError(
+                "run_mpi_spawn does not yet support opaque atomic "
+                "primitives (Phase 2.10 Stage 3b: the tree wire format "
+                "must carry atom symbols). Run single-process "
+                "(run_all/attempt_swaps/attempt_crossovers) instead.")
         cdef Grove g0 = self.groves[0]
 
         # --- Freeze the Polya vocabulary so path indices are stable ------

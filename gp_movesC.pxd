@@ -116,6 +116,8 @@ cdef class AMState:
     cdef void _update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs)
     cpdef void update(self, cnp.ndarray theta_after, bint accepted, double alpha_obs)
     
+cpdef list pr_coord_names(function_treeC.Tree tree)
+
 cdef tuple _parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
                               double sigma,
