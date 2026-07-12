@@ -255,6 +255,63 @@ def test_mpi_atoms(n_rounds=6, n_steps=25, seed=5):
           % (n_atomic, best.tree_get_description(), mse))
 
 
+def test_mpi_burnin_atoms(seed=13):
+    """(f) Phase 2.10 (final): the SPAWN burn-in seeds opaque templates and
+    preserves them across all three wire crossings (depth-1 trees shipped
+    to workers, worker results gathered back, master-side rebuild) — each
+    uses the Stage 3b dual-payload wire for atom-bearing trees. The
+    rank-parallel (non-spawn) variant rebuilds candidates from description
+    strings and must refuse atoms loudly.
+    """
+    print("[2.10f] spawn burn-in with opaque primitives")
+    import real_functionC as rfc
+    from groveC import Grove
+
+    x = np.linspace(0.1, 6.0, 50).astype(np.float64)
+    y = (2.3 * np.sin(1.3 * x)).astype(np.float64)
+    spec = rfc.AtomSpec("Asin", "c0*sin(c1*x)")
+
+    # WORKLOAD-SIZE CONSTRAINT: the spawn master's progress-wait loop only
+    # exits after receiving at least one worker progress message, and
+    # workers send one every 50 processed items — so every spawn burn-in
+    # needs >= ~50 stage-2 combinations per worker chunk or the master
+    # waits forever (a latent edge never hit by real vocabularies; see
+    # PLAN §2.10). Three ops push the n_top^2 enumeration well past that
+    # while keeping the recovery argument intact: polynomials from {x} via
+    # {+,-,*} at depth <= 2 cannot fit a multi-period sinusoid, so a good
+    # fit is still reachable ONLY through the seeded atom.
+    grove = Grove(x, y, 1.0, 6, 1, ["x"], sigma=1.0,
+                  operations=["+", "-", "*"],
+                  use_gradients=False, burn_in=True, use_mpi=2,
+                  use_spawn=True, seed=seed, atoms=[spec])
+    assert grove.size > 0 and grove.trees, "spawn burn-in produced no trees"
+    best = grove.best_tree()
+    atomics = [lf for lf in best.get_leaves() if lf.is_atomic()]
+    assert len(atomics) >= 1, (
+        "spawn burn-in best tree %r carries no opaque leaf"
+        % best.tree_get_description())
+    resid = y - np.asarray(best.evaluate(), dtype=np.float64)
+    mse = float(np.nanmean(resid * resid))
+    assert mse < 1e-2, (
+        "spawn burn-in failed to fit through the atom (best %r, mse %.4f)"
+        % (best.tree_get_description(), mse))
+    n_atomic = sum(1 for t in grove.trees
+                   if any(lf.is_atomic() for lf in t.get_leaves()))
+    print("[2.10f] spawn PASS  (best: %s, mse %.2e, %d atomic trees)"
+          % (best.tree_get_description(), mse, n_atomic))
+
+    # rank-parallel variant refuses atoms (guarded, not silent decomposition)
+    raised = False
+    try:
+        Grove(x, y, 1.0, 4, 1, ["x"], sigma=1.0, operations=["+"],
+              use_gradients=False, burn_in=True, use_mpi=2,
+              use_spawn=False, seed=seed, atoms=[spec])
+    except NotImplementedError:
+        raised = True
+    assert raised, "_burn_in_stage2_parallel must refuse atoms"
+    print("[2.10f] PASS  (rank-parallel guard raised as required)")
+
+
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -264,4 +321,5 @@ if __name__ == "__main__":
     test_serial_reference()
     test_mpi_sampler()
     test_mpi_atoms()
+    test_mpi_burnin_atoms()
     print("\nAll Phase 2.12 (MPI sampling) tests passed.")

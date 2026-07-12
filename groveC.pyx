@@ -73,6 +73,57 @@ cdef bint _install_cached_theta(function_treeC.Tree cand, dict cached_nv):
     return has_any
 
 
+# Phase 2.10 (final item): burn-in seeding of atom-bearing depth-1 trees.
+# Opaque templates enter the burn-in enumeration as plain-string tokens
+# '@atom:<symbol>', so every itertools.product sweep, work-item tuple and
+# pickle path below stays untouched; _burn_in_primitive_node resolves the
+# tokens to leaves at construction time. '@' cannot appear in a function
+# string or parameter name, so tokens cannot collide.
+_ATOM_MARK = "@atom:"
+
+
+cpdef function_treeC.Node _burn_in_primitive_node(str prim_str, object domain,
+                                                  dict atom_specs,
+                                                  str prefix, int name_start):
+    """Build a fresh leaf Node for one burn-in primitive token.
+
+    'a0'             -> parameter leaf, value 1.0 (historical behaviour);
+    '@atom:<symbol>' -> opaque leaf instantiated from atom_specs[<symbol>]
+                        with internal names {prefix}{name_start},
+                        {prefix}{name_start+1}, ... and theta at the
+                        template's unit reference theta0 (the burn-in
+                        scorer refits theta anyway);
+    anything else    -> function leaf via from_string.
+
+    `prefix`/`name_start` give callers DISJOINT name bands so two opaque
+    leaves combined into one tree never share internal names (sharing
+    would couple their values through name_values): stage 1 keeps
+    candidates all-'a' (left band starts at 1 — 'a0' is the parameter
+    primitive — right band starts past the left atom's k) because
+    _combine_depth1 later renames right operands wholesale to 'b';
+    mpi_worker's combiner renames nothing, so its primitive operand uses
+    the 'c' band. Cross-module callers: POSITIONAL ARGS ONLY."""
+    cdef real_functionC.AtomSpec spec
+    cdef real_functionC.RealFunctionC rf
+    cdef list names
+    cdef int i
+    cdef function_treeC.Node node
+    if prim_str.startswith(_ATOM_MARK):
+        if atom_specs is None or prim_str[len(_ATOM_MARK):] not in atom_specs:
+            raise KeyError(
+                "burn-in primitive %r has no matching AtomSpec" % prim_str)
+        spec = <real_functionC.AtomSpec> atom_specs[prim_str[len(_ATOM_MARK):]]
+        names = ["%s%d" % (prefix, name_start + i) for i in range(spec.k)]
+        rf = real_functionC.instantiate_atom(spec, domain, names)
+        return function_treeC.Node(rf)  # Node auto-inits theta to theta0
+    node = function_treeC.Node(
+        function=real_functionC.RealFunctionC.from_string(
+            prim_str, domain, compute_grad=False))
+    if prim_str == "a0":
+        node.set_value(1.0)
+    return node
+
+
 cdef class Grove:
     """
     A set of Trees evolving at a single temperature T (Metropolis-Hastings).
@@ -1327,6 +1378,22 @@ cdef class Grove:
         # Now combine them
         self._burn_in_stage2(y, depth1_candidates, tree_cache, replace_all, optimize_params)
     
+    cdef tuple _burn_in_primitives(self):
+        """Phase 2.10 (final): the burn-in token list — funcs + the 'a0'
+        parameter primitive + one '@atom:<symbol>' token per registered
+        template — and the {symbol: AtomSpec} registry
+        _burn_in_primitive_node resolves them against (None when the Grove
+        has no atoms: the historical list, bit-identical)."""
+        cdef list prims = self.funcs.copy()
+        prims.append("a0")
+        cdef dict specs = None
+        if self.atoms:
+            specs = {}
+            for _sp in self.atoms:
+                specs[_sp.name] = _sp
+                prims.append(_ATOM_MARK + _sp.name)
+        return (prims, specs)
+
     cdef _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict tree_cache,
                                       bint optimize_params=True):
         """
@@ -1334,26 +1401,22 @@ cdef class Grove:
         Reuses logic from _burn_in_combinations but returns candidates instead of replacing.
         """
         cdef list candidates = []
-        cdef list all_primitives = self.funcs.copy()
-        all_primitives.append("a0")
+        cdef list all_primitives
+        cdef dict atom_specs
+        all_primitives, atom_specs = self._burn_in_primitives()
         cdef str left_str, right_str, op, primitive_expression
         cdef function_treeC.Tree tree, primitive_tree, cand
         cdef function_treeC.Node root_node
         cdef double post
         print(f"Stage 1: building {len(all_primitives)**2 * len(self.operations)} depth-1 trees")
         # Initialize candidates with primitive functions (depth-0 trees)
+        # Phase 2.10 (final): construction goes through the token resolver —
+        # identical to the old inline branches for 'a0'/functions, and it
+        # also resolves '@atom:<symbol>' tokens to opaque leaves (names
+        # a1..ak; 'a0' is the parameter primitive).
         for func_str in all_primitives:
-            if func_str == "a0":
-            
-                root_node= function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
-                    )
-                root_node.set_value(1.0)
-            
-            else:
-                root_node = function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string(func_str, self.domain, compute_grad = False),
-                    )
+            root_node = _burn_in_primitive_node(func_str, self.domain,
+                                                atom_specs, 'a', 1)
             primitive_tree = function_treeC.Tree(
                 depth=root_node.node_depth, functions=self.funcs, x=self.domain, node=root_node,
                 Npars=len(root_node.function.params), value=1.0, T=self.T,
@@ -1375,31 +1438,28 @@ cdef class Grove:
                     candidates.append((primitive_tree, post, 0))  # depth 0
                 
         cdef function_treeC.Node root_left, root_right, root_tree
+        cdef int right_start
         for left_str, right_str in itertools.product(all_primitives, repeat=2):
             if left_str=='a0' and right_str=='a0':
                 continue
             for op in self.operations:
-                
-                if left_str == "a0":
-                    root_left = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
-                    )
-                    root_left.set_value(1.0)
-                else:
-                    root_left = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(left_str, self.domain, compute_grad = False),
-                    )
-                
-                # Build right child
-                if right_str == "a0":
-                    root_right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string("a0", self.domain, compute_grad = False),
-                    )
-                    root_right.set_value(1.0)
-                else:
-                    root_right = function_treeC.Node(
-                        function=real_functionC.RealFunctionC.from_string(right_str, self.domain, compute_grad = False),
-                    )
+
+                # Phase 2.10 (final): both leaves via the token resolver.
+                # The right leaf's name band starts past a left atom's k so
+                # two opaque leaves in one pair never share internal names
+                # (sharing would couple their values through name_values);
+                # both bands stay in the 'a' namespace, preserving the
+                # stage-2 invariant that depth-1 candidates are all-'a'
+                # (_combine_depth1 renames right operands to 'b').
+                root_left = _burn_in_primitive_node(left_str, self.domain,
+                                                    atom_specs, 'a', 1)
+                right_start = 1
+                if left_str.startswith(_ATOM_MARK):
+                    right_start = 1 + (<real_functionC.AtomSpec>
+                        atom_specs[left_str[len(_ATOM_MARK):]]).k
+                root_right = _burn_in_primitive_node(right_str, self.domain,
+                                                     atom_specs, 'a',
+                                                     right_start)
                 #print(op, root_left.function.get_description(), root_right.function.get_description())
                 root_tree = function_treeC.Node(
                     function=None,
@@ -1459,8 +1519,9 @@ cdef class Grove:
         Combine top depth-1 trees with primitives and with each other to build depth-2 trees.
         """
         cdef list candidates = []
-        cdef list all_primitives = self.funcs.copy()
-        all_primitives.append("a0")
+        cdef list all_primitives
+        cdef dict atom_specs
+        all_primitives, atom_specs = self._burn_in_primitives()
         # Filter for only depth-1 candidates (third element == 1)
         
         depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
@@ -1490,10 +1551,13 @@ cdef class Grove:
         
         for i in range(n_top):
             for prim_str in all_primitives:
-                prim_node = function_treeC.Node(function=real_functionC.RealFunctionC.from_string(prim_str, self.domain, compute_grad = False))
+                # Phase 2.10 (final): token resolver ('a' band — the
+                # combiner renames whichever side is the right operand).
+                prim_node = _burn_in_primitive_node(prim_str, self.domain,
+                                                    atom_specs, 'a', 1)
                 for op in self.operations:
                     # left = depth-1, right = primitive
-                    d1_tree = depth1_candidates[i][0] 
+                    d1_tree = depth1_candidates[i][0]
                     tree = self._combine_depth1(d1_tree.root, prim_node, op)
                     expression = tree.tree_get_description()
                     
@@ -1644,6 +1708,19 @@ cdef class Grove:
         """
         MPI-parallel version of _burn_in_stage2.
         """
+        # Phase 2.10 (final): this rank-parallel variant reassembles its
+        # candidates from DESCRIPTION STRINGS (from_string + _expr_to_tree
+        # below), which cannot preserve opaque atomic leaves — an
+        # instantiated atom description is indistinguishable from an
+        # ordinary subexpression. Guard loudly instead of decomposing
+        # silently; the serial (use_mpi=0) and spawn (use_spawn=True)
+        # burn-ins both support atoms.
+        if self.atoms:
+            raise NotImplementedError(
+                "_burn_in_stage2_parallel rebuilds candidates from "
+                "description strings and cannot carry opaque atomic "
+                "primitives; run the burn-in serially (use_mpi=0) or with "
+                "use_spawn=True.")
         cdef object comm = MPI.COMM_WORLD
         cdef rank = int(comm.Get_rank())
         cdef n_procs = int(comm.Get_size())
@@ -1821,15 +1898,20 @@ cdef class Grove:
         # PREPARE DATA
         # =========================================================
         cdef list depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
-        cdef list all_primitives = self.funcs.copy()
-        all_primitives.append("a0")
+        cdef list all_primitives
+        cdef dict atom_specs
+        all_primitives, atom_specs = self._burn_in_primitives()
         cdef int n_top = len(depth1_candidates)
-        
+
         if n_top == 0:
             print("No depth-1 candidates to combine")
             return
-        
-        # Serialize depth-1 trees for workers
+
+        # Serialize depth-1 trees for workers.
+        # Phase 2.10 (final): through the Stage 3b dual-payload wire — for
+        # atom-free trees _tree_to_wire ships exactly the historical
+        # (root expr, name_values, post) tuple; atom-bearing trees ship the
+        # ('skel3b', skeleton, description) payload a raw expr cannot carry.
         cdef list  depth1_data = []
         cdef function_treeC.Tree tree
         cdef object post
@@ -1837,14 +1919,14 @@ cdef class Grove:
         cdef object expr
         cdef int sum_of_misses = 0
         cdef dict names_params
+        cdef str d1_desc
         for tree, post, depth in depth1_candidates:
 
-            expr = tree.root.function.expr
-            names_params = tree.name_values if tree.name_values else {}
-            depth1_data.append((expr, names_params, post))
-            if str(expr) not in tree_cache:
-                print(f"Adding to cache: {expr} with post {post}. Bug in line 917 if this is missing.")
-                tree_cache[str(expr)] = post
+            depth1_data.append(_tree_to_wire(tree, <double> post))
+            d1_desc = tree.tree_get_description()
+            if d1_desc not in tree_cache:
+                print(f"Adding to cache: {d1_desc} with post {post}. Bug in line 917 if this is missing.")
+                tree_cache[d1_desc] = post
         # Build ALL work items
         cdef list work_items = []
         cdef str prim_str, op
@@ -1891,7 +1973,11 @@ cdef class Grove:
             'depth1_data': depth1_data,
             'all_primitives': all_primitives,
             'T': self.T,
-            'tree_cache': tree_cache
+            'tree_cache': tree_cache,
+            # Phase 2.10 (final): templates for the workers — resolves the
+            # '@atom:' tokens in all_primitives and rebuilds 'skel3b'
+            # payloads in depth1_data (AtomSpec pickles via __reduce__).
+            'atoms': self.atoms,
         }
         
         intercomm.bcast(config, root=MPI.ROOT)
@@ -1932,13 +2018,13 @@ cdef class Grove:
             
             itm_type = itm[0]
             if itm_type == 'd1_prim':
-                
+
                 _, i, prim_str, op = itm
-                prim_node = function_treeC.Node(
-                    function = real_functionC.RealFunctionC.from_string(
-                        prim_str, self.domain, compute_grad=False
-                    ))
-                
+                # Phase 2.10 (final): token resolver ('a' band; the
+                # combiner renames right operands to 'b').
+                prim_node = _burn_in_primitive_node(prim_str, self.domain,
+                                                    atom_specs, 'a', 1)
+
                 d1_tree = depth1_candidates[i][0]
                 if d1_tree is None:
                     continue
@@ -2043,8 +2129,30 @@ cdef class Grove:
         #cdef bint ok
         cdef object pbar1=tqdm(total=len(all_return_list), desc="Growing Grove", unit=" trees", 
                 dynamic_ncols=True)
+        cdef str skel_desc
         for worker_results in all_return_list:
             for expr, names_params, post in worker_results:
+                # Phase 2.10 (final): atom-bearing worker results arrive as
+                # ('skel3b', skeleton, description) payloads — rebuild them
+                # through the Stage 3b wire (fidelity-checked inside; a
+                # failed rebuild is simply dropped, mirroring the legacy
+                # mismatch `continue` below).
+                if (isinstance(expr, tuple) and len(expr) == 3
+                        and expr[0] == 'skel3b'):
+                    tree = _tree_from_wire(expr, names_params, self.domain,
+                                           self.funcs, self.sigma,
+                                           self.g_tau, atom_specs)
+                    if tree is None:
+                        print('Warning: skeleton wire rebuild failed; '
+                              'dropping candidate')
+                        continue
+                    skel_desc = tree.tree_get_description()
+                    if skel_desc not in tree_cache:
+                        candidates.append((tree, post))
+                        tree_cache[skel_desc] = post
+                        pbar1.update(1)
+                        pbar1.refresh()
+                    continue
                 # Rebuild tree from expression
                 #print(jj, ' expr is: ', str(expr))
                 tree = function_treeC._expr_to_tree(expr, self.domain, self.funcs)

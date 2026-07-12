@@ -70,13 +70,22 @@ cdef void _worker_main():
     cdef list all_primitives = config['all_primitives']
     cdef double T = config['T']
     cdef dict local_cache = config['tree_cache']
-    
+    # Phase 2.10 (final): opaque templates — resolve '@atom:' tokens in
+    # all_primitives and rebuild 'skel3b' depth-1 payloads. None/absent for
+    # atom-free burn-ins (legacy configs included).
+    cdef list atoms = config.get('atoms')
+    cdef dict atom_specs = None
+    if atoms:
+        atom_specs = {}
+        for _spec_obj in atoms:
+            atom_specs[_spec_obj.name] = _spec_obj
+
     # =========================================================
     # RECEIVE MY WORK ITEMS
     # =========================================================
     # Parent scatters work items to each worker
     cdef object my_work = parent_comm.scatter(None, root=0)
-    
+
     # =========================================================
     # REBUILD DEPTH-1 TREES FROM SERIALIZED DATA
     # =========================================================
@@ -87,9 +96,23 @@ cdef void _worker_main():
     cdef object post
     cdef function_treeC.Tree tree, d1_tree, d1_tree_2
 
-    for expr, names_params, post in depth1_data:    
+    for expr, names_params, post in depth1_data:
         #print(i, expr, names_params)
-        tree = _helper(expr, domain, funcs, names_params)    
+        # Phase 2.10 (final): atom-bearing depth-1 trees arrive as
+        # ('skel3b', skeleton, description) payloads — rebuild through the
+        # Stage 3b wire (sigma/g_tau 1.0/1.0: the same Tree defaults the
+        # legacy _helper path produces). A failed rebuild leaves None in
+        # the slot, which the work loop below already skips.
+        if isinstance(expr, tuple) and len(expr) == 3 and expr[0] == 'skel3b':
+            tree = groveC._tree_from_wire(expr, names_params, domain, funcs,
+                                          1.0, 1.0, atom_specs)
+            depth1_trees.append((tree, post))
+            if tree is None:
+                print(f'[Worker {rank}] Warning: skeleton depth-1 rebuild failed for {expr[2]!r}.')
+            elif tree.tree_get_description() not in local_cache:
+                local_cache[tree.tree_get_description()] = post
+            continue
+        tree = _helper(expr, domain, funcs, names_params)
         depth1_trees.append((tree, post))
         if tree.tree_get_description() not in local_cache:
             print(f'[Worker {rank}] Cache miss for depth-1 tree: {tree.tree_get_description()}')
@@ -121,12 +144,14 @@ cdef void _worker_main():
             
             if item_type == 'd1_prim':
                 _, i, prim_str, op = item
-                
-                # Create primitive node
-                prim_node = function_treeC.Node(
-                    function=real_functionC.RealFunctionC.from_string(
-                        prim_str, domain, compute_grad=False))
-                
+
+                # Create primitive node. Phase 2.10 (final): via the token
+                # resolver; the 'c' name band because _combine_nodes below
+                # renames nothing by default, and 'c' collides with neither
+                # the all-'a' depth-1 names nor the 'b' rename buffer.
+                prim_node = groveC._burn_in_primitive_node(
+                    prim_str, domain, atom_specs, 'c', 1)
+
                 d1_tree = depth1_trees[i][0]
                 if d1_tree is None:
                     continue
@@ -198,16 +223,32 @@ cdef void _worker_main():
 cdef function_treeC.Tree _combine_nodes(function_treeC.Node left_node, function_treeC.Node right_node, object op,
                     cnp.ndarray[cnp.float64_t, ndim=1] domain, list funcs, double T):
     """Combine two nodes with an operation into a new tree."""
-    
-    
+
+
     cdef function_treeC.Node left_copy = deepcopy(left_node)
     cdef function_treeC.Node right_copy = deepcopy(right_node)
     #cdef function_treeC.Tree preliminary_tree = function_treeC.Tree(
 	#depth = right_copy.node_depth, functions = funcs,
 	#x = domain, node = right_copy)
-    
+
     #gp_movesC.rename_prefix(preliminary_tree)
-  
+
+    # Phase 2.10 (final): this combiner historically renames NOTHING (the
+    # rename_prefix above was disabled), which lets same-named PLAIN
+    # parameters couple across sides — a tolerated legacy quirk kept
+    # bit-identical here. Opaque internals must NOT couple (two atoms
+    # sharing theta names would tie their fitted values), so when the
+    # right side carries atomic leaves it is renamed wholesale into the
+    # 'b' namespace (plain + atomic; refresh_params below re-canonicalises
+    # the plains to 'a'). Atom-free behaviour is unchanged.
+    cdef function_treeC.Tree _pre
+    if gp_movesC._contains_atomic(right_copy):
+        _pre = function_treeC.Tree(
+            depth=right_copy.node_depth, functions=funcs,
+            x=domain, node=right_copy)
+        gp_movesC.rename_prefix(_pre)
+        right_copy = _pre.root
+
     cdef function_treeC.Node root_node = function_treeC.Node(
         function=None,
         left=left_copy,
@@ -241,8 +282,13 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     if not tree.is_valid(domain):
         return None
     
-    # Optimize parameters if needed
-    if len(tree.params) > 0:
+    # Optimize parameters if needed. Phase 2.10 (final): gate on
+    # name_values, not tree.params — opaque internals are continuous
+    # parameters with no plain parameter Node, and skipping the fit would
+    # score the reference theta as if it were the MLE (same generalization
+    # as the Stage 3a optim_need gate; identical truthiness for atom-free
+    # trees).
+    if len(tree.name_values) > 0:
         tree.update_parameters(domain, y, method_str, use_gradients)
     
     # Fold constants -> fresh parameter leaves. If any constant subexpression
@@ -253,12 +299,18 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     if not ok:
         return None
     cdef double post = tree.root._log_marginal_bic(y)
-    
+
     if not np.isfinite(post):
         return None
+    # Phase 2.10 (final): atom-bearing candidates must return as skeleton
+    # wires — sympify(description) below would decompose the opaque leaves
+    # into ordinary subtrees on the master's rebuild. _tree_to_wire yields
+    # the same (payload, name_values, post) 3-tuple shape.
+    if gp_movesC._contains_atomic(tree.root):
+        return groveC._tree_to_wire(tree, post)
     cdef object expression = tree.tree_get_description()
     try:
-        
+
         # Let sympify auto-detect and create symbols
         expression = sympify(expression)
     except:

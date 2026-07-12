@@ -711,10 +711,37 @@ skeleton, atom PROPAGATES across the population (5/6 final slots atomic,
 unchanged-green on the dual wire. NB singleton MPI_Comm_spawn is not
 configured in the WSL env — run the MPI suite as
 `mpiexec -n 1 python test_phase2mpi.py`.
-Still open (minor): burn-in enumeration stays atom-free by design (moves
-introduce atoms); revisit if burn-in should seed atom-bearing depth-1
-trees. Full parameter-pool vocabulary freeze remains deferred (see the
-Stage 3a note).
+BURN-IN SEEDING ✅ IMPLEMENTED + COMPILED + TESTED 2026-07-11 (the last
+2.10 item — the phase is now CLOSED). Opaque templates enter the burn-in
+enumeration as plain-string tokens '@atom:<symbol>' (all itertools
+sweeps, work-item tuples and pickling untouched); one shared resolver
+_burn_in_primitive_node builds the leaves (parameter 'a0' → value-1.0
+leaf as before; tokens → opaque leaves at the θ₀ reference; else
+from_string). Name discipline: stage-1 candidates stay all-'a' (right
+leaf's band offset past a left atom's k) because _combine_depth1 renames
+right operands wholesale to 'b'; mpi_worker's combiner renames nothing,
+so its primitive operand uses the 'c' band and it now renames the right
+side to 'b' ONLY when it carries atomics (atom-free path bit-identical;
+the plain-a0 coupling quirk of that combiner is preserved as-is). The
+spawn burn-in's three wire crossings (depth-1 down, worker results up,
+master rebuild) use the Stage 3b dual-payload wire for atom-bearing
+trees; the worker's optimize gate generalized tree.params→name_values
+(Stage 3a pattern). _burn_in_stage2_parallel (rank-parallel, non-spawn)
+rebuilds candidates from DESCRIPTION STRINGS and cannot carry atoms —
+guarded with NotImplementedError (use serial or spawn). Legacy
+burn_in_combinations (not in the Grove.__init__ flow) stays atom-free.
+Tests: 2.10(s) serial (best a1*sin(a2*x), mse ~2e-28, atom-pair
+candidates verified name-disjoint); test_phase2mpi (f) spawn (same
+recovery, 323 atomic candidates through the wire, guard verified).
+KNOWN LIMITATION (pre-existing, documented not patched): the spawn
+master's progress-wait loop exits only after ≥1 worker progress message,
+and workers send one per 50 processed items — a spawn burn-in whose
+per-worker chunk is < 50 stage-2 combinations hangs the master forever
+(never occurs with realistic vocabularies; the (f) test sizes its
+workload accordingly). Fix if ever needed: drop the sum(progress)>0
+requirement — the subsequent blocking gather is the real barrier, the
+loop is only cosmetic for the progress bar.
+Full parameter-pool vocabulary freeze: settled by Stage 3c (ψ_const).
 PRIOR-MASS QUESTION RESOLVED (2026-07-09): see DESIGN_2_10_PRIMITIVES.md —
 DP(c, G₀) formalization; registration = partition refinement carving mass
 from a remainder cell (replaces the append-α₀ scheme, which is NOT
@@ -824,7 +851,13 @@ question into the paper's formalism (its §10.3).**
 2. Hero application choice (Phase 4.2).
 3. Kind-conditional vs unified Pólya nodes (Phase 1.1 / 2.6).
 4. Keep MPI in the paper version or drop it (Phase 3.4).
-5. (Phase 2.10) Prior-mass treatment for user atomic/opaque primitives.
+5. ~~(Phase 2.10) Prior-mass treatment for user atomic/opaque primitives.~~
+   RESOLVED 2026-07-09/10: DP(c, G₀) with registration = carve-from-
+   remainder (DESIGN_2_10_PRIMITIVES.md), implemented through Stage 3c.
+6. (PAPER_PLAN §0) THE central formal decision: frame the adaptive Pólya
+   prior as (A) fixed (urn reinforcement frozen before inference) or
+   (B) self-interacting flagship. NB Stage 3c settles the VOCABULARY half
+   of "fixed"; (A)/(B) concerns the γ_t reinforcement and is still open.
 6. (Phase 2.9 hygiene) Temperature-ladder policy + burn-in-only annealing (later).
 
 ## Decisions closed

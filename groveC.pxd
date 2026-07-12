@@ -106,7 +106,10 @@ cdef class Grove:
     cpdef list drain_deferred_paths(self)
     cdef _step_parameter_refresh(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
 
-    cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+    # Phase 2.10 (final): burn-in token list + AtomSpec registry.
+    cdef tuple _burn_in_primitives(self)
+
+    cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                                 bint replace_all=?, bint optimize_params=?)
 
     cdef _burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
@@ -168,6 +171,12 @@ cdef class Forest:
                              object max_tree_depth=*,
                              object subtree_rebuild_max_height=*)
     cpdef function_treeC.Tree best_tree(self)
+
+# Phase 2.10 (final): burn-in primitive-token resolver (mpi_worker uses it
+# for its 'd1_prim' work items). POSITIONAL calls only.
+cpdef function_treeC.Node _burn_in_primitive_node(str prim_str, object domain,
+                                                  dict atom_specs,
+                                                  str prefix, int name_start)
 
 # Phase 2.10 Stage 3b: cpdef (mpi_worker delegates here; tests drive them).
 # Cross-module callers: POSITIONAL ARGS ONLY.
