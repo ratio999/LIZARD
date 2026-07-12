@@ -815,11 +815,36 @@ Sub-tasks:
 ## Phase 4 — Experimental program
 Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results are biased).
 ### 4.1 Sanity checks (recovering known functions)
-- **PT ladder tuning**: before running sanity benchmarks, fix the temperature schedule.
-  Start with ≥8 rungs at geometric ratio ~1.4 (e.g. T_k = 1.4^k, k=0..7, top T≈14.7).
-  Monitor swap acceptance rate per consecutive pair; target 0.2–0.4. Adjust ratio or
-  add rungs until target is met. Log ladder + swap rates in results for the paper.
-  (See Phase 2.9 hygiene note.)
+- **PT ladder tuning** ✅ DONE 2026-07-12 (exp_phase41_ladder.py; logs in
+  results/phase41_ladder*.json; per-pair monitors added to Forest —
+  _attempt_swap_pair/_attempt_crossover_pair counters + ladder_stats(),
+  pure observability, suite regression green).
+  TUNED SCHEDULE (6 rungs): **T = [1, 1.29, 1.82, 3.08, 5.50, 10.0]**
+  (uniform-in-β core Δβ=0.225 + split hot tail). Final validation
+  (240 rounds × 6 swaps, ~290 attempts/pair, SE≈0.027, two seeds):
+  seed 4141 → per-pair swap rates [0.31, 0.27, 0.28, 0.34, 0.24], 5/5 in
+  the 0.2–0.4 band, max deviation 0.000; seed 999 → [0.44, 0.20, 0.28,
+  0.25, 0.26] (cold-pair excess = post-convergence saturation, see below).
+  FINDINGS (paper-relevant, method section):
+  (i) NO geometric ratio meets the band — scanned r ∈ {1.2, 1.3, 1.4,
+  1.6} at 8 rungs: hot pairs pin at 0.5–0.6 because Δβ ∝ 1/T for
+  geometric ladders while this bounded-BIC discrete target does not grow
+  its energy fluctuations with T (adjacent hot rungs become near-prior
+  twins — redundant, not harmful). (ii) Uniform-in-β ladders are the
+  right family; the in-band window calibrates to Δβ ≈ 0.2–0.25.
+  (iii) Long-run (post-convergence) rates differ from transient ones:
+  the coldest pair saturates high once both cold chains lock the
+  dominant mode (free mixing — a target-concentration effect, not
+  ladder geometry), and the hot tail sags as cold rungs concentrate —
+  hence the split tail (3.08 → 5.5 → 10).
+  Conditions (must match the benchmarks): freeze_vocab=True, safe-4 ops,
+  max_tree_depth=4, subtree_rebuild_max_height=2, sigma=1.0, target
+  y = sin(x)+0.5x+N(0,0.1²) n=60. Re-tune if the benchmark family
+  changes materially (the script's ROUND mechanism reproduces the
+  whole tuning ladder-by-ladder).
+- Recovery benchmarks: NEXT — run the sanity-function suite on the tuned
+  ladder (known targets incl. one Ψ₂ opaque-primitive case), logging
+  best-tree traces, evidences, move stats per PLAN 4.1's intent.
 ### 4.2 Hero application (CCSNe / Mc recovery / Feynman — choose one)
 ### 4.3 Ablations (no Pólya, no tempering, no BIC)
 

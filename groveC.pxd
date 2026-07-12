@@ -159,6 +159,13 @@ cdef class Forest:
     cdef object _np_rng
     # Phase 2.12 (MPI sampling): Grove ctor args for spawned workers.
     cdef dict _ctor
+    # Phase 4.1 (PT ladder tuning): per-consecutive-pair monitors (pure
+    # observability; read via ladder_stats()).
+    cdef public cnp.ndarray _swap_attempts
+    cdef public cnp.ndarray _swap_accepts
+    cdef public cnp.ndarray _xover_attempts
+    cdef public cnp.ndarray _xover_accepts
+    cpdef dict ladder_stats(self)
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove)
     cpdef compute_posteriors_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
     cdef bint _attempt_swap_pair(self, int g_left, cnp.ndarray[cnp.float64_t, ndim=1] y)

@@ -2481,6 +2481,14 @@ cdef class Forest:
         # run_mpi_spawn can ship them to spawned workers, which rebuild
         # structurally identical Groves in their own processes. Purely
         # additive; nothing else reads this.
+        # --- Phase 4.1 (PT ladder tuning): per-consecutive-pair monitors ---
+        # attempts/accepts for the swap and trans-grove crossover moves,
+        # indexed by pair g = (T_g, T_{g+1}). Pure observability: no RNG
+        # consumption, no behavioural change; read via ladder_stats().
+        self._swap_attempts = np.zeros(max(G - 1, 0), dtype=np.int64)
+        self._swap_accepts = np.zeros(max(G - 1, 0), dtype=np.int64)
+        self._xover_attempts = np.zeros(max(G - 1, 0), dtype=np.int64)
+        self._xover_accepts = np.zeros(max(G - 1, 0), dtype=np.int64)
         self._ctor = {
             'x': np.asarray(x, dtype=np.float64),
             'size': size_per_grove,
@@ -2524,6 +2532,8 @@ cdef class Forest:
         # Both greedy: parallel tempering has no well-defined swap; skip.
         if Ta <= 0.0 or Tb <= 0.0:
             return False
+        # Phase 4.1 monitor: a genuine pair proposal is being made.
+        self._swap_attempts[g_left] += 1
         cdef int i = self._py_rng.randrange(min(sizeA, sizeB))
         if A.root_posteriors[i] is None or np.isnan(A.root_posteriors[i]):
             A.root_posteriors[i] = A._score_post(A.trees[i], y, False)
@@ -2549,6 +2559,7 @@ cdef class Forest:
             tmp_post = A.root_posteriors[i]
             A.root_posteriors[i] = B.root_posteriors[i]
             B.root_posteriors[i] = tmp_post
+            self._swap_accepts[g_left] += 1
             return True
         return False
 
@@ -2581,6 +2592,9 @@ cdef class Forest:
         cdef double Tb = B.T
         if Ta <= 0.0 or Tb <= 0.0:
             return False
+        # Phase 4.1 monitor: a genuine pair proposal is being made (early
+        # child-validity failures below count as rejected attempts).
+        self._xover_attempts[g_left] += 1
         cdef int i = self._py_rng.randrange(sizeA)
         cdef int j = self._py_rng.randrange(sizeB)
         if A.root_posteriors[i] is None or np.isnan(A.root_posteriors[i]):
@@ -2647,6 +2661,7 @@ cdef class Forest:
         B.trees[j] = childB
         A.root_posteriors[i] = postA_new
         B.root_posteriors[j] = postB_new
+        self._xover_accepts[g_left] += 1
         return True
 
     cpdef int attempt_crossovers(self, cnp.ndarray[cnp.float64_t, ndim=1] y):
@@ -2659,6 +2674,30 @@ cdef class Forest:
         if self._attempt_crossover_pair(g, y):
             return 1
         return 0
+
+    cpdef dict ladder_stats(self):
+        """Phase 4.1 (PT ladder tuning): per-consecutive-pair swap and
+        trans-grove-crossover attempt/accept counters and rates. Pair g is
+        (T_g, T_{g+1}); rates are NaN where nothing was attempted. Pure
+        read-out of the monitors — the PLAN 4.1 target band for swap rates
+        is 0.2-0.4 per pair."""
+        cdef int G = len(self.groves)
+        cdef list temps = [float(self.temperatures[g]) for g in range(G)]
+        cdef list s_att = [int(v) for v in self._swap_attempts]
+        cdef list s_acc = [int(v) for v in self._swap_accepts]
+        cdef list x_att = [int(v) for v in self._xover_attempts]
+        cdef list x_acc = [int(v) for v in self._xover_accepts]
+        return {
+            'temperatures': temps,
+            'swap_attempts': s_att,
+            'swap_accepts': s_acc,
+            'swap_rates': [ (s_acc[g] / s_att[g]) if s_att[g] > 0 else float('nan')
+                            for g in range(len(s_att)) ],
+            'xover_attempts': x_att,
+            'xover_accepts': x_acc,
+            'xover_rates': [ (x_acc[g] / x_att[g]) if x_att[g] > 0 else float('nan')
+                             for g in range(len(x_att)) ],
+        }
 
     # ------------------------------------------------------------------
     # Phase 2.12: MPI-parallel EMC sampling loop (spawn model)
