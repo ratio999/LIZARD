@@ -819,9 +819,20 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
   results/phase41_ladder*.json; per-pair monitors added to Forest —
   _attempt_swap_pair/_attempt_crossover_pair counters + ladder_stats(),
   pure observability, suite regression green).
-  TUNED SCHEDULE (6 rungs): **T = [1, 1.29, 1.82, 3.08, 5.50, 10.0]**
-  (uniform-in-β core Δβ=0.225 + split hot tail). Final validation
-  (240 rounds × 6 swaps, ~290 attempts/pair, SE≈0.027, two seeds):
+  TUNED SCHEDULE — CORRECTED PROTOCOL (rounds 6–8, 2026-07-13, σ = noise
+  + shared-burn-in seeding): **T = [1, 1.22, 1.56, 2.17, 3.57, 10.0]**
+  (uniform-in-β, Δβ = 0.18, 6 rungs). High-stats validation (~280–300
+  attempts/pair, SE≈0.026): seed 4141 → [0.31, 0.28, 0.26, 0.26, 0.24],
+  5/5 in band, max deviation 0.000 (and its best tree is the TRUE model
+  a0*x + sin(x)); seed 999 → [0.30, 0.34, 0.35, 0.43, 0.33], 4/5, single
+  excursion +0.029 on the harmless high side. The corrected σ TILTS the
+  profile: cold pairs need finer Δβ (the old σ=1 ladder's cold pairs sag
+  to 0.14–0.19) while the hot region still flattens (fine geometric
+  ladders 0.5–0.7 everywhere) — see results/phase41_ladder_round{6,7,8}
+  .json.
+  [SUPERSEDED σ=1.0 artifact, rounds 1–5: T = [1, 1.29, 1.82, 3.08,
+  5.50, 10.0] (Δβ=0.225 + split tail); kept for the paper's
+  σ-sensitivity discussion.] Original σ=1 validation:
   seed 4141 → per-pair swap rates [0.31, 0.27, 0.28, 0.34, 0.24], 5/5 in
   the 0.2–0.4 band, max deviation 0.000; seed 999 → [0.44, 0.20, 0.28,
   0.25, 0.26] (cold-pair excess = post-convergence saturation, see below).
@@ -842,9 +853,75 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
   y = sin(x)+0.5x+N(0,0.1²) n=60. Re-tune if the benchmark family
   changes materially (the script's ROUND mechanism reproduces the
   whole tuning ladder-by-ladder).
-- Recovery benchmarks: NEXT — run the sanity-function suite on the tuned
-  ladder (known targets incl. one Ψ₂ opaque-primitive case), logging
-  best-tree traces, evidences, move stats per PLAN 4.1's intent.
+- **Recovery benchmarks** ◐ FIRST PASS DONE 2026-07-12
+  (exp_phase41_recovery.py; results/phase41_recovery.json). Six known
+  targets × 2 seeds on the tuned ladder, production config (frozen vocab,
+  safe-4 ops, caps 4/2, σ_noise = 0.1, n = 60), scored by NRMSE vs the
+  noise-free truth on a held-out grid (recovered := < 0.05).
+  RESULT at budget 200 rounds × 4 steps (840 steps/grove + EMC): 7/12.
+    linear          2/2  (a0*x ; x/a0)
+    x_sin           2/2  (x*sin(x) EXACT, nrmse 0.0000)
+    poly2           2/2  (a0*x + x² ; x*(a0+x)/a1)
+    sin_plus_linear 0/2  — competing basin of rational/additive
+                          approximants (nrmse 0.13–0.15)
+    rational        0/2  — same failure class
+    freq_sin_atom   1/2  — seed 17 recovers b6*sin(b7*x) (nrmse 0.009,
+                          Ψ₂ opaque primitive recovered inside the full
+                          EMC loop); seed 71 found the RIGHT structure
+                          (-a0*sin(a1*x)) but with θ̂ frozen at a bad
+                          Powell optimum by the description-keyed BIC
+                          cache (known cache property).
+  READING: perfect recovery when parameters sit in top-level
+  multiplicative slots; inner-position parameters (denominator constant,
+  sub-unit coefficient) lose to broad approximant basins at this budget —
+  per-run recovery ≈ 25% for those (consistent with the ~3/13 rate seen
+  across the ladder-tuning runs on the same target). This is a search-
+  budget effect, not a model defect: the true modes score ~50+ nats
+  better when found. Budget-scaling pass (--long, 3× rounds, same seeds;
+  results/phase41_recovery_long.json): freq_sin_atom → 2/2 (the θ̂-cache
+  miss vanishes with more rebirths); sin_plus_linear → 1/2 (true
+  structure b0*x + sin(x) found); rational → still 0/2, converging to
+  BARE CONSTANTS — which exposed the real defect:
+  **σ MIS-CALIBRATION FINDING (2026-07-12, decides the next step):** the
+  runs score with FIXED σ = 1.0 while the injected noise is σ = 0.1, so
+  the likelihood term −0.5·N·mse/σ² is ~100× too flat: constant-vs-truth
+  on the rational target differs by ~1.2 nats of likelihood against a
+  ~2 nats/parameter BIC penalty — the constant wins LEGITIMATELY under
+  the mis-specified scoring (verified: widening the domain to SNR≈4,
+  results/phase41_recovery_rational_v2.json, still yields constants).
+  High-variance targets mask the effect; low-amplitude structure is
+  posterior-suppressed. CONSEQUENCE: benchmark scoring must use σ
+  matched to the known noise (Forest(sigma=NOISE_SD) — coherent
+  everywhere incl. PR) or profiled σ (trees sigma=None via set_sigmas;
+  NB Grove’s ctor coerces None→1.0, and PR would still score at
+  grove.sigma — the fixed-true-σ route avoids that quirk). The PT ladder
+  must then be RE-TUNED under the corrected scoring (energy scale ×100 →
+  swap rates change; the uniform-β methodology and the tuning script
+  carry over unchanged — rerun ROUND 1 → refine). Decision on the σ
+  convention (fixed-true vs profiled) is the PLAN 5.1.6 fixed-vs-profiled
+  choice surfacing in practice — flagged to the author. Recovery results
+  above remain valid AS a documented property of σ=1 scoring; the paper's
+  likelihood-treatment section should carry this example.
+- **RECOVERY v2 — CORRECTED PROTOCOL ✅ 2026-07-13
+  (results/phase41_recovery_v2.json): 11/12 recovered** (was 7/12).
+  Protocol: σ = noise, ONE shared spawn burn-in per (target, seed)
+  seeding every rung with the same top-K (exp_common.py), re-tuned
+  ladder T = [1, 1.22, 1.56, 2.17, 3.57, 10]. Highlights: rational →
+  EXACT x/(a0+x) on both seeds (was 0/2 — burn-in enumerates it, σ fix
+  makes it beat the constant by ~120 nats); sin_plus_linear → both seeds
+  (seed 71 exact a0*x + sin(x), NRMSE 0.0015); x_sin & poly2(17) exact;
+  atom target 2/2. Single miss: poly2 seed 71 stalled at x² (stochastic
+  one-run event — same target exact on the other seed and recovered in
+  v1; open item: inspect that burn-in's ranking).
+  FIGURES + TABLES (exp_phase41_plots.py → results/figs/): fig1 recovery
+  overlays; fig2 old-vs-retuned ladder rates with band; fig3 per-rung
+  convergence traces (burn-in start + tempering visible); fig4 Pólya
+  root-cell predictive evolution — the urn visibly LEARNS the Asin cell
+  on the atom target (the paper's adaptive-prior figure); fig5
+  σ-calibration nats comparison; table_recovery.csv/.tex (v1 vs v2).
+  NEXT: 4.2 hero application choice; optional affine-atom
+  vocabulary-policy A/B pilot (user-proposed; AtomSpec already supports
+  it — identifiability-prune the wrapper per primitive).
 ### 4.2 Hero application (CCSNe / Mc recovery / Feynman — choose one)
 ### 4.3 Ablations (no Pólya, no tempering, no BIC)
 
