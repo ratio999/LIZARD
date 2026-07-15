@@ -31,7 +31,16 @@ cdef function_treeC.Tree _helper(object expr, cnp.ndarray[cnp.float64_t, ndim=1]
     
     if tree is not None and names_params and len(names_params) > 0:
         for param in tree.params:
-            if not param.function.expr.is_Number:
+            # Membership-guarded like the master-side rebuild
+            # (groveC rank-parallel burn-in): the sympy string
+            # round-trip can splinter constants into FRESH parameter
+            # names ('sqrt(x)**a0' -> 'x**(a0/2)') that names_params
+            # never carried. Missing names keep the default value —
+            # harmless, stage-2 re-optimizes and shipped values are
+            # warm starts only. (Was an uncaught KeyError: first hit
+            # by the '**'+sqrt vocabulary of the CBC suite, 2026-07-15.)
+            if (not param.function.expr.is_Number
+                    and param.get_description() in names_params):
                 param.set_value(names_params[param.get_description()])
     return tree
 

@@ -974,11 +974,23 @@ with the template in the burn-in, recovery is tautological — the chain
 locks the primitive it was given; 4.1's freq_sin_atom already covers
 the machinery demo. Informative template tests must be
 template-PLUS-correction (= CBC Stage B design).** Its run also
-exposed a ROBUSTNESS BUG for the queue: scipy Powell raises
+exposed a ROBUSTNESS BUG: scipy Powell raises
 RuntimeError("Too many iterations.") inside warmup θ-fits and nothing
-catches it → process death; fix = guard the optimize call, treat as
-force-reject (kernel touch — needs explicit go-ahead). Figures fig9–11
-+ table + expressions block: TODO next.
+catches it → process death. **FIXED 2026-07-15 (user go-ahead): all
+three scipy minimize sites in real_functionC (optimize /
+optimize_sigma / _optimize_with_grad fallback) guarded with
+except (RuntimeError, ValueError, FloatingPointError, OverflowError)
+→ OptimizeResult(success=False, x=warm-start θ, fun=+inf) → the
+NaN-fill path rejects the candidate and sampling continues. Root
+cause: scipy bracket() raises during the Powell line-search when a
+1-D slice is non-finite (exp overflow) — NOT preventable via maxiter
+options. The except branch fires only where the old code died ⇒
+bit-identical on green runs; VERIFIED: full rebuild + all 4 suites
+PASS with literally identical fingerprints (2.10o mse 5.28e-28,
+2.10s/2.10f 1.72e-28). Optional layer 2 (finite-penalty objective
+clamp to reduce incidence) deliberately deferred — it changes
+optimizer trajectories.** Figures fig9–11 + table + expressions:
+DONE (fig9 re-rendered in portrait/paper format 2026-07-15).
 **4.2b — CBC gravitational-wave signal (PLANNED, ADDRESS IN A LATER
 PROMPT — user decision 2026-07-14).** Compact-binary-coalescence
 waveforms: templates exist for BOTH time-domain and frequency-domain
@@ -1033,6 +1045,15 @@ literature at implementation time; no LALSuite dependency).
   8 MPI processes = 7 spawn burn-in workers + master (EMC loop remains
   the serial in-process multi-rung sampler). ~6–9 h; START AFTER the
   Feynman suite finishes (CPU contention).
+  **3G-REALISM UPDATE (user, 2026-07-15): band widened to an ET/CE-like
+  configuration** — f₀ = 5 Hz, x ∈ [1, 200] (5 Hz → 1 kHz, 2.3 decades,
+  n = 150 log-spaced): a ~1.8 h BNS-type signal (ℳ = 1.2 M☉),
+  Φ ≈ 1.23e5 rad at band entry, eccentric dephasing ≈ 2×10³ rad at
+  e₀ = 0.1 — and ΔΦ crosses the σ = 1 rad noise floor near ~40 Hz, so
+  eccentricity is measurable ONLY at the low-frequency end (the 3G
+  science case, visible in the preview). Data preview (incl. the
+  time-domain chirp): `exp_phase42_cbc_preview.py` →
+  `figs/fig19_cbc_data.png`.
 **FLEXIBLE ATOMS / TEMPLATE SCAFFOLDS (design sketch, DEFERRED — do not
 build preemptively).** User question 2026-07-15: atoms whose internal
 nodes are immutable but whose designated leaves (slots) can expand into
