@@ -1,0 +1,223 @@
+{
+  "config": {
+    "round": 2,
+    "seed": 4141,
+    "candidates": [
+      {
+        "label": "uniform-beta d0.30 (4 rungs)",
+        "temperatures": [
+          1.0,
+          1.4285714285714286,
+          2.5,
+          10.0
+        ]
+      },
+      {
+        "label": "uniform-beta d0.25 (5 rungs)",
+        "temperatures": [
+          1.0,
+          1.3333333333333333,
+          2.0,
+          4.0,
+          10.0
+        ]
+      },
+      {
+        "label": "uniform-beta d0.225 (5 rungs)",
+        "temperatures": [
+          1.0,
+          1.2903225806451613,
+          1.8181818181818181,
+          3.0769230769230766,
+          10.0
+        ]
+      }
+    ],
+    "size_per_grove": 4,
+    "init_depth": 2,
+    "funcs": [
+      "sin(x)",
+      "cos(x)",
+      "x"
+    ],
+    "ops": [
+      "+",
+      "-",
+      "*",
+      "/"
+    ],
+    "noise_sd": 0.1,
+    "warmup_steps": 40,
+    "rounds": 120,
+    "steps_per_round": 4,
+    "swaps_per_round": 4,
+    "band": [
+      0.2,
+      0.4
+    ],
+    "target": "sin(x) + 0.5*x + noise",
+    "n_points": 60,
+    "freeze_vocab": true,
+    "sigma": 1.0,
+    "max_tree_depth": 4,
+    "subtree_rebuild_max_height": 2
+  },
+  "runs": [
+    {
+      "temperatures": [
+        1.0,
+        1.4285714285714286,
+        2.5,
+        10.0
+      ],
+      "swap_attempts": [
+        145,
+        160,
+        175
+      ],
+      "swap_accepts": [
+        41,
+        29,
+        19
+      ],
+      "swap_rates": [
+        0.2827586206896552,
+        0.18125,
+        0.10857142857142857
+      ],
+      "xover_attempts": [
+        47,
+        35,
+        38
+      ],
+      "xover_accepts": [
+        17,
+        3,
+        9
+      ],
+      "xover_rates": [
+        0.3617021276595745,
+        0.08571428571428572,
+        0.23684210526315788
+      ],
+      "label": "uniform-beta d0.30 (4 rungs)",
+      "wall_seconds": 47.53144944499945,
+      "best_tree": "(x + sin(x))/(a0 - sin(x))",
+      "best_params": {
+        "b0": 2.3261329641599975
+      }
+    },
+    {
+      "temperatures": [
+        1.0,
+        1.3333333333333333,
+        2.0,
+        4.0,
+        10.0
+      ],
+      "swap_attempts": [
+        121,
+        115,
+        115,
+        129
+      ],
+      "swap_accepts": [
+        70,
+        19,
+        36,
+        18
+      ],
+      "swap_rates": [
+        0.5785123966942148,
+        0.16521739130434782,
+        0.3130434782608696,
+        0.13953488372093023
+      ],
+      "xover_attempts": [
+        33,
+        28,
+        38,
+        21
+      ],
+      "xover_accepts": [
+        14,
+        12,
+        10,
+        3
+      ],
+      "xover_rates": [
+        0.42424242424242425,
+        0.42857142857142855,
+        0.2631578947368421,
+        0.14285714285714285
+      ],
+      "label": "uniform-beta d0.25 (5 rungs)",
+      "wall_seconds": 111.08701753999776,
+      "best_tree": "a0*x + sin(x)",
+      "best_params": {
+        "a0": 0.49972033451299275
+      }
+    },
+    {
+      "temperatures": [
+        1.0,
+        1.2903225806451613,
+        1.8181818181818181,
+        3.0769230769230766,
+        10.0
+      ],
+      "swap_attempts": [
+        131,
+        120,
+        113,
+        116
+      ],
+      "swap_accepts": [
+        49,
+        22,
+        24,
+        23
+      ],
+      "swap_rates": [
+        0.37404580152671757,
+        0.18333333333333332,
+        0.21238938053097345,
+        0.19827586206896552
+      ],
+      "xover_attempts": [
+        34,
+        25,
+        37,
+        24
+      ],
+      "xover_accepts": [
+        21,
+        5,
+        6,
+        4
+      ],
+      "xover_rates": [
+        0.6176470588235294,
+        0.2,
+        0.16216216216216217,
+        0.16666666666666666
+      ],
+      "label": "uniform-beta d0.225 (5 rungs)",
+      "wall_seconds": 53.711299215996405,
+      "best_tree": "b2*x + sin(x)",
+      "best_params": {
+        "b2": 0.49972033456125253
+      }
+    }
+  ],
+  "recommended_ladder": {
+    "label": "uniform-beta d0.225 (5 rungs)",
+    "temperatures": [
+      1.0,
+      1.2903225806451613,
+      1.8181818181818181,
+      3.0769230769230766,
+      10.0
+    ]
+  }
+}

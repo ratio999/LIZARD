@@ -6,7 +6,7 @@ import warnings
 from cpython.ref cimport Py_INCREF, Py_DECREF
 #cimport sympy as csp
 from utils.pointer_utils cimport python_object_to_void_ptr, void_ptr_to_python_object, void_ptr_to_rf
-from scipy.optimize import minimize
+from scipy.optimize import minimize, OptimizeResult
 import re
 #from libc.stdlib cimport malloc, free  # Not needed so far 
 from cython.cimports.libc.string import memcpy
@@ -560,14 +560,28 @@ cdef class RealFunctionC:
         else:
             use_gradients=True
 
-        cdef object result = minimize(
-            fun=self.objective,
-            x0=initial_params,
-            jac=self.symb_grad if use_gradients else None,
-            args=(x_data, y_data),
-            method=method_str if use_gradients else 'Powell',
-            options={'disp': False}
-        )
+        cdef object result
+        try:
+            result = minimize(
+                fun=self.objective,
+                x0=initial_params,
+                jac=self.symb_grad if use_gradients else None,
+                args=(x_data, y_data),
+                method=method_str if use_gradients else 'Powell',
+                options={'disp': False}
+            )
+        except (RuntimeError, ValueError, FloatingPointError,
+                OverflowError) as _e:
+            # Guarded optimizer failure (2026-07-15): scipy's bracket()
+            # raises RuntimeError("Too many iterations.") when a 1-D
+            # line-search slice is non-finite (e.g. exp overflow) — not
+            # preventable via maxiter options. Keep the warm-start
+            # parameters and report +inf, so the NaN-fill scoring path
+            # rejects the candidate instead of killing the process.
+            # Fires ONLY where the unguarded call would have died.
+            result = OptimizeResult(x=initial_params, fun=np.inf,
+                                    success=False, status=-1, nit=0,
+                                    nfev=0, message="guarded: %r" % (_e,))
         #if use_gradients:
             #print('Optimization with gradients succeeded.')
         #else:
@@ -597,16 +611,23 @@ cdef class RealFunctionC:
         #print(initial_params)
         cdef object result
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                result = minimize(
-                        fun=self.objective,
-                        x0=initial_params,
-                        args=(x_data, y_data),
-                        method=method_str,
-                        options={'disp': False}
-                        )
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                    result = minimize(
+                            fun=self.objective,
+                            x0=initial_params,
+                            args=(x_data, y_data),
+                            method=method_str,
+                            options={'disp': False}
+                            )
+        except (RuntimeError, ValueError, FloatingPointError,
+                OverflowError) as _e:
+            # Guarded optimizer failure — see _optimize_with_grad note.
+            result = OptimizeResult(x=initial_params, fun=np.inf,
+                                    success=False, status=-1, nit=0,
+                                    nfev=0, message="guarded: %r" % (_e,))
         #self.params = dict(zip(self.param_str, result.x))
         #print(result)
         return result
@@ -618,16 +639,23 @@ cdef class RealFunctionC:
         #print(initial_params)
         cdef object result
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                result = minimize(
-                        fun=self.objective_sigma,
-                        x0=initial_params,
-                        args=(x_data, y_data, sigma),
-                        method=method_str,
-                        options={'disp': False}
-                        )
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                    result = minimize(
+                            fun=self.objective_sigma,
+                            x0=initial_params,
+                            args=(x_data, y_data, sigma),
+                            method=method_str,
+                            options={'disp': False}
+                            )
+        except (RuntimeError, ValueError, FloatingPointError,
+                OverflowError) as _e:
+            # Guarded optimizer failure — see _optimize_with_grad note.
+            result = OptimizeResult(x=initial_params, fun=np.inf,
+                                    success=False, status=-1, nit=0,
+                                    nfev=0, message="guarded: %r" % (_e,))
         #self.params = dict(zip(self.param_str, result.x))
         #print(result)
         return result

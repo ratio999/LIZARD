@@ -1,0 +1,233 @@
+{
+  "config": {
+    "ladder": [
+      1.0,
+      1.2903225806451613,
+      1.8181818181818181,
+      3.0769230769230766,
+      5.5,
+      10.0
+    ],
+    "seeds": [
+      17,
+      71
+    ],
+    "size_per_grove": 4,
+    "init_depth": 2,
+    "funcs": [
+      "sin(x)",
+      "cos(x)",
+      "x"
+    ],
+    "ops": [
+      "+",
+      "-",
+      "*",
+      "/"
+    ],
+    "noise_sd": 0.1,
+    "n_points": 60,
+    "warmup_steps": 40,
+    "rounds": 200,
+    "steps_per_round": 4,
+    "swaps_per_round": 4,
+    "max_tree_depth": 4,
+    "subtree_rebuild_max_height": 2,
+    "recovery_nrmse_threshold": 0.05,
+    "freeze_vocab": true,
+    "sigma": 1.0,
+    "long_pass": false,
+    "targets": [
+      {
+        "name": "linear",
+        "truth": "0.5*x",
+        "domain": [
+          0.5,
+          3.5
+        ],
+        "atoms": null
+      },
+      {
+        "name": "sin_plus_linear",
+        "truth": "sin(x) + 0.5*x",
+        "domain": [
+          0.5,
+          3.5
+        ],
+        "atoms": null
+      },
+      {
+        "name": "x_sin",
+        "truth": "x*sin(x)",
+        "domain": [
+          0.5,
+          3.5
+        ],
+        "atoms": null
+      },
+      {
+        "name": "rational",
+        "truth": "x/(1 + x)",
+        "domain": [
+          0.1,
+          10.0
+        ],
+        "atoms": null
+      },
+      {
+        "name": "poly2",
+        "truth": "x**2 - x",
+        "domain": [
+          0.5,
+          3.5
+        ],
+        "atoms": null
+      },
+      {
+        "name": "freq_sin_atom",
+        "truth": "2.3*sin(1.3*x)",
+        "domain": [
+          0.1,
+          6.0
+        ],
+        "atoms": [
+          "Asin"
+        ]
+      }
+    ]
+  },
+  "runs": [
+    {
+      "target": "rational",
+      "truth": "x/(1 + x)",
+      "seed": 17,
+      "best_tree": "b4",
+      "best_params": {
+        "b4": 0.7376235100068246
+      },
+      "best_posterior": -3.330003363522439,
+      "mse_train": 0.04276103608037962,
+      "nrmse_test": 0.22217752621669257,
+      "recovered": false,
+      "atomic_in_best": false,
+      "wall_seconds": 97.77047116500034,
+      "ladder_stats": {
+        "temperatures": [
+          1.0,
+          1.2903225806451613,
+          1.8181818181818181,
+          3.0769230769230766,
+          5.5,
+          10.0
+        ],
+        "swap_attempts": [
+          159,
+          143,
+          161,
+          166,
+          171
+        ],
+        "swap_accepts": [
+          97,
+          55,
+          36,
+          56,
+          42
+        ],
+        "swap_rates": [
+          0.610062893081761,
+          0.38461538461538464,
+          0.2236024844720497,
+          0.3373493975903614,
+          0.24561403508771928
+        ],
+        "xover_attempts": [
+          47,
+          36,
+          41,
+          34,
+          42
+        ],
+        "xover_accepts": [
+          40,
+          20,
+          9,
+          7,
+          14
+        ],
+        "xover_rates": [
+          0.851063829787234,
+          0.5555555555555556,
+          0.21951219512195122,
+          0.20588235294117646,
+          0.3333333333333333
+        ]
+      }
+    },
+    {
+      "target": "rational",
+      "truth": "x/(1 + x)",
+      "seed": 71,
+      "best_tree": "1",
+      "best_params": {},
+      "best_posterior": -2.8320380199249806,
+      "mse_train": 0.09440126733083269,
+      "nrmse_test": 0.36989958669867595,
+      "recovered": false,
+      "atomic_in_best": false,
+      "wall_seconds": 124.24624363600742,
+      "ladder_stats": {
+        "temperatures": [
+          1.0,
+          1.2903225806451613,
+          1.8181818181818181,
+          3.0769230769230766,
+          5.5,
+          10.0
+        ],
+        "swap_attempts": [
+          171,
+          148,
+          154,
+          159,
+          168
+        ],
+        "swap_accepts": [
+          94,
+          52,
+          31,
+          41,
+          45
+        ],
+        "swap_rates": [
+          0.5497076023391813,
+          0.35135135135135137,
+          0.2012987012987013,
+          0.2578616352201258,
+          0.26785714285714285
+        ],
+        "xover_attempts": [
+          45,
+          32,
+          35,
+          53,
+          35
+        ],
+        "xover_accepts": [
+          29,
+          9,
+          3,
+          12,
+          10
+        ],
+        "xover_rates": [
+          0.6444444444444445,
+          0.28125,
+          0.08571428571428572,
+          0.22641509433962265,
+          0.2857142857142857
+        ]
+      }
+    }
+  ]
+}

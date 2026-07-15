@@ -919,10 +919,148 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
   root-cell predictive evolution — the urn visibly LEARNS the Asin cell
   on the atom target (the paper's adaptive-prior figure); fig5
   σ-calibration nats comparison; table_recovery.csv/.tex (v1 vs v2).
-  NEXT: 4.2 hero application choice; optional affine-atom
+- **DEPTH-3 DISCOVERY SUITE ✅ 2026-07-14 (exp_phase41_depth3.py →
+  results/phase41_depth3.json): 5/6 recovered, 6/6 winning trees of
+  height ≥ 3 — beyond the burn-in enumeration entirely.** Targets
+  x³−2x (EXACT both seeds), 3x/(1+x²) (seed 71 EXACT in equivalent
+  parametrization; seed 17 near-miss 0.069), x·sin(x)+x/(1+x) (both
+  functional). Protocol = v2 + 400 rounds. New ADDITIVE trace fields in
+  exp_common.snapshot (accepts, unique_structs, depths, nodes) feed
+  fig7 (per-rung exploration counters — settles the fig3 max-statistic
+  question) and fig8 (depth penalization over the whole history: mean
+  sampled depth stratifies monotonically by T; cold rung ~91% mass at
+  depths 3–4). Rendering: exp_phase41_plots_v3.py → figs 6/7/8 +
+  table_depth3 + phase41_expressions.md/.csv (all 36 runs, fitted
+  params substituted). KERNEL NOTE: depth cap 4 binds per-move only;
+  crossover grafts compound (observed depth ≤ 10 hot, two winners at 5)
+  — "soft cap", document in paper; crossover-height guard = possible
+  future revision. Full write-up: RESULTS_PHASE4.md §§1–5 (+ handoff
+  prompt PROMPT_RESULTS_SECTION.md for drafting the paper section).
+  **§4.1 IS NOW CLOSED.**
+  NEXT: 4.2 hero application choice; 4.3 ablations; optional affine-atom
   vocabulary-policy A/B pilot (user-proposed; AtomSpec already supports
-  it — identifiability-prune the wrapper per primitive).
-### 4.2 Hero application (CCSNe / Mc recovery / Feynman — choose one)
+  it — identifiability-prune the wrapper per primitive); open items:
+  poly2/seed-71 burn-in ranking inspection, crossover-height guard
+  decision.
+### 4.2 Hero applications (DECIDED 2026-07-14: TWO heroes)
+**4.2a — Feynman univariate set (IN PROGRESS 2026-07-14).** Closed-form
+ℝ→ℝ equations from the Feynman database (constants fixed so each is a
+single-variable law), full corrected protocol with LONG chains:
+`exp_phase42_feynman.py` → `results/phase42_feynman.json`, figs `fig9+`.
+Six targets, iconic and graded:
+  flux I.12.2 a/x² · scattering III.17.37 a(1+b·cosx) · velocity_add
+  I.16.6 (u+x)/(1+ux) · polarization II.11.28 1+x/(1−x/3) · planck
+  I.41.16 x³/(eˣ−1) [flagship — needs the exp primitive] · gauss I.6.20a
+  e^(−x²/2)/√2π [UNREACHABLE by composition under safe-4 → registered as
+  a Gaussian template A_gauss = c0·exp(−c1·x²), the Phase-2.10 custom
+  primitive demonstrated on a real physics form].
+Vocabulary {sin, cos, exp, x} + safe-4 (+A_gauss on the gauss target
+only); budget 800 rounds × 6 steps (~3× the 4.1 budget), n = 100 points,
+burn-in via spawn with 5 workers (+master = 6 MPI processes, the agreed
+cap). NB the ladder was tuned at n = 60 / {sin,cos,x}: per-run
+ladder_stats() is recorded as the transferability check — report drift,
+re-tune only if rates leave the band materially.
+**COMPLETE 2026-07-15: 9/10 recovered** (results/phase42_feynman.json,
+assembled from per-run checkpoints). flux EXACT both seeds (2/x²);
+scattering exact structure both seeds; velocity_add 2/2 functional
+(seed 71: the elegant (x+eˣ)/(eˣ+1.04) impostor); polarization seed 71
+EXACT (1+2.98x/(3.00−x)), seed 17 the sole formal miss at NRMSE 0.174
+— but structurally CORRECT (−2.05−9.06/(x−3.001), right family, pole
+at 3.001; the metric punishes pole sensitivity — write-up should show
+the partial-fraction equivalence). planck 2/2 functional
+(x²-polynomial × e⁻ˣ family; seed 71's x²(x+1.93)/(x+eˣ) mirrors the
+true denominator). **gauss (A_gauss demo) DROPPED by user decision:
+with the template in the burn-in, recovery is tautological — the chain
+locks the primitive it was given; 4.1's freq_sin_atom already covers
+the machinery demo. Informative template tests must be
+template-PLUS-correction (= CBC Stage B design).** Its run also
+exposed a ROBUSTNESS BUG for the queue: scipy Powell raises
+RuntimeError("Too many iterations.") inside warmup θ-fits and nothing
+catches it → process death; fix = guard the optimize call, treat as
+force-reject (kernel touch — needs explicit go-ahead). Figures fig9–11
++ table + expressions block: TODO next.
+**4.2b — CBC gravitational-wave signal (PLANNED, ADDRESS IN A LATER
+PROMPT — user decision 2026-07-14).** Compact-binary-coalescence
+waveforms: templates exist for BOTH time-domain and frequency-domain
+signals, with and without physical features such as ECCENTRICITY. Plan:
+build an expression TREE from such a template — explicitly NOT via the
+Phase-2.10 atomic-leaf machinery (user: "don't call it atomic"); the
+template's known functional form is encoded as an ordinary tree over
+the vocabulary, with its (estimated) parameters as the tree's
+name_values — then seed/plant that tree and run SR on data from an
+ECCENTRIC waveform to test whether the sampler GROWS the eccentricity
+contribution as a correction the circular template lacks. Open design
+choices for that prompt: time vs frequency domain first; which template
+family (PN/phenomenological); whether the circular part is frozen
+(fixed subtree) or free; residual-vs-full-signal formulation; profiled
+σ (PLAN 5.1.6 — real-data route; NB Grove ctor coerces sigma=None→1.0).
+**STAGED PLAN (2026-07-15).** Work in the FREQUENCY DOMAIN on the
+SPA/TaylorF2 phasing, NOT time-domain strain: (a) strain is an
+oscillatory chirp — SR on the carrier is hopeless and uninformative;
+(b) the physics lives in smooth real functions Φ(f), A(f) — exactly the
+ℝ→ℝ pipeline's food; (c) the leading eccentricity contribution is an
+ADDITIVE secular e₀² phase term with a known fractional power of f, so
+the sought correction is a top-level `+` graft, perfectly matched to
+the grammar; (d) no composition operator needed (a time-domain template
+A(t)·cos(φ(t)) is not even expressible under safe-4). Data generated
+self-contained in numpy (TaylorF2 = closed-form PN polynomial in
+v=(πMf)^(1/3); + leading TaylorF2Ecc e₀² term, coefficients from the
+literature at implementation time; no LALSuite dependency).
+  Stage A — residual calibration: regress ΔΦ(f)=Φ_ecc−Φ_circ directly;
+  truth is a fractional power law → headline question "does the sampler
+  measure the PN exponent of eccentricity?". No seeding needed.
+  Stage B — template-seeded hero: regress Φ_ecc(f) whole with Φ_circ
+  encoded as an ordinary TRANSPARENT tree (NOT atomic, per user),
+  coefficients = the estimated (circular-fit) parameters, frozen-vs-free
+  as a design flag; the sampler must graft the correction. Compare to A.
+  Stage C — physics validation: e₀ grid, check fitted correction
+  amplitude ∝ e₀² (the referee-memorable figure); amplitude channel
+  A(f) optional.
+  Prerequisites to verify before coding: `**` op semantics with a
+  parameter exponent (natural power-law primitive; outside safe-4 —
+  identifiability/irreducibility status needs a look); profiled σ or
+  scaled fixed σ; log-spaced f grid; regress ΔΦ (O(rad), conditioned)
+  rather than raw Φ (10³ rad).
+  **BUILT 2026-07-15 (exp_phase42_cbc.py + run_phase42_cbc.sh +
+  exp_phase42_cbc_plots.py → fig12–fig18 + table_cbc + expressions).**
+  Smoke green ('**' works end-to-end); found+fixed the nanmean NRMSE
+  loophole ('**' trees NaN on most of the grid were judged on valid
+  points only — now valid_frac≥0.99 required, NaNs count as failure).
+  STATISTICAL-POWER SPEC (user): 8 temperatures (uniform-β extension
+  of the tuned ladder to Δβ=0.9/7≈0.129 — swap rates expected at/above
+  band, logged per run), vocabulary {x,log,sqrt,exp,sin,cos}×{+,−,*,/,
+  **} ('o' stays excluded), Stage A 800 / B–C 1600 rounds × 6 steps,
+  8 MPI processes = 7 spawn burn-in workers + master (EMC loop remains
+  the serial in-process multi-rung sampler). ~6–9 h; START AFTER the
+  Feynman suite finishes (CPU contention).
+**FLEXIBLE ATOMS / TEMPLATE SCAFFOLDS (design sketch, DEFERRED — do not
+build preemptively).** User question 2026-07-15: atoms whose internal
+nodes are immutable but whose designated leaves (slots) can expand into
+subtrees; composition Ψ(g(x)) is the arity-1 special case (current
+atoms hard-fill the argument slot with x). Formal view: a flexible atom
+is a USER-DEFINED m-ARY OPERATOR whose expansion emits a deterministic
+frozen skeleton — prior accounting needs nothing new: one Pólya cell
+for the Ψ-choice (carve-from-remainder, as now); frozen interior =
+probability 1 (grammar production, not part of the sample space); each
+slot = an ordinary child subtrie of the Ψ trie node (slot-specific
+reinforcement automatic); BIC k via name_values unchanged; per-template
+identifiability pruning required (skeleton θ redundant against slot
+content — same class as the affine-wrapper rule). The REAL cost is the
+kernel, not the prior: move-site masking (frozen nodes never targets;
+site-count factors in acceptance ratios count mutable sites only),
+slot-birth/death + atom-death with force-reject reverses, irreducibility
+re-verification (THEORY §4 style), skel wire + burn-in token extension —
+a Phase-2.10-sized project (label it 2.11 if/when opened). GATE: run
+4.2b Stage B on pure seeding first; implement scaffolds only if the
+seeded template is observed being destroyed before corrections attach.
+**HARD IMPLEMENTATION CONSTRAINT (user, 2026-07-15): flexible atoms
+must be PURELY ADDITIVE code additions — zero effect on existing code
+paths, OFF BY DEFAULT, opt-in by explicit flag/argument (same contract
+as atoms=None ⇒ bit-identical legacy in Phase 2.10). A feature one may
+activate, never a change one must accommodate.** Context: the
+frequency-domain CBC hero (below) needs NO flexible atoms; the
+TIME-DOMAIN CBC treatment (A(t)·cos(φ(t)) — composition into the
+carrier) is the use case that will need them, deferred accordingly.
 ### 4.3 Ablations (no Pólya, no tempering, no BIC)
 
 ---
