@@ -7,6 +7,11 @@ from cpython.ref cimport Py_INCREF, Py_DECREF
 #cimport sympy as csp
 from utils.pointer_utils cimport python_object_to_void_ptr, void_ptr_to_python_object, void_ptr_to_rf
 from scipy.optimize import minimize, OptimizeResult
+from libc.math cimport isfinite as _c_isfinite
+
+# NaN-leak fix (2026-07-15): finite MSE penalty for models with any
+# non-finite prediction — see the comment block above posterior_fitness.
+cdef double _MSE_PENALTY = 1.0e100
 import re
 #from libc.stdlib cimport malloc, free  # Not needed so far 
 from cython.cimports.libc.string import memcpy
@@ -311,37 +316,67 @@ cdef class RealFunctionC:
         except:
             return -np.inf
 
-    cdef posterior_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double penalty=0.0): 
+    # ------------------------------------------------------------------
+    # NaN-leak fix (2026-07-15, PLAN §4.2b forensics): the MSE was
+    # np.nanmean(resid**2), which silently DROPS NaN predictions — the
+    # optimizer then actively drives parameters into NaN territory
+    # (e.g. x**8.6e14: NaN on 99.6% of the grid) because that shrinks
+    # the mean over the surviving points, and such "NaN monsters" out-
+    # scored the exact truth by ~75 nats. Correct semantics: a model
+    # with ANY non-finite prediction at an observed point has zero
+    # likelihood. Implemented as plain np.sum (NaN/inf PROPAGATE) + one
+    # scalar C isfinite + a LARGE FINITE penalty (optimizer-stable: no
+    # NaN plateaus, so scipy's bracket() cannot blow up there).
+    # PERFORMANCE: on all-finite vectors np.sum is bit-identical to
+    # what nanmean computed (same pairwise reduction) and strictly
+    # cheaper (no isnan mask / count / Python dispatch). 1e100
+    # dominates any is_valid-surviving legitimate mse (<= ~1e24) while
+    # -0.5*N*(1e100/sigma^2) stays ~200 orders below double overflow
+    # and ~190 orders above the -1e299 hard-reject sentinel.
+    # ------------------------------------------------------------------
+    cdef posterior_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double penalty=0.0):
         if x is None:
             x = self.domain
-        cdef double mse = np.nanmean((y - self.evaluate(x, params))**2)
+        cdef double _s = np.sum((y - self.evaluate(x, params))**2)
+        cdef double mse
+        if _c_isfinite(_s):
+            mse = _s / <double>y.shape[0]
+        else:
+            mse = _MSE_PENALTY
         if mse <0:
             print('invalid mse ', self.description)
         # Fast path: skip regularization when lambda is 0
-        
-        
-        
+
+
+
         return mse + penalty
-        
-    
-    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None): 
+
+
+    cdef fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None):
         #print(x)
+        cdef double _s
         if x is None:
             x = self.domain
         try:
             #if self.is_param():
             #print('params in fitness', params, self.evaluate(x,params))
-                #print(np.nanmean((y - self.evaluate(self.domain, params))**2))
-            return np.nanmean((y - self.evaluate(x,  params))**2) #+ lambda_reg * np.sum(np.array(list(params.values()))**2)
+            _s = np.sum((y - self.evaluate(x,  params))**2) #+ lambda_reg * np.sum(np.array(list(params.values()))**2)
+            if _c_isfinite(_s):
+                return _s / <double>y.shape[0]
+            return _MSE_PENALTY
         except:
             return np.inf
 
-    cdef double fitness_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+    cdef double fitness_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, cnp.ndarray[cnp.float64_t, ndim=1] x,
                      cnp.ndarray[cnp.float64_t, ndim=1] sigma):
-        
+
         cdef  cnp.ndarray[cnp.float64_t, ndim=1] var = sigma*sigma
+        cdef double _s
         try:
-            return np.nanmean(((y-self.evaluate(x, params))**2)/var)
+            _s = np.sum(((y-self.evaluate(x, params))**2)/var)
+            if _c_isfinite(_s):
+                return _s / <double>y.shape[0]
+            return _MSE_PENALTY
         except:
             return np.inf
     

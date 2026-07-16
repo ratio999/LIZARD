@@ -937,6 +937,16 @@ Cannot start before Phase 2.1, 2.2, 2.3, **and 2.7** are done (otherwise results
   future revision. Full write-up: RESULTS_PHASE4.md §§1–5 (+ handoff
   prompt PROMPT_RESULTS_SECTION.md for drafting the paper section).
   **§4.1 IS NOW CLOSED.**
+  REPRODUCIBILITY TOOLKIT (2026-07-15, ON-DEMAND — deliberately NOT in
+  the default test suite): `bash repro_phase41.sh` reruns both 4.1
+  suites verbatim (workers pinned to 2 — burn-in ranking is
+  worker-count sensitive) into `*_repro.json`, renders figures into
+  `results/figs_repro/`, tables into `results/repro/`, and writes the
+  field-by-field diff vs the archived originals to
+  `results/repro/phase41_repro_report.md` (expect "REPRODUCED"; any
+  diff = regression signal). Wrappers import the archived experiment
+  scripts unmodified — nothing existing can be overwritten. ~1–1.5 h;
+  never run concurrently with another experiment.
   NEXT: 4.2 hero application choice; 4.3 ablations; optional affine-atom
   vocabulary-policy A/B pilot (user-proposed; AtomSpec already supports
   it — identifiability-prune the wrapper per primitive); open items:
@@ -1045,6 +1055,32 @@ literature at implementation time; no LALSuite dependency).
   8 MPI processes = 7 spawn burn-in workers + master (EMC loop remains
   the serial in-process multi-rung sampler). ~6–9 h; START AFTER the
   Feynman suite finishes (CPU contention).
+  **BURN-IN FORENSICS → TEMPLATE REDESIGN (2026-07-15, user chose
+  Option A).** Three smokes + four probes traced Stage A's failure to
+  its true root: (i) NOT ambiguity — the fitted power law beats the
+  best zero-parameter impostor by 47,410 nats at σ=0.001 (5-nat LOSS
+  at σ=1: the §4.1-σ finding quantified); (ii) NOT enumeration — 
+  a0/(x·x**a1) ≡ a0·x^(−1−a1) was candidate rank 239; (iii) NOT the
+  optimizer per se — the kernel's own Powell fit of the clean form
+  converges to (1.983, −3.7787), mse=σ², from θ₀=(1,1); (iv) the
+  killer: '**'-composite stage-2 candidates INHERIT warm starts from
+  their stage-1 sub-fits (x**a1 alone → a1≈−2.08 → combined form
+  starts in a growing-exponent basin) and single-start coordinate
+  Powell buries them with junk θ̂ (post 19.9 vs the ~810 a good fit
+  earns). Along the way: Stage A regresses the POSITIVE dephasing
+  magnitude (sign flip de-traps coefficient-first descent — probes);
+  kiloradian units kept (harmless; likelihood scale-invariant);
+  burn-in ranking confirmed to use the PROFILED-σ BIC branch.
+  RESOLUTION (no kernel changes): drop '**' from ops (back to safe-4,
+  the tuned-ladder family) and encode "phasing terms are decaying
+  power laws" ONCE as the opaque template atom A_pow = c0·x^c1
+  (Phase 2.10 machinery, freq_sin_atom-validated; θ₀=1 references
+  suffice — clean-form fits converge from (1,1) on positive data).
+  CLAIM REFRAMING: A_pow + A_pow is burn-in-enumerable ⇒ the CBC
+  headline is CALIBRATED MEASUREMENT of the eccentric PN exponent
+  (−34/9) and its e₀² scaling, not structural discovery (C2-style
+  honesty). Option B (multi-start Powell, keeps '**' discovery
+  framing) DEFERRED as deliberate 4.3-adjacent kernel work.
   **3G-REALISM UPDATE (user, 2026-07-15): band widened to an ET/CE-like
   configuration** — f₀ = 5 Hz, x ∈ [1, 200] (5 Hz → 1 kHz, 2.3 decades,
   n = 150 log-spaced): a ~1.8 h BNS-type signal (ℳ = 1.2 M☉),
@@ -1082,6 +1118,48 @@ activate, never a change one must accommodate.** Context: the
 frequency-domain CBC hero (below) needs NO flexible atoms; the
 TIME-DOMAIN CBC treatment (A(t)·cos(φ(t)) — composition into the
 carrier) is the use case that will need them, deferred accordingly.
+**NaN SCORING LEAK — FOUND AND FIXED (2026-07-15, user-approved plan;
+full plan file: ~/.claude/plans/delegated-foraging-rabin.md).** The
+first full CBC run (8 rungs, 800/1600 rounds) produced 0/3 compromised
+runs: trees NaN on ~99.6% of the grid carried posteriors (−10..−12.5)
+BEATING the exact truth (−87, probe-verified). ROOT CAUSE (traced by
+agents + manual reads): real_functionC.fitness used
+np.nanmean(resid²) — NaN predictions silently DROPPED, so Powell
+actively drives parameters into NaN territory (x^8.6e14) because it
+shrinks the mean over surviving points; is_valid can't catch it (no
+params arg → evaluates at reference θ=1, NOT θ̂ — the 2.13(h) comment
+overstated it, now corrected); the description-keyed BIC cache
+memoized the flattered scores. inf was never a hole (poisons the
+mean); NaN specifically was. Short smokes passed because 60 rounds is
+too little for MCMC to FIND the exploit — long chains always do.
+FIX (kernel, minimal, hot-path FASTER): fitness/fitness_sigma/
+posterior_fitness → plain np.sum + scalar C isfinite + finite
+_MSE_PENALTY=1e100 (zero-likelihood semantics for any non-finite
+prediction; finite penalty keeps Powell bracket-stable);
+_log_likelihood_at nansum→sum (all-NaN gave ssr=0 and PASSED — closed);
+groveC: penalty-scale posts (< −1e90) are NOT cached (pre-fix NaN
+posts weren't either — preserves retry-with-fresh-warm-start, prevents
+a single bad Powell landing from permanently condemning the TRUE
+topology). On all-finite vectors np.sum is bit-identical to what
+nanmean computed and strictly cheaper (no isnan mask/count).
+VALIDATION: probe (a) finite-path exactness PASS at 2e-14 rel
+(−87.025718642 reproduced); ALL 4 suites PASS with bit-identical
+historical fingerprints (5.28e-28 / 1.72e-28); walls within the
+environmental band; test_phase42 fingerprint PASSES against the
+PRE-FIX reference (flux/17's 60-round trajectory is NaN/inf-free ⇒
+kernels literally bit-identical there; no re-record needed). Penalty-
+branch assay (CBC re-smoke): RECOVERED 0.0003, valid=100%,
+p̂=−3.7787, cold −87.026 — no monsters in their native habitat.
+4.1 repro vs archives: 15/18 runs BIT-IDENTICAL; 3 diffs inspected =
+1 name-band-only (same model/score), inv_quad/17 near-miss→RECOVERED
+(depth-3 now 6/6 on fixed kernel), inv_quad/71 same family but more
+parsimonious (post −26.1 vs −36.3). Nothing lost, one gained.
+**FIX FULLY VALIDATED 2026-07-15.** Incident
+corpus preserved: results/phase42_cbc_partial_INCIDENT_20260715.json
++ _run_INCIDENT_20260715.log. Residual risks documented in the plan
+file (Jacobian nansum if gradients re-enabled; Feynman held-out nrmse
+lacks valid_frac correction — reporting-side; worker burn-in
+params=None/profiled-σ anomaly — pre-existing).
 ### 4.3 Ablations (no Pólya, no tempering, no BIC)
 
 ---

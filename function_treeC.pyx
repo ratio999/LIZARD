@@ -874,13 +874,15 @@ cdef class Tree:
         if self.bic_loss_is_param_loss and optimize and len(self.name_values)>0:
             mse = self._update_parameters_and_fitness(self.domain, y,
                                         method_str, use_gradients)
-            # Phase 2.13(h): re-validate at theta_hat. The optimizer's
-            # objective uses np.nanmean, so it can settle on parameters that
-            # make the model NaN/inf on part of the domain while being
-            # scored only on the finite subset (with the full-N BIC
-            # penalty) — inflated evidence for partially-defined models.
-            # The pre-scoring is_valid gate ran at the PRE-optimization
-            # theta, so it cannot catch this. Reject such optima outright.
+            # Phase 2.13(h) NOTE, corrected 2026-07-15: this gate does NOT
+            # re-validate at theta_hat — is_valid takes no params and
+            # evaluates at the construction-time reference values (the
+            # CBC forensics proved it, PLAN §4.2b). The actual theta_hat
+            # pathology gate is now the fitness() semantics themselves
+            # (real_functionC, NaN-leak fix: any non-finite prediction
+            # -> _MSE_PENALTY -> effectively -inf posterior). This call
+            # is kept for its original structural checks (zoo, reference
+            # evaluation, magnitude cap) and for trajectory continuity.
             if not self.is_valid(self.domain):
                 return -np.inf
             if self.sigma is not None and (not hasattr(self.sigma, '__len__')):
@@ -1007,7 +1009,12 @@ cdef class Tree:
         if y_pred.shape[0] != y.shape[0]:
             return -np.inf
         cdef cnp.ndarray[cnp.float64_t, ndim=1] resid = y - y_pred
-        cdef double ssr = float(np.nansum(resid * resid))
+        # NaN-leak fix (2026-07-15): plain sum, NOT nansum — an all-NaN
+        # residual previously gave ssr = 0 (finite!) and slipped past
+        # this guard; now any non-finite prediction propagates to NaN
+        # and is rejected below (zero likelihood, consistent with the
+        # fitness() semantics in real_functionC).
+        cdef double ssr = float(np.sum(resid * resid))
         if not np.isfinite(ssr):
             return -np.inf
         cdef int n = y.shape[0]

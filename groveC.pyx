@@ -910,7 +910,14 @@ cdef class Grove:
                 use_gradients=self.use_gradients if optim_need else False,
                 method_str=self.method_str,
             )
-            if np.isfinite(new_post):
+            # NaN-leak fix (2026-07-15): do NOT cache penalty-scale posts
+            # (< -1e90 needs mse/sigma^2 ~ 1e88 — no legitimate model).
+            # Pre-fix these landings scored NaN and were never cached, so
+            # the topology was RETRIED with a fresh warm start on the next
+            # proposal; caching the now-finite penalty (with its junk
+            # theta_hat) would permanently condemn a possibly-true
+            # topology to a single bad Powell landing.
+            if np.isfinite(new_post) and new_post > -1.0e90:
                 self._bic_cache[cand_key] = (new_post, dict(cand.name_values))
 
         if not np.isfinite(new_post):
@@ -1136,7 +1143,11 @@ cdef class Grove:
             method_str=self.method_str,
         )
         if np.isfinite(new_post):
-            self._bic_cache[cand_key] = (new_post, dict(cand.name_values))
+            # NaN-leak fix (2026-07-15): penalty-scale posts are returned
+            # (correctly terrible) but NOT cached — see _step for why.
+            if new_post > -1.0e90:
+                self._bic_cache[cand_key] = (new_post,
+                                             dict(cand.name_values))
             return new_post
         return -1.0e300
 
