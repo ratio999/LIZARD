@@ -1161,6 +1161,35 @@ file (Jacobian nansum if gradients re-enabled; Feynman held-out nrmse
 lacks valid_frac correction — reporting-side; worker burn-in
 params=None/profiled-σ anomaly — pre-existing).
 ### 4.3 Ablations (no Pólya, no tempering, no BIC)
+**ABLATION I — FROZEN vs ADAPTIVE Θ: DONE 2026-07-16 (RESULTS §9).**
+Kernel: `polya_treeC.adapt_frozen` opt-in switch (5 additive edits,
+default off = bit-identical — certified by suites + fingerprint;
+travels through get_state with legacy-safe default). Experiment:
+`exp_phase43_ablation.py` frozen arm (18 runs, both 4.1 suites,
+Θ frozen after warm-up) vs the post-fix repro reruns as the adaptive
+arm (same kernel/seeds/protocol, one-bit difference). **RESULT:
+PARITY — 11v11 (depth-2) and 6v6 (depth-3), same single miss; no
+systematic Δposterior direction on the diverging depth-3 pairs.**
+With fig23(d) (root-predictive movement decaying to ~6e-4) the
+reading: post-warm-up adaptation is too small to change benchmark
+outcomes ⇒ direct empirical support for "frozen = recommended
+default"; adaptive not refuted, its benefit deferred to unseeded/
+longer-horizon settings (outlook). Outputs in results/ablation_results/
+(dedicated subfolder, additive). ALSO NEW: fig23_cbc_urn.png (urn
+dynamics + the qconv empirical companion) and fig24_cbc_mixing.png
+(mixing health) via exp_phase42_cbc_diag2.py from archived CBC traces.
+**ARM C — FROZEN-AT-BIRTH: DONE 2026-07-17 (user-run; RESULTS §9).
+The symmetric untrained prior DEGRADES: 14/18 vs 17/18 for both
+adaptive and frozen-at-Θ̄** (rational/71 lost outright 0.0034→0.393;
+inv_quad/17 + mixed/17 past threshold; freq_sin_atom/17 5× worse but
+surviving — the un-reinforced template cell mechanism; poly2/71 misses
+in ALL arms ⇒ burn-in artifact). COMPLETED CONCLUSION: reinforcement
+pays off and is FRONT-LOADED — learning Θ̄ matters (+3 recoveries),
+learning beyond Θ̄ adds nothing at these budgets. Recipe: reinforce
+through warm-up, freeze at Θ̄, sample with theorem-backed guarantees.
+REMAINING 4.3 ARMS (queued): no-tempering (ladder=[1]), no-BIC
+(penalty toggle), affine-atom vocabulary pilot; no-Pólya deferred
+(user).
 
 ---
 

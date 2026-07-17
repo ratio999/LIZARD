@@ -54,6 +54,11 @@ cdef class PolyaTree:
     # psi_const's flat primitive index (-1 when not unified).
     cdef public bint unify_params
     cdef public int _param_idx
+    # Phase 4.3 (frozen-regime ablation, 2026-07-16): opt-in switch that
+    # halts urn reinforcement (update_path becomes a no-op) so Theta is
+    # FROZEN at its current value — the paper's "frozen regime". Default
+    # False = continuously adaptive = bit-identical legacy behaviour.
+    cdef public bint adapt_frozen
 
     cdef PolyaNode _ensure_child(self, PolyaNode parent, str kind, int choice_idx)
     cdef PolyaNode _get_child_or_none(self, PolyaNode parent, str kind, int choice_idx)

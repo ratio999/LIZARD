@@ -122,6 +122,10 @@ cdef class PolyaTree:
         # Root: a "virtual" decision over n_ops + n_prims (op vs prim + which one).
         self.auto_register = auto_register
         self.strict_ops = strict_ops
+        # Phase 4.3: adaptation freeze is OFF by default (set the public
+        # attribute from Python after warm-up to enter the frozen regime;
+        # deliberately NOT a constructor argument — zero call-site churn).
+        self.adapt_frozen = False
         # Phase 2.10 (DP completion, THEORY_2_13.md §5): remainder_mass > 0
         # activates DP mode. The node-level prior is then the projection of
         # ONE DP(c, G0) with total base mass
@@ -238,6 +242,11 @@ cdef class PolyaTree:
         Reinforce path with diminishing learning rate gamma_t = 1/(1+t).
         Call AFTER an accepted MH step.
         """
+        # Phase 4.3 frozen regime: reinforcement halted, Theta stays at
+        # Theta-bar. One C bool branch — zero measurable cost when off,
+        # and update_path only runs on ACCEPTED moves anyway.
+        if self.adapt_frozen:
+            return
         cdef double gamma = 1.0 / (1.0 + <double> self.t)
         cdef PolyaNode current = self.root
         cdef int idx, flat_idx
@@ -547,6 +556,9 @@ cdef class PolyaTree:
             # Phase 2.10 Stage 3c: psi_const unification travels with the
             # state so MPI replicas map parameter leaves identically.
             'unify_params': bool(self.unify_params),
+            # Phase 4.3: frozen-regime flag travels too (legacy snapshots
+            # restore with the False default in set_state).
+            'adapt_frozen': bool(self.adapt_frozen),
         }
 
     cpdef void set_state(self, dict state) except *:
@@ -560,6 +572,8 @@ cdef class PolyaTree:
         self.t = <int> state['t']
         self.auto_register = <bint> state['auto_register']
         self.strict_ops = <bint> state['strict_ops']
+        # Phase 4.3: legacy-safe default (pre-4.3 snapshots lack the key).
+        self.adapt_frozen = <bint> state.get('adapt_frozen', False)
         self.n_ops = len(self.operations)
         self.n_prims = len(self.primitives)
         self._op_to_idx = {op: i for i, op in enumerate(self.operations)}
