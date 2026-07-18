@@ -26,6 +26,19 @@ warnings.filterwarnings('ignore', message=r'underflow encountered.*', category=R
 
 cdef object _LOG = np.log
 cdef double _PI = np.pi
+
+# Phase 4.3 (no-BIC ablation, 2026-07-17): module-level kill switch for
+# the BIC complexity penalty in Tree._shortcut_bic. Default True =
+# bit-identical legacy behaviour; toggled ONLY by the ablation harness.
+cdef bint _BIC_PENALTY_ON = True
+
+cpdef void set_bic_penalty(bint on):
+    """Ablation harness only: enable/disable the BIC complexity penalty
+    (default enabled). Affects the EMC scoring path (_shortcut_bic);
+    the burn-in ranking is deliberately unaffected, so all ablation
+    arms share identical seeding."""
+    global _BIC_PENALTY_ON
+    _BIC_PENALTY_ON = on
 cdef double _NAN = np.nan
 
 # Per-process RNG handles used by every randomized routine in this module
@@ -849,6 +862,14 @@ cdef class Tree:
 			double mse):
         cdef int N = y.shape[0]
         cdef int k = len(self.name_values)
+        # Phase 4.3 (no-BIC ablation, 2026-07-17): opt-in kill switch for
+        # the complexity penalty — pure-likelihood scoring. Default ON =
+        # bit-identical legacy. One C bool branch; toggled only by the
+        # ablation harness via set_bic_penalty().
+        if not _BIC_PENALTY_ON:
+            if self.sigma is None:
+                return -0.5 * N * (_LOG(2.0 * _PI * mse) + 1.0)
+            return -0.5 * N * mse
         if self.sigma is None:
             # Phase 2.13(i): sigma is PROFILED here (sigma_hat^2 = SSR/N),
             # so it counts as an estimated parameter -> penalty on k+1
