@@ -34,11 +34,11 @@ cdef class Node:
     cdef double alpha
     cdef object sigma
     cdef fetch_fun(self, Node left = ?, Node right = ?, str operation = ?)
-    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    cdef optimize(self, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, str method_str=?, bint use_gradients=?)
-    
-    cdef optimize_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
-        dict input_pars, cnp.ndarray[cnp.float64_t, ndim=1] sigma, 
+
+    cdef optimize_sigma(self, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+        dict input_pars, cnp.ndarray[cnp.float64_t, ndim=1] sigma,
         str method_str=?, bint use_gradients=?)
 
     cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, object x=?)
@@ -55,11 +55,11 @@ cdef class Node:
 
     cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=?, object x=?)
         
-    cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, 
-            cnp.ndarray[cnp.float64_t, ndim=1] x, double sigma)
+    cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params,
+            cnp.ndarray x, double sigma)
 
-    cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, 
-            cnp.ndarray[cnp.float64_t, ndim=1] x, cnp.ndarray[cnp.float64_t, ndim=1] sigma)
+    cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params,
+            cnp.ndarray x, cnp.ndarray[cnp.float64_t, ndim=1] sigma)
 
     cpdef is_constant(self)
 
@@ -118,14 +118,14 @@ cdef class Tree:
     cpdef get_domain(self)
     cpdef void set_g_tau(self, double tau) except *
     cdef get_param_values(self)
-    cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data,  
+    cpdef optimize(self, cnp.ndarray x_data,
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str=?, bint use_gradients=?)
-    cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    cdef _update_parameters(self, cnp.ndarray x_data,
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str=?, bint use_gradients=?)
-    cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    cpdef update_parameters(self, cnp.ndarray x_data,
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str=?, bint use_gradients=?)
     
     cdef build_fitness_tree(self, Node node, str prefix=?, bint is_left=?)
@@ -154,7 +154,7 @@ cdef class Tree:
                                   str method_str=?)
     cdef double _shortcut_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, double mse)
 
-    cdef double _update_parameters_and_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+    cdef double _update_parameters_and_fitness(self, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
 	str method_str=?, bint use_gradients=?)
     cpdef is_defined(self, x=?)
 
@@ -197,11 +197,11 @@ cdef _post_order_update(Node node)
 # Phase 2.10 Stage 3b: structural (skeleton) serialization for the MPI wire.
 cpdef object tree_to_skel(Node node)
 cpdef Node node_from_skel(object skel,
-                          cnp.ndarray[cnp.float64_t, ndim=1] domain,
+                          cnp.ndarray domain,
                           dict atom_specs)
 
 cpdef build_tree(int depth, list functions,
-    cnp.ndarray[cnp.float64_t, ndim=1] x, str output_type=?,
+    cnp.ndarray x, str output_type=?,
     int Npars=?, object leaves_count=?, object arr_indices=?,
     dict params_used=?, object value=?, double T=?, double alpha=?, object sigma=?, double g_tau=?,
     list operations=?)
@@ -210,7 +210,7 @@ cdef parameter_parser(int Npars)
 
 cdef new_par(list existing_params, str user_choice=?)
 
-cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list, dict params_used=?)
+cdef _expr_to_tree(object expr, cnp.ndarray domain, list function_list, dict params_used=?)
 
 cdef list _symbol_values(dict name_values)
 

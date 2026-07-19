@@ -20,7 +20,7 @@ cimport real_functionC
 cimport gp_movesC
 cimport polya_treeC
 cimport groveC
-cdef function_treeC.Tree _helper(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, 
+cdef function_treeC.Tree _helper(object expr, cnp.ndarray domain,
             list funcs, dict names_params):
     
     cdef function_treeC.Tree tree
@@ -67,8 +67,14 @@ cdef void _worker_main():
     # =========================================================
     # Parent broadcasts the configuration to all workers
     cdef dict config = parent_comm.bcast(None, root=0)
-    
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] domain = config['domain']
+
+    # Flexible domain (plan §2.6): install the master's variable registry
+    # FIRST — every rebuild below (depth-1 wires, from_string leaves)
+    # classifies symbols against it; a fresh process would otherwise run
+    # under the default ('x',) and desync from the shipped payloads.
+    real_functionC.set_variables(tuple(config.get('variables', ('x',))))
+
+    cdef cnp.ndarray domain = config['domain']
     cdef list funcs = config['funcs']
     cdef list operations = config['operations']
     cdef cnp.ndarray[cnp.float64_t, ndim=1] y = config['y']
@@ -82,11 +88,23 @@ cdef void _worker_main():
     # Phase 2.10 (final): opaque templates — resolve '@atom:' tokens in
     # all_primitives and rebuild 'skel3b' depth-1 payloads. None/absent for
     # atom-free burn-ins (legacy configs included).
-    cdef list atoms = config.get('atoms')
+    # Flexible-domain fix (adversarial review): the wire carries
+    # (name, template) STRING PAIRS; AtomSpec construction is
+    # registry-dependent and must happen HERE, after the set_variables
+    # call above — an AtomSpec object in the config would have been
+    # unpickled during the bcast, under this fresh process's DEFAULT
+    # registry, and its template validation would have crashed the worker
+    # (deadlocking the master's next collective).
+    cdef list _atom_wire = config.get('atoms')
+    cdef list atoms = None
     cdef dict atom_specs = None
-    if atoms:
+    cdef real_functionC.AtomSpec _spec_obj
+    if _atom_wire:
+        atoms = []
         atom_specs = {}
-        for _spec_obj in atoms:
+        for _nm, _tp in _atom_wire:
+            _spec_obj = real_functionC.AtomSpec(_nm, _tp)
+            atoms.append(_spec_obj)
             atom_specs[_spec_obj.name] = _spec_obj
 
     # =========================================================
@@ -230,7 +248,7 @@ cdef void _worker_main():
     print(f'[Worker {rank}] disconnected.')
 
 cdef function_treeC.Tree _combine_nodes(function_treeC.Node left_node, function_treeC.Node right_node, object op,
-                    cnp.ndarray[cnp.float64_t, ndim=1] domain, list funcs, double T):
+                    cnp.ndarray domain, list funcs, double T):
     """Combine two nodes with an operation into a new tree."""
 
 
@@ -280,7 +298,7 @@ cdef function_treeC.Tree _combine_nodes(function_treeC.Node left_node, function_
 
 
 cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, ndim=1] y,
-                    cnp.ndarray[cnp.float64_t, ndim=1] domain, double lambda_reg, 
+                    cnp.ndarray domain, double lambda_reg,
                     str method_str, bint use_gradients, double T):
     """Evaluate a tree and return serializable result or None."""
     if tree is None:
@@ -315,7 +333,11 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     # wires — sympify(description) below would decompose the opaque leaves
     # into ordinary subtrees on the master's rebuild. _tree_to_wire yields
     # the same (payload, name_values, post) 3-tuple shape.
-    if gp_movesC._contains_atomic(tree.root):
+    # Flexible domain (plan §0 D8): multivariate candidates ALWAYS return
+    # as skeleton wires too — the master's raw-expr rebuild path
+    # (_expr_to_tree) is d=1-only.
+    if (gp_movesC._contains_atomic(tree.root)
+            or real_functionC.n_variables() > 1):
         return groveC._tree_to_wire(tree, post)
     cdef object expression = tree.tree_get_description()
     try:
@@ -358,7 +380,7 @@ cdef tuple _sampler_tree_to_wire(function_treeC.Tree tree, double post):
 
 cdef function_treeC.Tree _sampler_tree_from_wire(
         object expr, dict name_values,
-        cnp.ndarray[cnp.float64_t, ndim=1] domain, list funcs,
+        cnp.ndarray domain, list funcs,
         object sigma, double g_tau, object atom_specs=None):
     return groveC._tree_from_wire(expr, name_values, domain, funcs,
                                   sigma, g_tau, atom_specs)
@@ -380,7 +402,10 @@ cdef void _sampler_main():
         np.ascontiguousarray(config['temperatures'], dtype=np.float64)
     cdef double my_T = float(temps[rank])
     cdef object my_seed = config['worker_seeds'][rank]
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] x = \
+    # Flexible domain (plan §2.6): install the master's registry BEFORE
+    # any wire rebuild or Grove construction on this fresh process.
+    real_functionC.set_variables(tuple(ctor.get('variables', ('x',))))
+    cdef cnp.ndarray x = \
         np.ascontiguousarray(ctor['x'], dtype=np.float64)
 
     # Optional caps (module-level in THIS process's gp_movesC instance).
@@ -400,17 +425,27 @@ cdef void _sampler_main():
         polya.set_state(pstate)
 
     # ---- Phase 2.10 Stage 3b: opaque-primitive templates --------------------
-    # Shipped in the config (AtomSpec pickles via __reduce__). They go to
-    # (a) the Grove, so this worker's kernel moves propose/retire opaque
-    # leaves with the same M+1+A densities as the master's, and (b) every
-    # wire rebuild, so 'skel3b' payloads reconstruct atoms as units. The
-    # atom SYMBOLS are already in polya_state's vocabulary, so the
-    # ('kind', idx) path mapping is identical on every replica.
-    cdef list atoms = config.get('atoms')
+    # Shipped in the config as (name, template) STRING PAIRS (flexible-
+    # domain fix, adversarial review: AtomSpec construction is registry-
+    # dependent, so it must happen AFTER the set_variables call above —
+    # a pickled AtomSpec would have re-validated during the bcast under
+    # this fresh process's default registry and crashed the worker).
+    # Rebuilt specs go to (a) the Grove, so this worker's kernel moves
+    # propose/retire opaque leaves with the same M+1+A densities as the
+    # master's, and (b) every wire rebuild, so 'skel3b' payloads
+    # reconstruct atoms as units. The atom SYMBOLS are already in
+    # polya_state's vocabulary, so the ('kind', idx) path mapping is
+    # identical on every replica.
+    cdef list _atom_wire = config.get('atoms')
+    cdef list atoms = None
     cdef dict atom_specs = None
-    if atoms:
+    cdef real_functionC.AtomSpec _spec_obj
+    if _atom_wire:
+        atoms = []
         atom_specs = {}
-        for _spec_obj in atoms:
+        for _nm, _tp in _atom_wire:
+            _spec_obj = real_functionC.AtomSpec(_nm, _tp)
+            atoms.append(_spec_obj)
             atom_specs[_spec_obj.name] = _spec_obj
 
     # ---- build MY grove -----------------------------------------------------
@@ -425,7 +460,11 @@ cdef void _sampler_main():
         burn_in=False, use_mpi=0,
         polya=polya, seed=my_seed, g_tau=ctor['g_tau'],
         adapt_moves=bool(ctor['adapt_moves']),
-        atoms=atoms)
+        atoms=atoms,
+        # Legacy ('x',) stays on the variables=None ctor path
+        # (bit-identical); custom/multivariate registries are explicit.
+        variables=(None if tuple(ctor.get('variables', ('x',))) == ('x',)
+                   else tuple(ctor['variables'])))
     grove.polya_defer = True
 
     # Install the master's CURRENT trees (start exactly where it stands).

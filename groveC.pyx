@@ -1,7 +1,9 @@
 # cython: language_level=3
 import random
+import re
 import warnings
 import numpy as np
+import sympy as sp
 cimport numpy as cnp
 cimport function_treeC
 cimport gp_movesC
@@ -143,7 +145,7 @@ cdef class Grove:
     """
     
     def __init__(self,
-                 cnp.ndarray[cnp.float64_t, ndim=1] x,
+                 cnp.ndarray x,
                  cnp.ndarray[cnp.float64_t, ndim=1] y,
                  double T,  # accepts scalar or array; use T_arr[0]
                  int size,
@@ -169,16 +171,79 @@ cdef class Grove:
                  double adapt_floor=0.02,
                  double adapt_logit_bound=4.0,
                  double adapt_target=0.5,
-                 list atoms=None):
+                 list atoms=None,
+                 object variables=None):
 
-        # Memory view - safer alternative to raw pointers
-        cdef cnp.float64_t[::1] x_view = x
+        # --- Flexible domain (flexible_domain_plan.md §3) -----------------
+        # Resolve and install the variable registry BEFORE any leaf is
+        # compiled. variables=None + 1-D x -> legacy ('x',), bit-identical;
+        # variables=None + (d, n) x -> default ('x0', ..., 'x{d-1}');
+        # an explicit tuple must match x's leading dimension. Strict (d, n)
+        # layout only (coordinate ROWS — plan §6 Q1 ADOPTED).
+        cdef tuple _vars
+        cdef bint _flex
+        cdef str _fs, _s_str
+        if isinstance(variables, str):
+            raise ValueError(
+                "Grove: variables must be a sequence of names, not a "
+                "string (got %r — a string would split into characters)"
+                % (variables,))
+        if x.ndim == 1:
+            _vars = ('x',) if variables is None else tuple(variables)
+            if len(_vars) != 1:
+                raise ValueError(
+                    "Grove: a 1-D x carries exactly one variable; got "
+                    "variables=%r" % (variables,))
+        elif x.ndim == 2:
+            _vars = (tuple('x%d' % _i for _i in range(x.shape[0]))
+                     if variables is None else tuple(variables))
+            if len(_vars) != x.shape[0]:
+                raise ValueError(
+                    "Grove: x has shape (d, n) = %r — coordinate ROWS, "
+                    "points along the last axis — but %d variable names "
+                    "were given. Pass X.T if your data is (n, d)."
+                    % (tuple([x.shape[0], x.shape[1]]), len(_vars)))
+            if len(_vars) == 1:
+                raise ValueError(
+                    "Grove: a single-variable domain must use the 1-D "
+                    "(n,) layout — pass x.ravel(). (A (1, n) array would "
+                    "ride the d=1 code paths as a 2-D object; found by "
+                    "the adversarial review.)")
+        else:
+            raise ValueError(
+                "Grove: x must be (n,) or (d, n), got ndim=%d" % x.ndim)
+        _flex = (x.ndim == 2) or (variables is not None)
+        real_functionC.set_variables(_vars)
+
         # Store y as instance attribute for use in optimization and posterior computation
         self.data = np.asarray(y, dtype=np.float64)
         self.lambda_reg = lambda_reg  # default; can be changed in optimize()
         if operations is None:
+            if len(_vars) > 1:
+                raise ValueError(
+                    "Grove: pass `operations` explicitly for a "
+                    "multivariate domain — the legacy default includes "
+                    "compose 'o', which is d=1-only "
+                    "(flexible_domain_plan.md §0 D6 / §6 Q2)")
             operations = ["+", "-", "*", "/", "**", "o"]
+        elif len(_vars) > 1 and "o" in operations:
+            raise ValueError(
+                "Grove: compose 'o' is not defined for multivariate "
+                "domains (flexible_domain_plan.md §8.1 — standing item)")
         self.operations = operations
+        # Flexible mode only (additive — legacy configs skip this): every
+        # vocabulary string must be an expression in the REGISTERED
+        # variables alone (catches typos like 'sin(x2)' at construction,
+        # not as a silent parameter-bearing leaf mid-chain).
+        if _flex:
+            for _fs in funcs:
+                for _s in sp.sympify(_fs).free_symbols:
+                    _s_str = str(_s)
+                    if _s_str not in _vars:
+                        raise ValueError(
+                            "Grove: vocabulary entry %r uses symbol %r, "
+                            "which is not a registered variable %r"
+                            % (_fs, _s_str, _vars))
         # Phase 2.10 Stage 3a: opaque-primitive templates. None/[] -> A = 0,
         # every move density reduces to the bit-identical legacy form.
         # Validated here so a mistyped entry fails at construction, not as
@@ -189,6 +254,15 @@ cdef class Grove:
                     raise TypeError(
                         "Grove: atoms entries must be real_functionC."
                         "AtomSpec instances, got %r" % type(_a))
+            if _flex:
+                # Flexible domain: AtomSpec classification consults the
+                # variable registry, and these specs may have been built
+                # BEFORE this Grove installed it — re-derive each template
+                # under the current registry (deterministic; a template
+                # whose symbols no longer classify raises here, at
+                # construction, instead of misbinding slots mid-chain).
+                atoms = [real_functionC.AtomSpec(_a.name, _a.template)
+                         for _a in atoms]
             self.atoms = list(atoms)
         else:
             self.atoms = None
@@ -1732,6 +1806,12 @@ cdef class Grove:
                 "description strings and cannot carry opaque atomic "
                 "primitives; run the burn-in serially (use_mpi=0) or with "
                 "use_spawn=True.")
+        if real_functionC.n_variables() > 1:
+            raise NotImplementedError(
+                "_burn_in_stage2_parallel rebuilds candidates from "
+                "description strings via _expr_to_tree (d=1-only, plan "
+                "§0 D8); run the burn-in serially (use_mpi=0) or with "
+                "use_spawn=True.")
         cdef object comm = MPI.COMM_WORLD
         cdef rank = int(comm.Get_rank())
         cdef n_procs = int(comm.Get_size())
@@ -1975,6 +2055,10 @@ cdef class Grove:
         # =========================================================
         config = {
             'domain': self.domain,
+            # Flexible domain: spawned workers are fresh processes — they
+            # install this registry FIRST, before any wire rebuild
+            # (plan §2.6). Legacy runs ship ('x',).
+            'variables': real_functionC.get_variables(),
             'funcs': self.funcs,
             'operations': self.operations,
             'y': np.asarray(y),
@@ -1987,8 +2071,16 @@ cdef class Grove:
             'tree_cache': tree_cache,
             # Phase 2.10 (final): templates for the workers — resolves the
             # '@atom:' tokens in all_primitives and rebuilds 'skel3b'
-            # payloads in depth1_data (AtomSpec pickles via __reduce__).
-            'atoms': self.atoms,
+            # payloads in depth1_data. Flexible-domain fix (adversarial
+            # review): ship (name, template) STRING PAIRS, not AtomSpec
+            # objects — an AtomSpec unpickles via __reduce__ -> __init__
+            # DURING the bcast, i.e. BEFORE the worker installs the
+            # shipped registry, and template classification is
+            # registry-dependent. The worker rebuilds AtomSpec AFTER
+            # set_variables; for legacy ('x',) registries the rebuilt
+            # objects are identical to what unpickling produced.
+            'atoms': ([(_a.name, _a.template) for _a in self.atoms]
+                      if self.atoms else None),
         }
         
         intercomm.bcast(config, root=MPI.ROOT)
@@ -2271,7 +2363,11 @@ cpdef tuple _tree_to_wire(function_treeC.Tree tree, double post):
         if lf.is_atomic():
             has_atomic = True
             break
-    if has_atomic:
+    # Flexible domain (plan §0 D8): multivariate trees ALWAYS ship as the
+    # exact-shape skeleton — the raw-expr payload is rebuilt by
+    # _expr_to_tree, whose function-application branch composes (d=1-only).
+    # Atom-free d=1 trees keep the HISTORICAL raw-expr payload bytes.
+    if has_atomic or real_functionC.n_variables() > 1:
         return (('skel3b',
                  function_treeC.tree_to_skel(tree.root),
                  tree.tree_get_description()),
@@ -2365,7 +2461,7 @@ cdef class Forest:
     """
 
     def __init__(self,
-                 cnp.ndarray[cnp.float64_t, ndim=1] x,
+                 cnp.ndarray x,
                  cnp.ndarray[cnp.float64_t, ndim=1] y,
                  cnp.ndarray[cnp.float64_t, ndim=1] temperatures,
                  int size_per_grove,
@@ -2387,13 +2483,61 @@ cdef class Forest:
                  double alpha_0=1.0,
                  bint adapt_moves=False,
                  list atoms=None,
-                 bint freeze_vocab=False):
+                 bint freeze_vocab=False,
+                 object variables=None):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
         self.use_mpi = self.n_procs >= 2
+        # --- Flexible domain (flexible_domain_plan.md §3): resolve the
+        # variable registry BEFORE the Pólya/atoms handling below (both are
+        # registry-dependent) — same rules as Grove.__init__ (which then
+        # re-installs the identical tuple, idempotently).
+        cdef tuple _vars
+        cdef bint _flex
+        if isinstance(variables, str):
+            raise ValueError(
+                "Forest: variables must be a sequence of names, not a "
+                "string (got %r — a string would split into characters)"
+                % (variables,))
+        if x.ndim == 1:
+            _vars = ('x',) if variables is None else tuple(variables)
+            if len(_vars) != 1:
+                raise ValueError(
+                    "Forest: a 1-D x carries exactly one variable; got "
+                    "variables=%r" % (variables,))
+        elif x.ndim == 2:
+            _vars = (tuple('x%d' % _vi for _vi in range(x.shape[0]))
+                     if variables is None else tuple(variables))
+            if len(_vars) != x.shape[0]:
+                raise ValueError(
+                    "Forest: x has shape (d, n) = %r — coordinate ROWS, "
+                    "points along the last axis — but %d variable names "
+                    "were given. Pass X.T if your data is (n, d)."
+                    % (tuple([x.shape[0], x.shape[1]]), len(_vars)))
+            if len(_vars) == 1:
+                raise ValueError(
+                    "Forest: a single-variable domain must use the 1-D "
+                    "(n,) layout — pass x.ravel(). (A (1, n) array would "
+                    "ride the d=1 code paths as a 2-D object; found by "
+                    "the adversarial review.)")
+        else:
+            raise ValueError(
+                "Forest: x must be (n,) or (d, n), got ndim=%d" % x.ndim)
+        _flex = (x.ndim == 2) or (variables is not None)
+        real_functionC.set_variables(_vars)
         if operations is None:
+            if len(_vars) > 1:
+                raise ValueError(
+                    "Forest: pass `operations` explicitly for a "
+                    "multivariate domain — the legacy default includes "
+                    "compose 'o', which is d=1-only "
+                    "(flexible_domain_plan.md §0 D6 / §6 Q2)")
             operations = ["+", "-", "*", "/", "**", "o"]
+        elif len(_vars) > 1 and "o" in operations:
+            raise ValueError(
+                "Forest: compose 'o' is not defined for multivariate "
+                "domains (flexible_domain_plan.md §8.1 — standing item)")
         cdef int G = self.temperatures.shape[0]
         cdef int g
         cdef int cap
@@ -2453,12 +2597,20 @@ cdef class Forest:
             # str/unicode coercion rule. A Python-level call is resolved at
             # runtime and is identical in behaviour (this runs once, at
             # construction).
-            _polya_any = self.polya
             for _spec_obj in atoms:
                 if not isinstance(_spec_obj, real_functionC.AtomSpec):
                     raise TypeError(
                         "Forest: atoms entries must be real_functionC."
                         "AtomSpec instances, got %r" % type(_spec_obj))
+            if _flex:
+                # Flexible domain: re-derive each template under the
+                # registry installed above (AtomSpec classification is
+                # registry-dependent; specs may pre-date this Forest).
+                atoms = [real_functionC.AtomSpec(_spec_obj.name,
+                                                 _spec_obj.template)
+                         for _spec_obj in atoms]
+            _polya_any = self.polya
+            for _spec_obj in atoms:
                 _polya_any.add_primitive(_spec_obj.name, None)
             self.atoms = list(atoms)
         else:
@@ -2486,7 +2638,12 @@ cdef class Forest:
                       polya=self.polya,
                       seed=int(child_seeds[g].generate_state(1)[0]),
                       g_tau=g_tau, adapt_moves=adapt_moves,
-                      atoms=self.atoms)
+                      atoms=self.atoms,
+                      # Legacy stays on the variables=None Grove path
+                      # (bit-identical: no funcs validation, no atom
+                      # re-derivation); flexible mode passes the resolved
+                      # tuple explicitly.
+                      variables=(_vars if _flex else None))
             )
         # Phase 2.12 (MPI sampling): stash the Grove constructor arguments so
         # run_mpi_spawn can ship them to spawned workers, which rebuild
@@ -2514,6 +2671,10 @@ cdef class Forest:
             'use_gradients': use_gradients,
             'g_tau': g_tau,
             'adapt_moves': adapt_moves,
+            # Flexible domain: spawned sampler workers are fresh processes
+            # — they must install THIS registry before any wire rebuild or
+            # Grove construction (plan §2.6).
+            'variables': _vars,
         }
 
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove):
@@ -2837,7 +2998,11 @@ cdef class Forest:
             # (kernel moves) and to every wire rebuild. The atom SYMBOLS
             # are already registered in polya_state's vocabulary, so the
             # ('kind', idx) path mapping is identical on every replica.
-            'atoms': self.atoms,
+            # Flexible-domain fix (adversarial review): (name, template)
+            # STRING PAIRS on the wire — see the burn-in config note; the
+            # worker rebuilds AtomSpec AFTER installing the registry.
+            'atoms': ([(_a.name, _a.template) for _a in self.atoms]
+                      if self.atoms else None),
         }
         intercomm.bcast(config, root=MPI.ROOT)
 

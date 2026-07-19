@@ -1193,6 +1193,44 @@ REMAINING 4.3 ARMS (queued): no-tempering (ladder=[1]), no-BIC
 
 ---
 
+## Phase FD — Flexible multivariate domains (branch `flexible_domain`) ✅ KERNEL IMPLEMENTED 2026-07-19
+f: ℝᵈ → ℝ with user-defined variable names (default x0..x_{d-1}); legacy
+1-D runs bit-identical. Full design (decisions D1–D8), edit inventory,
+test plan and implementation notes live in **`flexible_domain_plan.md`**
+(the phase's living doc — read §0 and §9 first).
+- Kernel: module-level variable registry in real_functionC with
+  REGISTRY-FIRST symbol classification (the 'x0'-matches-the-param-regex
+  trap: a variable classified as a parameter would be optimized as a
+  constant); strict (d, n) coordinate-rows domain layout; from_string
+  compiles over all registry variables (d=1 keeps the historical closure
+  verbatim); naming guards so new_par/atom slots can never mint a
+  registered variable name; compose ('o') gated d=1-only via ONE innermost
+  gate in RealFunctionC.compose (compose-at-d>1 is a standing item, plan
+  §8.1 — user decision 2026-07-19); d>1 trees ALWAYS ride the skel3b wire
+  (raw-expr rebuild is d=1-only); spawned MPI workers install the shipped
+  registry before any rebuild.
+- Additive contract CERTIFIED on this box: seeded 150-step micro-run
+  (bare Grove on the 6-op vocab + Pólya-reinforced Grove + 2-rung Forest
+  EMC with swaps/crossovers) BYTE-IDENTICAL pre/post-edit; suites
+  test_phase23/28/29, `mpiexec -n 1` test_phase2mpi, test_cython4 all
+  green. NB the 2.10 fingerprint suites live in the experiment-side
+  checkout — re-run there before any merge to master.
+- Tests: `test_phaseFD.py` (FD-a..FD-k): registry/classification incl.
+  the variable-as-parameter catastrophe assert, naming guards, (n,)
+  shape law, BIC branches + NaN-penalty regression at d=2, d=2
+  determinism (accept rate 0.38), Pólya + frozen vocabulary at d=2,
+  serial burn-in+EMC recovery of y = 2.5·x0 + sin(x1) (nrmse 5.3e-4),
+  wire round-trips (legacy d=1 raw-expr payload byte-contract kept),
+  atoms at d=2, live 2-rung run_mpi_spawn at d=2 (`--mpi` flag under
+  `mpiexec -n 1`).
+- Pre-existing anomalies OBSERVED, deliberately untouched (flagged for
+  the test-side instance, plan §9): Tree's σ-ARRAY optimize path passes
+  optimize_sigma args in the wrong positional slots (function_treeC
+  ~944/981, never exercised by suites); RealFunctionC.is_param() returns
+  True/None, never False; module-level `is_parameter` is dead code.
+
+---
+
 ## Phase 5 — Writing
 **→ The full, consequential section-by-section writing roadmap now lives in
 `PAPER_PLAN.md` (created 2026-07-09). It supersedes the thin skeleton below,
@@ -1267,3 +1305,6 @@ question into the paper's formalism (its §10.3).**
   bookkeeping, within-grove crossover reversibility, Pólya auto-register ordering,
   NaN root_posteriors on node_list init, _propose retry mixture
 - ⏳ Phase 4 experiments (4.1 sanity → 4.3 ablations → 4.2 hero) — gate REOPENS after 2.13(a)–(e)
+- ✅ Phase FD kernel (flexible multivariate domains, branch `flexible_domain`,
+  2026-07-19) — registry + (d,n) domains + guards + test_phaseFD.py;
+  compose-less (standing item). Details: flexible_domain_plan.md §9.
