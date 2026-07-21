@@ -51,6 +51,14 @@ cdef class Grove:
     # Invalidated whenever the y reference changes between _step calls.
     cdef public dict _bic_cache
     cdef public object _cache_y
+    # Phase 4.4 (structural-constraint prior tilt, 2026-07-19): opt-in
+    # user callable tree -> log-prior increment (e.g. -lambda*C(tree)
+    # for an asymptotic-behaviour constraint). A PRIOR term: enters the
+    # acceptance sums next to the Polya log-prior, never mse/BIC/
+    # root_posteriors. None (default) = bit-identical legacy.
+    cdef public object structural_prior
+    cdef public dict _sp_cache          # description -> tilt (y-independent)
+    cdef public bint structural_prior_cache
     # Phase 2.8: optional adaptive move-weight calibration (OFF by default).
     # _move_logits holds the 6 logical-group logits; _adapt_t counts
     # adaptive updates for the diminishing step size gamma_t.
@@ -101,6 +109,8 @@ cdef class Grove:
     cdef double _score_post(self, function_treeC.Tree cand,
                             cnp.ndarray[cnp.float64_t, ndim=1] y,
                             bint optimize=*)
+    # Phase 4.4: structural-prior tilt evaluator (0.0 when feature off).
+    cdef double _sp(self, function_treeC.Tree tree)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
     cpdef dict move_stats(self)
     cpdef list drain_deferred_paths(self)

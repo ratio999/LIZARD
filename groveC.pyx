@@ -169,7 +169,9 @@ cdef class Grove:
                  double adapt_floor=0.02,
                  double adapt_logit_bound=4.0,
                  double adapt_target=0.5,
-                 list atoms=None):
+                 list atoms=None,
+                 object structural_prior=None,
+                 bint structural_prior_cache=True):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -192,6 +194,14 @@ cdef class Grove:
             self.atoms = list(atoms)
         else:
             self.atoms = None
+        # Phase 4.4: structural-constraint prior tilt (opt-in; None =
+        # bit-identical legacy). Validated callable; see _sp().
+        if structural_prior is not None and not callable(structural_prior):
+            raise TypeError("Grove: structural_prior must be callable "
+                            "(tree -> float log-prior increment) or None")
+        self.structural_prior = structural_prior
+        self.structural_prior_cache = structural_prior_cache
+        self._sp_cache = {}
         self.sigma = sigma if sigma is not None else 1.0
         # Phase 2.1.PM birth density g(theta) = N(0, g_tau^2).
         # Default to std(y) when caller doesn't pass one explicitly;
@@ -941,7 +951,14 @@ cdef class Grove:
             old_prior = self.polya.log_prior(old_path)
             new_prior = self.polya.log_prior(new_path)
 
-        cdef double dtarget = (new_post + new_prior) - (old_post + old_prior)
+        # Phase 4.4: structural-prior tilt (0.0 unless structural_prior
+        # is set — single branch inside _sp, so the default path is
+        # unchanged). A prior term: lives ONLY in this comparison, never
+        # in root_posteriors / the BIC cache.
+        cdef double sp_old = self._sp(self.trees[i])
+        cdef double sp_new = self._sp(cand)
+        cdef double dtarget = ((new_post + new_prior + sp_new)
+                               - (old_post + old_prior + sp_old))
         cdef double q_corr  = lqr - lqf
         cdef double log_alpha
 
@@ -1049,9 +1066,12 @@ cdef class Grove:
             new_prior_i = self.polya.log_prior(new_path_i)
             new_prior_j = self.polya.log_prior(new_path_j)
 
+        # Phase 4.4: structural-prior tilt terms (0.0 when feature off).
         cdef double dtarget = (
-            (new_post_i + new_prior_i + new_post_j + new_prior_j)
-            - (old_post_i + old_prior_i + old_post_j + old_prior_j))
+            (new_post_i + new_prior_i + self._sp(candA)
+             + new_post_j + new_prior_j + self._sp(candB))
+            - (old_post_i + old_prior_i + self._sp(self.trees[i])
+               + old_post_j + old_prior_j + self._sp(self.trees[j])))
         cdef double q_corr = lqr - lqf
         cdef double log_alpha
 
@@ -1150,6 +1170,42 @@ cdef class Grove:
                                              dict(cand.name_values))
             return new_post
         return -1.0e300
+
+    cdef double _sp(self, function_treeC.Tree tree):
+        """Phase 4.4: structural-constraint prior tilt for one tree.
+
+        Returns the user callable's LOG-prior increment (encode -lam*C
+        in the callable); 0.0 when the feature is off — one branch, so
+        the default path is untouched. Evaluated once per candidate
+        COMPARISON (the acceptance sums only): never inside the Powell
+        objective, never folded into root_posteriors or the BIC cache,
+        exactly like the Polya log-prior. Description-keyed caching
+        (default) matches the structure-scale contract of constraints;
+        set structural_prior_cache=False for theta-sensitive callables.
+        Returns must be finite: a non-finite evaluation is treated as a
+        constraint-evaluation failure and floored at -1e90 (soft
+        reject) — bounded penalties keep the move graph irreducible,
+        and the floor matches the magnitude the BIC-cache guard already
+        treats as penalty-scale.
+        """
+        if self.structural_prior is None:
+            return 0.0
+        cdef object key, v
+        cdef double out
+        if self.structural_prior_cache:
+            key = tree.tree_get_description()
+            v = self._sp_cache.get(key)
+            if v is not None:
+                return <double> v
+            out = <double> self.structural_prior(tree)
+            if not np.isfinite(out) or out < -1.0e90:
+                out = -1.0e90
+            self._sp_cache[key] = out
+            return out
+        out = <double> self.structural_prior(tree)
+        if not np.isfinite(out) or out < -1.0e90:
+            out = -1.0e90
+        return out
 
     cpdef dict move_stats(self):
         """Per-move (proposed, accepted, rate) summary. Feeds Phase 2.8."""
@@ -2387,7 +2443,9 @@ cdef class Forest:
                  double alpha_0=1.0,
                  bint adapt_moves=False,
                  list atoms=None,
-                 bint freeze_vocab=False):
+                 bint freeze_vocab=False,
+                 object structural_prior=None,
+                 bint structural_prior_cache=True):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
@@ -2486,7 +2544,9 @@ cdef class Forest:
                       polya=self.polya,
                       seed=int(child_seeds[g].generate_state(1)[0]),
                       g_tau=g_tau, adapt_moves=adapt_moves,
-                      atoms=self.atoms)
+                      atoms=self.atoms,
+                      structural_prior=structural_prior,
+                      structural_prior_cache=structural_prior_cache)
             )
         # Phase 2.12 (MPI sampling): stash the Grove constructor arguments so
         # run_mpi_spawn can ship them to spawned workers, which rebuild
@@ -2561,8 +2621,10 @@ cdef class Forest:
             pathB = self.polya.extract_path(B.trees[i].get_root())
             priorA = self.polya.log_prior(pathA)
             priorB = self.polya.log_prior(pathB)
-        cdef double Ua = postA + priorA
-        cdef double Ub = postB + priorB
+        # Phase 4.4: the structural tilt is part of each chain's target
+        # (whole-posterior tempering), so it belongs in the swap U's.
+        cdef double Ua = postA + priorA + A._sp(A.trees[i])
+        cdef double Ub = postB + priorB + B._sp(B.trees[i])
         cdef double delta = (1.0 / Ta - 1.0 / Tb) * (Ub - Ua)
         cdef double acc_p = _safe_exp(delta)
         if self._py_rng.random() < min(1.0, acc_p):
@@ -2652,10 +2714,11 @@ cdef class Forest:
             priorB_old = self.polya.log_prior(pathB_old)
             priorA_new = self.polya.log_prior(pathA_new)
             priorB_new = self.polya.log_prior(pathB_new)
-        cdef double Ua_old = postA_old + priorA_old
-        cdef double Ub_old = postB_old + priorB_old
-        cdef double Ua_new = postA_new + priorA_new
-        cdef double Ub_new = postB_new + priorB_new
+        # Phase 4.4: structural-prior tilt in each U (0.0 when off).
+        cdef double Ua_old = postA_old + priorA_old + A._sp(A.trees[i])
+        cdef double Ub_old = postB_old + priorB_old + B._sp(B.trees[j])
+        cdef double Ua_new = postA_new + priorA_new + A._sp(childA)
+        cdef double Ub_new = postB_new + priorB_new + B._sp(childB)
         cdef double log_alpha = ((Ua_new - Ua_old) / Ta
                                  + (Ub_new - Ub_old) / Tb
                                  + (lqr - lqf))
@@ -2766,6 +2829,20 @@ cdef class Forest:
         cdef int G = len(self.groves)
         if G < 2:
             raise ValueError("run_mpi_spawn needs >= 2 temperature rungs")
+        # Phase 4.4 v1 guard: the structural-prior tilt is a raw Python
+        # callable and cannot cross the spawn boundary (workers rebuild
+        # their Groves from picklable ctor args only), so the workers'
+        # in-round _step moves would silently sample WITHOUT the tilt.
+        # Declarative constraint specs (the AtomSpec pattern) are the
+        # documented v2 route if spawn support is ever needed.
+        for _g_obj in self.groves:
+            if (<Grove> _g_obj).structural_prior is not None:
+                raise NotImplementedError(
+                    "structural_prior is not supported under "
+                    "run_mpi_spawn (v1): the callable cannot be "
+                    "shipped to spawned workers. Use the serial EMC "
+                    "loop (run_all + attempt_swaps + "
+                    "attempt_crossovers) instead.")
         # Phase 2.10 Stage 3b: opaque primitives cross the wire as
         # ('skel3b', ...) payloads (see _tree_to_wire). The master-side
         # rebuilds below need the template registry; workers receive the
@@ -2914,8 +2991,11 @@ cdef class Forest:
                                 _pB = self.polya.extract_path(treeB.get_root())
                                 priorA_old = self.polya.log_prior(_pA)
                                 priorB_old = self.polya.log_prior(_pB)
-                            Ua = (<double> wireA[2]) + priorA_old
-                            Ub = (<double> wireB[2]) + priorB_old
+                            # Phase 4.4: structural tilt in the U's (0.0
+                            # when off; unreachable with the tilt ON under
+                            # the v1 spawn guard — kept correct for v2).
+                            Ua = (<double> wireA[2]) + priorA_old + A._sp(treeA)
+                            Ub = (<double> wireB[2]) + priorB_old + B._sp(treeB)
                             delta = (1.0 / A.T - 1.0 / B.T) * (Ub - Ua)
                             if self._py_rng.random() < min(1.0, _safe_exp(delta)):
                                 # A swap is just exchanging the two wire tuples.
@@ -2955,6 +3035,12 @@ cdef class Forest:
                             if self.polya is not None:
                                 _pA = self.polya.extract_path(treeA.get_root())
                                 _pB = self.polya.extract_path(treeB.get_root())
+                            # Phase 4.4: OLD structural tilts BEFORE the
+                            # in-place crossover mutates treeA/treeB (0.0
+                            # when off; unreachable with the tilt ON under
+                            # the v1 spawn guard — kept correct for v2).
+                            sp_mA_old = A._sp(treeA)
+                            sp_mB_old = B._sp(treeB)
                             # Same RNG discipline as the serial path.
                             gp_movesC.set_rng(self._py_rng, self._np_rng)
                             function_treeC.set_rng(self._py_rng, self._np_rng)
@@ -2972,11 +3058,15 @@ cdef class Forest:
                                         priorB_old = self.polya.log_prior(_pB)
                                         priorA_new = self.polya.log_prior(_pAn)
                                         priorB_new = self.polya.log_prior(_pBn)
+                                    # Phase 4.4: treeA/treeB are the CHILDREN
+                                    # here, so A._sp(treeA) is the new tilt.
                                     log_alpha = (
-                                        (postA_new + priorA_new
-                                         - (<double> wireA[2]) - priorA_old) / A.T
-                                        + (postB_new + priorB_new
-                                           - (<double> wireB[2]) - priorB_old) / B.T
+                                        (postA_new + priorA_new + A._sp(treeA)
+                                         - (<double> wireA[2]) - priorA_old
+                                         - sp_mA_old) / A.T
+                                        + (postB_new + priorB_new + B._sp(treeB)
+                                           - (<double> wireB[2]) - priorB_old
+                                           - sp_mB_old) / B.T
                                         + (lqr - lqf))
                                     u = self._py_rng.random()
                                     if log_alpha >= 0.0 or (u > 0.0 and

@@ -1187,9 +1187,75 @@ in ALL arms ⇒ burn-in artifact). COMPLETED CONCLUSION: reinforcement
 pays off and is FRONT-LOADED — learning Θ̄ matters (+3 recoveries),
 learning beyond Θ̄ adds nothing at these budgets. Recipe: reinforce
 through warm-up, freeze at Θ̄, sample with theorem-backed guarantees.
-REMAINING 4.3 ARMS (queued): no-tempering (ladder=[1]), no-BIC
-(penalty toggle), affine-atom vocabulary pilot; no-Pólya deferred
-(user).
+REMAINING 4.3 ARMS: **ALL DONE 2026-07-19 (RESULTS §10) — PHASE 4
+COMPLETE.** notemper 16/18 (inv_quad 0/2: tempering matters exactly
+on the multimodal target); nobic 12/18 with winners at k up to 20 /
+depth 8 (parsimony = what makes the output symbolic); affine 18/18 —
+best rate of any arm, fixed poly2/71, freq_sin_atom won by a single
+depth-0 template leaf, BUT every depth-3 winner template-dressed
+(cosine-cubics etc.) at 5–25× compute — dressed vocabularies trade
+symbolic fidelity + compute for robustness. Cross-cutting: EVERY
+perturbed arm fixed poly2/71 (knife-edge miss confirmed).
+Component-justification table: RESULTS §10. Deferred past Phase 4:
+no-Pólya arm (user), profiled-σ real-data route, flexible atoms
+(2.11), multi-start Powell, adaptation-in-unseeded-searches question.
+
+### 4.4 Structural-constraint prior tilt (opt-in) — DONE 2026-07-21
+**Origin (user question):** can constraints like "this has to diverge
+like x²" be added to the LOSS, possibly via loss_function.pyx, without
+breaking the formalism? **Formal answer that fixed the design:** a
+candidate-dependent, data-independent C(τ) is a PRIOR statement.
+Sound wiring: multiplicative tilt π(τ) ∝ π_polya(τ)·exp(−λC(τ)) —
+Bayes/evidence/BIC intact, MH ratios gain one term, bounded penalties
+preserve irreducibility, whole-posterior tempering treats it like any
+prior factor. Loss-side wiring (all a (y_true,y_pred) API can say)
+multiplies C by n/(2σ²) and tempers it as likelihood → constraint
+strength scales with n and noise, evidence semantics collapse (Gibbs-
+posterior trap). loss_function.pyx / custom_loss_functionC stay DEAD —
+not the vehicle. **Kernel (additive, off by default):**
+`structural_prior=None` kwarg on Grove AND Forest (threaded like
+atoms) accepting a callable tree→log-prior increment; pxd fields
+structural_prior/_sp_cache/structural_prior_cache; cdef `_sp` helper
+(None → 0.0 single branch; description-keyed cache, opt-out kwarg for
+θ-sensitive callables; non-finite returns floored at −1e90 = the BIC-
+cache penalty threshold); tilt added at the SIX acceptance sums where
+the Pólya prior enters (_step dtarget, pair crossover, swap U's,
+trans-grove U's, both spawn-master mirrors — mirrors wired correctly
+incl. pre-crossover old-tilt capture, though unreachable in v1) and
+NOWHERE else: never root_posteriors, never mse/BIC cache, never
+burn-in ranking, never the Powell objective. `run_mpi_spawn` + tilt →
+NotImplementedError (callables don't pickle; declarative specs = v2).
+**Experiment layer:** NEW exp_constraints.py — formal contract in the
+module docstring; `asymptotic_power(p, domain, lam, c_max)` builder
+(symbolic-first: sympy limit of log|f|/log x at +∞ with generic
+real-nonzero parameter symbols; numeric fallback: log-log slope on
+the outermost pair of probes at hi×(4,16,64) beyond the data domain;
+evaluation failure = max penalty; bounded −λ·min(C,c_max));
+`tree_name_values` accessor (get_param_dicts()[1]). **Validation
+2026-07-21: test_phase44.py 14/14 PASS** — T1 zero-returning callable
+reproduces structural_prior=None BIT-IDENTICAL (descriptions + posts;
+proves the six insertions inject exactly 0.0 and consume no RNG); T3
+steering on y=x² (noiseless, [1,2.5], polynomial ops): tilt p=3
+λ=200 → final population powers [3.00, 2.998, 3.017, 3.0, 3.34,
+2.86]; agreeing tilt p=2 → [2.0…2.11] and CLEANER than no-tilt;
+NEGATIVE CONTROL (no tilt) powers scatter [3.36, 9.22, 5.07, 4.25,
+1.21, 0.75] — the data alone do NOT pin asymptotics (near-zero
+dressed limbs shift the exponent at ~2 nats BIC each): this control
+IS the feature's motivation, and doubles as the planned wrong-
+constraint demo. T4 cache: 296 evals / 296 unique descriptions / 296
+cached, values exactly the callable's returns. T5 guards (TypeError,
+Forest forwarding, spawn NotImplementedError). **Certification
+(feature off): all four suites + test_phase2mpi PASS with bit-
+identical fingerprints (2.10o 5.28e-28; 2.10s and 2.10f spawn
+1.72e-28); test_phase42 pipeline fingerprint PASS (post −64.534224,
+nrmse 0.009240); walls in the environmental band.** NB best_tree/
+root_posteriors stay BIC-only by invariant: the tilt shapes WHICH
+structures the chain retains (and therefore what can win), not the
+reported evidence. Paper/thesis note queued:
+PROMPT_PAPER_CONSTRAINTS_NOTE.md (≤1 page, methods note + the
+custom-loss-rejection paragraph). Deferred: declarative constraint
+specs for spawn shipping (v2); non-plug-in θ-dependent constraints;
+x→0 / two-sided asymptotics (builder currently +∞ only).
 
 ---
 
