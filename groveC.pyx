@@ -124,6 +124,41 @@ cpdef function_treeC.Node _burn_in_primitive_node(str prim_str, object domain,
     return node
 
 
+def _resolve_structural_prior_spec(spec):
+    """Phase 4.4 v2: rebuild a structural-prior callable from a
+    declarative, PICKLABLE spec — ('module', 'builder', kwargs_dict).
+
+    This is pickle's function-by-reference semantic made explicit: no
+    code crosses any process boundary, only the (module, name, kwargs)
+    triple; each process — the master AND every run_mpi_spawn worker —
+    imports the named module locally and calls builder(**kwargs) on
+    code it already has. The named module must therefore be importable
+    in the worker processes (same cwd / sys.path as the master). The
+    kernel stays decoupled from the experiment layer: the import is
+    lazy and name-driven, nothing here references exp_constraints.
+    """
+    import importlib
+    if (not isinstance(spec, (tuple, list)) or len(spec) != 3
+            or not isinstance(spec[0], str)
+            or not isinstance(spec[1], str)
+            or not isinstance(spec[2], dict)):
+        raise TypeError(
+            "structural_prior_spec must be ('module', 'builder', "
+            "kwargs_dict); got %r" % (spec,))
+    mod = importlib.import_module(spec[0])
+    builder = getattr(mod, spec[1], None)
+    if builder is None:
+        raise AttributeError(
+            "structural_prior_spec: module %r has no builder %r"
+            % (spec[0], spec[1]))
+    cb = builder(**spec[2])
+    if not callable(cb):
+        raise TypeError(
+            "structural_prior_spec: %s.%s(**kwargs) returned a "
+            "non-callable %r" % (spec[0], spec[1], type(cb)))
+    return cb
+
+
 cdef class Grove:
     """
     A set of Trees evolving at a single temperature T (Metropolis-Hastings).
@@ -171,7 +206,8 @@ cdef class Grove:
                  double adapt_target=0.5,
                  list atoms=None,
                  object structural_prior=None,
-                 bint structural_prior_cache=True):
+                 bint structural_prior_cache=True,
+                 object structural_prior_spec=None):
 
         # Memory view - safer alternative to raw pointers
         cdef cnp.float64_t[::1] x_view = x
@@ -196,6 +232,19 @@ cdef class Grove:
             self.atoms = None
         # Phase 4.4: structural-constraint prior tilt (opt-in; None =
         # bit-identical legacy). Validated callable; see _sp().
+        # v2 (2026-07-22): a declarative picklable spec may be passed
+        # instead of a live callable; it is resolved HERE, in whatever
+        # process constructs the Grove — which is exactly what lets
+        # run_mpi_spawn workers rebuild the same tilt locally from the
+        # shipped ctor args.
+        if structural_prior_spec is not None:
+            if structural_prior is not None:
+                raise TypeError(
+                    "Grove: pass structural_prior OR "
+                    "structural_prior_spec, not both")
+            structural_prior = _resolve_structural_prior_spec(
+                structural_prior_spec)
+        self.structural_prior_spec = structural_prior_spec
         if structural_prior is not None and not callable(structural_prior):
             raise TypeError("Grove: structural_prior must be callable "
                             "(tree -> float log-prior increment) or None")
@@ -2445,11 +2494,17 @@ cdef class Forest:
                  list atoms=None,
                  bint freeze_vocab=False,
                  object structural_prior=None,
-                 bint structural_prior_cache=True):
+                 bint structural_prior_cache=True,
+                 object structural_prior_spec=None):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
         self.use_mpi = self.n_procs >= 2
+        # Phase 4.4 v2: mutually exclusive tilt inputs (fail fast, with
+        # a Forest-labeled message; each Grove would also catch it).
+        if structural_prior_spec is not None and structural_prior is not None:
+            raise TypeError("Forest: pass structural_prior OR "
+                            "structural_prior_spec, not both")
         if operations is None:
             operations = ["+", "-", "*", "/", "**", "o"]
         cdef int G = self.temperatures.shape[0]
@@ -2546,7 +2601,8 @@ cdef class Forest:
                       g_tau=g_tau, adapt_moves=adapt_moves,
                       atoms=self.atoms,
                       structural_prior=structural_prior,
-                      structural_prior_cache=structural_prior_cache)
+                      structural_prior_cache=structural_prior_cache,
+                      structural_prior_spec=structural_prior_spec)
             )
         # Phase 2.12 (MPI sampling): stash the Grove constructor arguments so
         # run_mpi_spawn can ship them to spawned workers, which rebuild
@@ -2574,6 +2630,10 @@ cdef class Forest:
             'use_gradients': use_gradients,
             'g_tau': g_tau,
             'adapt_moves': adapt_moves,
+            # Phase 4.4 v2: the declarative tilt spec + cache flag
+            # travel to spawned workers (the raw callable never does).
+            'structural_prior_spec': structural_prior_spec,
+            'structural_prior_cache': structural_prior_cache,
         }
 
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove):
@@ -2829,20 +2889,28 @@ cdef class Forest:
         cdef int G = len(self.groves)
         if G < 2:
             raise ValueError("run_mpi_spawn needs >= 2 temperature rungs")
-        # Phase 4.4 v1 guard: the structural-prior tilt is a raw Python
-        # callable and cannot cross the spawn boundary (workers rebuild
-        # their Groves from picklable ctor args only), so the workers'
-        # in-round _step moves would silently sample WITHOUT the tilt.
-        # Declarative constraint specs (the AtomSpec pattern) are the
-        # documented v2 route if spawn support is ever needed.
+        # Phase 4.4 guard (v2-relaxed): a RAW-callable tilt cannot cross
+        # the spawn boundary (workers rebuild their Groves from
+        # picklable ctor args only), so the workers' in-round _step
+        # moves would silently sample WITHOUT the tilt — refusing beats
+        # a partial tilt. A declarative structural_prior_spec CAN
+        # cross: it ships in _ctor and every worker's Grove ctor
+        # resolves it locally (the AtomSpec pattern), so spec-built
+        # tilts pass through. NB spawn users should prefer constraints
+        # whose value is determined by the tree DESCRIPTION alone
+        # (symbolic-resolvable, or theta_policy='reference' builders):
+        # per-process caches make theta-dependent fallbacks replica-
+        # dependent.
         for _g_obj in self.groves:
-            if (<Grove> _g_obj).structural_prior is not None:
+            if ((<Grove> _g_obj).structural_prior is not None
+                    and (<Grove> _g_obj).structural_prior_spec is None):
                 raise NotImplementedError(
-                    "structural_prior is not supported under "
-                    "run_mpi_spawn (v1): the callable cannot be "
-                    "shipped to spawned workers. Use the serial EMC "
-                    "loop (run_all + attempt_swaps + "
-                    "attempt_crossovers) instead.")
+                    "structural_prior (raw callable) is not supported "
+                    "under run_mpi_spawn: the callable cannot be "
+                    "shipped to spawned workers. Pass "
+                    "structural_prior_spec=('module', 'builder', "
+                    "kwargs) instead (see exp_constraints.spec), or "
+                    "use the serial EMC loop.")
         # Phase 2.10 Stage 3b: opaque primitives cross the wire as
         # ('skel3b', ...) payloads (see _tree_to_wire). The master-side
         # rebuilds below need the template registry; workers receive the

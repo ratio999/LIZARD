@@ -59,6 +59,10 @@ cdef class Grove:
     cdef public object structural_prior
     cdef public dict _sp_cache          # description -> tilt (y-independent)
     cdef public bint structural_prior_cache
+    # v2 (2026-07-22): the declarative ('module', 'builder', kwargs)
+    # spec the callable was resolved from, or None. Picklable — it is
+    # what run_mpi_spawn ships so workers rebuild the tilt locally.
+    cdef public object structural_prior_spec
     # Phase 2.8: optional adaptive move-weight calibration (OFF by default).
     # _move_logits holds the 6 logical-group logits; _adapt_t counts
     # adaptive updates for the diminishing step size gamma_t.

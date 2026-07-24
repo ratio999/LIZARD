@@ -425,7 +425,13 @@ cdef void _sampler_main():
         burn_in=False, use_mpi=0,
         polya=polya, seed=my_seed, g_tau=ctor['g_tau'],
         adapt_moves=bool(ctor['adapt_moves']),
-        atoms=atoms)
+        atoms=atoms,
+        # Phase 4.4 v2: rebuild the structural-prior tilt LOCALLY from
+        # the declarative spec (None -> feature off, legacy path). The
+        # .get defaults keep older configs (no such keys) working.
+        structural_prior_spec=ctor.get('structural_prior_spec'),
+        structural_prior_cache=bool(ctor.get('structural_prior_cache',
+                                             True)))
     grove.polya_defer = True
 
     # Install the master's CURRENT trees (start exactly where it stands).

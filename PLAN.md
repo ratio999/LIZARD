@@ -1253,9 +1253,137 @@ root_posteriors stay BIC-only by invariant: the tilt shapes WHICH
 structures the chain retains (and therefore what can win), not the
 reported evidence. Paper/thesis note queued:
 PROMPT_PAPER_CONSTRAINTS_NOTE.md (≤1 page, methods note + the
-custom-loss-rejection paragraph). Deferred: declarative constraint
-specs for spawn shipping (v2); non-plug-in θ-dependent constraints;
-x→0 / two-sided asymptotics (builder currently +∞ only).
+custom-loss-rejection paragraph). Deferred: non-plug-in θ-dependent
+constraints; x→0 / two-sided asymptotics (builder currently +∞ only).
+
+**v2 — DECLARATIVE-SPEC ROUTE (parallel shipping) + WIRE-FIDELITY
+FINDING, 2026-07-22.** Implemented the picklable
+`structural_prior_spec=('module','builder',kwargs)` route so the tilt
+can cross the MPI-spawn boundary (raw closures can't): resolver
+`groveC._resolve_structural_prior_spec` (lazy name-driven import — no
+kernel↔experiment coupling), new `structural_prior_spec` field
+(pxd + Grove/Forest ctor, mutually exclusive with the raw callable),
+stashed in `_ctor`, and `mpi_worker` rebuilds it LOCALLY (`.get`
+defaults keep old configs valid). Spawn guard relaxed: raw callable
+still → NotImplementedError, a spec passes. Builder `exp_constraints.
+spec()` + `theta_policy='current'|'reference'`. **Post-v2
+certification GREEN and bit-identical** (four suites + test_phase2mpi
++ test_phase42 fingerprints unchanged). test_phase44 T1–T6 PASS incl.
+all v2 resolution/guard checks (spec↔callable equivalence, mutual
+exclusion, malformed-spec rejection, theta_policy).
+**WIRE-FIDELITY FINDING (pre-existing kernel defect, NOT a v2 bug):**
+the spec provably ships to and fires in the workers (probe P1), but
+the spawn SAMPLING wire `groveC._tree_from_wire` gates on
+`tree_get_description() == str(sympy_expr)`; sympy folds the tilt's
+target `x*x*x → x**3`, which the **-free vocabulary can't rebuild, so
+the master DISCARDS exactly the steered trees and keeps stale initial
+ones (probes: 4/6 and 6/6 slots stale; master `_sp_cache` starved).
+Latent until now because `exp_common.emc_loop` is SERIAL — the
+4.1/4.3/Feynman/CBC suites only spawned burn-in, never sampling, and
+test_phase2mpi [2.12] never asserted the master population REFRESHES.
+No published result affected (all serial sampling). **Per user
+(2026-07-22): parallel steering demo PAUSED; bug handed to the
+codebase-developer lane in PROMPT_DEV_WIRE_FIDELITY.md** (preferred
+fix: ship the tree skeleton not the sympy expr for atom-free trees,
+mirroring the 'skel3b' atom path; re-extend [2.12] to assert refresh).
+T7 now asserts only the shipping contract (spec accepted + stats dict)
+and prints the wire footprint as a diagnostic; the steering assertion
+returns after the engine fix. exp_phase44_spec.py demo (serial arms +
+paused spawn arms) and fig28 deferred to that point. Serial tilt path
+(T3b clean steering) unaffected and certified. Also OPEN (my lane):
+clean idle-machine timed cert to answer the user's "did test time
+double" — earlier walls were background-contention-polluted.
+
+**DEV PLAN — spawn-sampling wire fidelity fix (2026-07-24, kernel
+lane).** Fleshes out the handoff in PROMPT_DEV_WIRE_FIDELITY.md; extends
+Phase 2.12. GOAL: make the master's post-`run_mpi_spawn` population
+faithfully reflect worker exploration over folding-prone (`**`-free)
+vocabularies, unblocking (a) run_mpi_spawn SAMPLING generally and (b)
+the Phase 4.4 tilt parallel path. Root cause recap: `_tree_to_wire`
+ships atom-free trees as a RAW SYMPY EXPR; sympy folds on the way onto
+the wire (`x*x*x → x**3`, `x+x → 2*x`, reorder); `_tree_from_wire`
+rebuilds via `_expr_to_tree` then gates on
+`tree_get_description() == str(expr)`; when the vocab lacks `**` the
+fold is unrepresentable, the gate returns None, and the master keeps
+the stale initial slot.
+
+CHOSEN DIRECTION — option 1 (skeleton payload for ALL trees), the
+in-design fix. `function_treeC.tree_to_skel`/`node_from_skel` ALREADY
+handle atom-free trees: tag `'L'` rebuilds a plain leaf from its own
+`get_description()` via `from_string`, tag `'O'` rebuilds an operator
+node preserving the exact op, and the `'A'` atom branch is simply never
+taken when `atom_specs=None` (verified function_treeC.pyx:1136–1178).
+So a skeleton round-trip is SHAPE-EXACT and never invokes sympy
+canonicalization — `x*x*x` stays three `*` nodes, description stays
+in-vocab, and the fidelity gate (now comparing the rebuilt desc to the
+SHIPPED desc `skel[2]`, not a re-canonicalized `str(expr)`) passes.
+
+WORK ITEMS (kernel, additive):
+1. `groveC._tree_to_wire`: drop the atom-free raw-expr branch — always
+   emit `('skel3b', tree_to_skel(root), tree_get_description())`. One
+   payload form for all trees; the `has_atomic` split disappears.
+   (Alternatively keep both branches and just force the skeleton path —
+   but a single format is cleaner and `_tree_from_wire` already
+   dispatches on the `'skel3b'` tag.)
+2. `groveC._tree_from_wire`: NO functional change needed — the skel
+   branch (2400–2421) already rebuilds via `node_from_skel(..., None)`,
+   installs `name_values` via `_install_cached_theta`, and gates on
+   `expr[2]`. Keep the legacy raw-expr rebuild branch (2422+) in place,
+   harmless (never produced now), for wire-format tolerance.
+3. Confirm the plain-param install path: `_install_cached_theta` must
+   set `a0,a1,…` on a skeleton-rebuilt atom-free tree identically to the
+   old raw-expr param loop (2428+). Spot-check a param-bearing leaf
+   (`from_string("a0")` → param node → value set) round-trips value +
+   description.
+
+CERTIFICATION STRATEGY (the crux — this fix is NOT off-by-default; it
+changes the spawn-sampling path on purpose):
+- SERIAL suites (4.1/4.3/Feynman/CBC, 2.10o) never touch the wire →
+  MUST stay bit-identical (fingerprint 2.10o mse 5.28e-28). Hard gate.
+- ATOM-BEARING spawn tests (2.10s/2.10f, 1.72e-28) already use the
+  skel3b payload → unaffected → MUST stay bit-identical. Hard gate.
+- ATOM-FREE spawn sampling is the ONLY path that changes. It moves for
+  TWO legitimate reasons: (i) previously-DISCARDED folded trees are now
+  retained (the fix's whole point); (ii) previously-ACCEPTED trees that
+  `_expr_to_tree` silently RE-NORMALIZED (reorder/restructure) now keep
+  their exact worker-side shape. So expect test_phase2mpi [2.12] and any
+  atom-free spawn fingerprint to MOVE. Procedure: run the fixed build
+  against the full fingerprint suite FIRST; verify only the atom-free
+  spawn numbers moved; for each mover, confirm the delta is "population
+  now refreshes / shape now exact" (not a regression) then RE-BASELINE
+  that fingerprint with a dated PLAN note recording old→new and the
+  justification. Serial + atom-bearing fingerprints unchanged is the
+  pass condition.
+- PERF: skeleton build/rebuild is CHEAPER than sympy parse+`str()`
+  (no sympy on the hot spawn path), so if anything spawn sampling gets
+  faster; the change is confined to the spawn wire (off by default in
+  every serial run) so the "now it's fast" guarantee is untouched.
+
+TEST EXTENSION [2.12] (my lane, after the kernel change lands):
+- New unit: the three planted strings from the repro (`(x*(x*x))`,
+  `a0*(x*(x*x))`, `((x*x)+a0*(x*(x*x)))`) now round-trip through
+  `_tree_to_wire`→`_tree_from_wire` to a NON-rejected tree whose
+  description stays in the `**`-free vocab (was `<REJECTED>`).
+- New END-TO-END assertion: after `run_mpi_spawn` over a folding-prone
+  vocab (x²/x³ target, ops `["+","-","*"]`), assert ≥K master slots
+  DIFFER from their initial descriptions (the missing "population
+  refreshed" check that let this stay latent). Keep the existing
+  valid+finite+explored asserts.
+
+DOWNSTREAM UNBLOCK (my lane, gated on green cert): flip test_phase44 T7
+from the shipping-contract-only stub back to the full parallel steering
+assertion; run the PAUSED spawn arms of exp_phase44_spec.py; produce
+fig28 (serial vs spawn steering agree).
+
+OPEN QUESTIONS / RISKS: (1) does any fingerprinted run OTHER than
+test_phase2mpi exercise atom-free spawn SAMPLING (vs only burn-in)? —
+enumerate before re-baselining. (2) burn-in also uses this wire; for
+representable depth-1 trees skeleton reproduces the same descriptions,
+but a foldable burn-in candidate previously SKIPPED could now be
+ACCEPTED — check whether any fingerprinted suite's spawned burn-in ever
+ships a foldable tree (if not, burn-in fingerprints hold; if so,
+re-baseline as above). (3) NOT in scope: option 2 (canonical-form gate)
+— rejected, leaves the representability gap and is semantically lossy.
 
 ---
 
