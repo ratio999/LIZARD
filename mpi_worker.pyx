@@ -342,18 +342,25 @@ def worker_main():
 #     and replayed identically on every replica (deterministic replay);
 #   * exchange / crossover decisions happen on the master; this worker only
 #     serves 'get_tree' (serialize a slot) and 'set_tree' (install a slot)
-#     commands, using the same (sympy expr, name_values, post) wire format
-#     as the burn-in spawn path.
+#     commands, using the ('skel3b', skeleton, description) structural
+#     wire for EVERY tree (wire-fidelity fix 2026-07-24, force_skel=True:
+#     the historical raw-sympy payload canonicalized out of '**'-free
+#     vocabularies and the master discarded the rebuilds, starving its
+#     population; burn-in keeps the legacy dual format).
 # The command loop is bcast-driven: EVERY worker receives every command and
 # only the addressed rank acts on the point-to-point parts, so no
 # interleaving can deadlock. `worker_main` (burn-in) is untouched.
 # ===========================================================================
 # Phase 2.10 Stage 3b: the wire has ONE implementation — groveC's cpdef
-# pair (dual payload: legacy sympy expr for atom-free trees, 'skel3b'
-# structural skeleton for atom-bearing ones). These wrappers only keep the
-# historical local names; calls are POSITIONAL (cpdef across cimport).
+# pair. Wire-fidelity fix (2026-07-24): the SAMPLING wire ships EVERY
+# tree as the 'skel3b' structural skeleton (force_skel=True) — the
+# legacy raw-sympy payload canonicalized (x*x*x -> x**3) out of
+# '**'-free vocabularies and the master rejected the rebuilds, keeping
+# stale slots. Burn-in keeps the legacy dual payload (default False).
+# These wrappers only keep the historical local names; calls are
+# POSITIONAL (cpdef across cimport).
 cdef tuple _sampler_tree_to_wire(function_treeC.Tree tree, double post):
-    return groveC._tree_to_wire(tree, post)
+    return groveC._tree_to_wire(tree, post, True)
 
 
 cdef function_treeC.Tree _sampler_tree_from_wire(

@@ -1385,7 +1385,102 @@ ships a foldable tree (if not, burn-in fingerprints hold; if so,
 re-baseline as above). (3) NOT in scope: option 2 (canonical-form gate)
 — rejected, leaves the representability gap and is semantically lossy.
 
----
+**RESOLUTION 2026-07-24 — WIRE-FIDELITY FIX SHIPPED + CERTIFIED.**
+Implemented variant: NOT the unconditional always-skel of work item 1
+but the anticipated SCOPED alternative — `_tree_to_wire` gains a third
+optional arg `bint force_skel=False` (pxd: `=*`), passed True ONLY at
+the three sampling-wire producers (run_mpi_spawn init_trees ~:2975;
+both crossover-child wires ~:3167; mpi_worker._sampler_tree_to_wire)
+so run_mpi_spawn ships EVERY tree as ('skel3b', skeleton,
+description). Burn-in producers untouched (depth1_data 2-arg call;
+_evaluate_tree's call is atom-gated). WHY scoped: (a) test_phase210
+[2.10p]:855 HARD-ASSERTS the atom-free default payload stays legacy
+("must stay legacy"); (b) the survey answered open question (2)
+EMPIRICALLY — test_phase42's spawned burn-in DOES ship a foldable
+tree (worker log: rebuilt "exp(a0*x)" != wire "exp(2*x)"), so an
+unconditional switch would have moved the pipeline fingerprint;
+scoping keeps every certified fingerprint bit-identical BY
+CONSTRUCTION while replacing the defective wire. `_tree_from_wire`
+needed NO change (its skel branch already gates on the SHIPPED
+description; theta-equivalence audit: _install_cached_theta is
+line-for-line the legacy plain-param loop, same order/lookup/skip;
+from_string('a0') yields a proper registered param leaf; skeleton
+rebuild is STRICTLY more faithful — exact topology where
+_expr_to_tree re-associates).
+**Certification (same-day baseline vs postfix, timed cert script
+/tmp/cert_wirefix.sh, full per-suite logs byte-diffed,
+/tmp/certw_baseline vs /tmp/certw_postfix):** test_phase23 + 28 diff
+= 0 LINES; test_phase210 diff = 0 after normalizing id() memory
+addresses in debug prints; test_phase29 identical EXCEPT [2.9c],
+which is PRE-EXISTING run-to-run nondeterminism (three distinct
+values across runs of the OLD binary alone: Jul-21 TV=0.302/xover
+261; baseline 0.029/165; 2.9a/b/d/d2 byte-identical); test_phase2mpi
+moved ONLY in [2.12]+[2.10q] — exactly the two run_mpi_spawn sampling
+sections = the fix surface ([2.12] xover 4→6, paths 58→68, best now
+actually evolves: "x + cos(x)"); [2.12d] serial and BOTH [2.10f]
+burn-in halves byte-identical incl. 1.72e-28; test_phase42
+byte-identical except one worker-stdout interleave line — post
+−64.534224 / nrmse 0.009240 match the reference JSON. Fingerprints
+2.10o 5.28e-28, 2.10s 1.72e-28 reproduced. **PERF:** cert totals
+550s→566s; serial suites moved BOTH directions within machine noise
+(23: 69→57s, 29: 248→255s, 210: 68→73s); the only real mover is
+test_phase2mpi 38→49s, which is the FIX WORKING (populations no
+longer starve → more surviving trees to score, paths 58→68). The
+skeleton payload is sympy-free (no expr pickling / no str(expr) on
+the sampling path), so per-tree wire cost went DOWN, not up. Serial
+"now it's fast" guarantee untouched (wire code unreachable from
+serial runs).
+**NEW test_phase212_wire.py (additive) — 27/27 PASS, 19s
+(mpiexec -n 1):** W1 the three defect-report structures
+(x*(x*x), a0*(x*x), x*x+a0*(x*x)) round-trip under force_skel —
+payload skel3b, shipped desc == source desc ('x**3', 'a0*x**2',
+'a0*x**2 + x**2'), pickle-safe, exact-shape skeleton equality, a0
+value installs from name_values; W2 negative control — the SAME
+trees on the DEFAULT payload still fold (Pow/Mul/Add) and still
+REJECT (documents the defect mechanism + pins the untouched legacy
+path); W3 end-to-end refresh — after run_mpi_spawn(20×20, **-free
+vocab) the master REFRESHES 6/6 cold-grove slots and 12/12 total
+(pre-fix footprint: 0–2 of 6), all slots valid + finite, and the
+refreshed cold population lands on 'x**2' (the true structure). This
+is the [2.12]-extension check the handoff demanded ("assert the
+master population actually REFRESHES").
+**test_phase44 T7 RESTORED (same session): 21/21 PASS.** Fixture
+switched to the folding-prone T3 vocabulary (sin/x, +-*) ON PURPOSE;
+T7 shipping contract PASS; NEW T7b refresh: 0/6 stale; NEW T7c
+steering ON THE MASTER: powers [3.0, 3.0, 3.0, 2.01, 2.97, 3.0],
+m3=5 > m2=1, best slot 'a0*x**3' — the Phase 4.4 v2 parallel
+steering path is now validated END-TO-END (serial T1 bit-identity
+re-confirmed on the fixed build).
+**Adversarial review (3 independent lenses over the diff + new test):
+verdict CLEAN on all three** — correctness (every wire consumer
+checked against the skel payload; W2's rejection mechanism traced:
+_expr_to_tree rebuilds Pow exponents as fresh params, 'x**a0' !=
+'x**3' → None), bit-identity (generated C proves 2-arg calls compile
+to force_skel=0; export/import signature strings identical in both
+.so; timestamps prove both rebuilt post-edit), test quality (suite
+independently re-executed, 27/27). Two minor findings addressed in
+test_phase212_wire.py (W3 try/except fail-loud guard mirroring T7;
+coverage note: crossover-child producers fire only on accepted
+trans-grove crossovers — structurally covered by W1); re-run 27/27.
+Two pre-existing notes recorded, NOT introduced by the fix, left as
+future kernel-lane items: (i) worker startup fallback installs the
+shipped posterior even when it falls back to the local tree
+(mpi_worker ~:456); (ii) worker-side per-round rebuild failure is a
+silent keep-old (now failure modes coincide with the master's
+pre-check under skel).
+**exp_phase44_spec.py DEMO + fig28 — COMPLETE 2026-07-24 (all five
+arms, spawn arms now unblocked):** serial_notilt 13.7s powers
+[2.0,0.94,1.0,2.0,1.18,2.0] (control: unpinned); serial_tilt_p2
+341.4s powers [2.0,2.0,1.89,2.0,2.0,2.0] (agreeing tilt = cleaner);
+spawn_notilt 11.2s [1.0,2.0,2.0,0.99,2.0,1.0]; spawn_spec_p2 232.6s
+[2.0×5, 0.73] (spec route parallel steering agrees with serial);
+spawn_spec_p3 442.6s powers [2.76,2.89,3.0,3.0,3.0,2.97] — the
+ADVERSARIAL parallel steering demo on the MASTER (pre-fix: n3=0,
+slots stale). All arms best=x**2, in-domain AND extrapolation
+NRMSE 0.00e+00. Tilt-ON walls are the documented v1 sympy pricing
+cost (feature-off arms 11–14s), not a wire cost. Outputs (new names):
+results/phase44_spec_demo.json, results/phase44_spec_demo_report.md,
+results/figs/fig28_constraint_demo.png.
 
 ## Phase 5 — Writing
 **→ The full, consequential section-by-section writing roadmap now lives in

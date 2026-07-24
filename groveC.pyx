@@ -2357,26 +2357,40 @@ cdef class Grove:
 # The wire is a 3-tuple (payload, name_values, post) — trees are cdef
 # classes (not picklable); payloads + dicts of floats are. Two payload
 # forms (Phase 2.10 Stage 3b):
-#   * atom-free tree : the raw sympy expr (the HISTORICAL format,
-#     bit-identical — rebuild via function_treeC._expr_to_tree);
-#   * atom-bearing   : ('skel3b', skeleton, description) — a structural
-#     skeleton (function_treeC.tree_to_skel) that preserves the exact tree
-#     shape and each opaque leaf's (atom_symbol, internal names). A raw
-#     expr CANNOT carry an opaque leaf: a0*sin(a1*x) is a sympy Mul and
+#   * raw sympy expr : the HISTORICAL atom-free format (rebuild via
+#     function_treeC._expr_to_tree) — kept for the spawn BURN-IN wire,
+#     bit-identical;
+#   * ('skel3b', skeleton, description) — a structural skeleton
+#     (function_treeC.tree_to_skel) that preserves the exact tree shape
+#     and each opaque leaf's (atom_symbol, internal names). A raw expr
+#     CANNOT carry an opaque leaf: a0*sin(a1*x) is a sympy Mul and
 #     _expr_to_tree would decompose it into an ordinary subtree.
+# Wire-fidelity fix (2026-07-24): the SAMPLING wire (run_mpi_spawn +
+# mpi_worker._sampler_*) now ships EVERY tree as 'skel3b', via
+# force_skel=True. A raw expr canonicalizes on construction (x*x*x ->
+# x**3, x + x -> 2*x); when the sampling vocabulary cannot re-express
+# the folded form (the depth-3 / Feynman suites exclude '**'), the
+# round-trip gate below rejected the rebuild and the master silently
+# kept its stale initial trees (population starvation — see
+# PROMPT_DEV_WIRE_FIDELITY.md). The skeleton round-trip is shape-exact,
+# never invokes sympy, and its gate compares against the SHIPPED
+# description. Burn-in producers keep the legacy dual format
+# (force_skel=False default) — certified bit-identical.
 # Values travel in name_values for both forms. A rebuild whose description
 # does not round-trip is reported as None and the caller must treat the
 # exchange as REJECTED (self-loop; target-preserving). Both cpdef since
 # Stage 3b: mpi_worker delegates here (ONE wire implementation) and the
 # unit tests drive them directly — cross-module calls POSITIONAL ONLY.
-cpdef tuple _tree_to_wire(function_treeC.Tree tree, double post):
+cpdef tuple _tree_to_wire(function_treeC.Tree tree, double post,
+                          bint force_skel=False):
     cdef function_treeC.Node lf
     cdef bint has_atomic = False
-    for lf in tree.leaves:
-        if lf.is_atomic():
-            has_atomic = True
-            break
-    if has_atomic:
+    if not force_skel:
+        for lf in tree.leaves:
+            if lf.is_atomic():
+                has_atomic = True
+                break
+    if force_skel or has_atomic:
         return (('skel3b',
                  function_treeC.tree_to_skel(tree.root),
                  tree.tree_get_description()),
@@ -2873,11 +2887,16 @@ cdef class Forest:
             Theta and the master RNG, using exactly the serial acceptance
             forms (_attempt_swap_pair / _attempt_crossover_pair math).
             Trees cross the wire as (payload, name_values, post): payload
-            is the raw sympy expr for atom-free trees (the burn-in spawn
-            format) or a ('skel3b', skeleton, description) structural
-            payload for atom-bearing trees (Phase 2.10 Stage 3b). Any
-            rebuild-fidelity failure turns the exchange into a REJECT
-            (self-loop; target-preserving).
+            is ALWAYS a ('skel3b', skeleton, description) structural
+            payload on this wire (wire-fidelity fix 2026-07-24 — the
+            historical raw-sympy-expr payload canonicalized on
+            construction, e.g. x*x*x -> x**3, and whenever the
+            vocabulary could not re-express the folded form the
+            round-trip gate discarded the worker's tree, silently
+            starving the master's population; the skeleton round-trip
+            is shape-exact and sympy-free). Any rebuild-fidelity
+            failure still turns the exchange into a REJECT (self-loop;
+            target-preserving).
           * Control flow is bcast-driven (every worker sees every command;
             only the addressed rank acts on point-to-point pieces), so no
             interleaving can deadlock.
@@ -2958,7 +2977,8 @@ cdef class Forest:
                 t = gr.trees[s]
                 wires.append(_tree_to_wire(
                     t, float(gr.root_posteriors[s])
-                    if np.isfinite(gr.root_posteriors[s]) else -1.0e300))
+                    if np.isfinite(gr.root_posteriors[s]) else -1.0e300,
+                    True))
             init_trees.append(wires)
 
         # --- Spawn -------------------------------------------------------
@@ -3148,8 +3168,10 @@ cdef class Forest:
                                         # identical wire, so a failure here
                                         # would desync a worker. Print + skip,
                                         # no exceptions (a skip is a reject).
-                                        wireA = _tree_to_wire(treeA, postA_new)
-                                        wireB = _tree_to_wire(treeB, postB_new)
+                                        wireA = _tree_to_wire(treeA, postA_new,
+                                                              True)
+                                        wireB = _tree_to_wire(treeB, postB_new,
+                                                              True)
                                         if (_tree_from_wire(wireA[0], wireA[1],
                                                             domain, funcs, sigma,
                                                             g_tau, atom_specs)
