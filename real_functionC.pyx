@@ -21,6 +21,87 @@ cdef object _LOG = np.log
 cdef double _PI = np.pi
 cdef double _NAN = np.nan
 
+# ---------------------------------------------------------------------------
+# Flexible domain (flexible_domain_plan.md §2.1) — module-level variable
+# registry: the independent variables of every expression built through this
+# module. Default ('x',) IS the legacy configuration — descriptions, cache
+# keys and Pólya cells are unchanged unless a caller registers a different
+# tuple (Grove/Forest `variables=` argument). Module-global exactly like the
+# RNG handles in gp_movesC/function_treeC: one configuration per process,
+# installed at construction time; changing it mid-run is unsupported
+# (compiled leaf closures capture it at from_string time).
+# Layout contract (plan §0 D2): d = len(registry) == 1 keeps the historical
+# (n,) domain; d > 1 uses ONE C-contiguous float64 array of shape (d, n) —
+# coordinate ROWS, points along the LAST axis; row i is registry[i].
+# ---------------------------------------------------------------------------
+_VARIABLES = ('x',)
+_VAR_SET = frozenset(_VARIABLES)
+_VAR_SYMS = [sp.Symbol('x')]
+
+# Kernel parameter-name bands: 'a' (parameter_parser / new_par fallback),
+# 'b' (burn-in rename buffer), 'c' (MPI combiner). Variable names must not
+# collide with names these bands can mint.
+_RESERVED_PARAM_BANDS = ('a', 'b', 'c')
+
+
+cpdef void set_variables(tuple names) except *:
+    """Install the independent-variable name registry (flexible-domain
+    opt-in). Cross-module callers: POSITIONAL ARGS ONLY (cpdef rule)."""
+    global _VARIABLES, _VAR_SET, _VAR_SYMS
+    cdef str nm, band
+    cdef object obj
+    cdef list syms = []
+    if names is None or len(names) == 0:
+        raise ValueError("set_variables: need at least one variable name")
+    if len(set(names)) != len(names):
+        raise ValueError("set_variables: duplicate names in %r" % (names,))
+    for nm in names:
+        if not isinstance(nm, str) or len(nm) == 0:
+            raise ValueError(
+                "set_variables: names must be non-empty strings, got %r"
+                % (nm,))
+        if nm == 'y':
+            raise ValueError(
+                "set_variables: 'y' is reserved for the observation vector")
+        for band in _RESERVED_PARAM_BANDS:
+            if re.fullmatch(band + r'\d+', nm):
+                raise ValueError(
+                    "set_variables: %r collides with the kernel parameter "
+                    "band %r (band + digits are mintable parameter names)"
+                    % (nm, band))
+        try:
+            obj = sp.sympify(nm)
+        except Exception:
+            raise ValueError(
+                "set_variables: %r is not sympifiable" % (nm,))
+        if not isinstance(obj, sp.Symbol):
+            raise ValueError(
+                "set_variables: %r does not sympify to a plain Symbol "
+                "(it shadows a sympy function or constant)" % (nm,))
+        syms.append(obj)
+    _VARIABLES = tuple(names)
+    _VAR_SET = frozenset(names)
+    _VAR_SYMS = syms
+
+
+cpdef tuple get_variables():
+    """Current variable-name registry (POSITIONAL calls across cimport)."""
+    return _VARIABLES
+
+
+cpdef int n_variables():
+    """Registry dimension d (POSITIONAL calls across cimport)."""
+    return len(_VARIABLES)
+
+
+cpdef bint is_variable_name(object name):
+    """Registry membership test (POSITIONAL calls across cimport).
+
+    `object`-typed on purpose: callers compiled under language_level 2
+    (function_treeC) pass f-string/unicode names, which cannot implicitly
+    coerce to a `str`-typed parameter there."""
+    return name in _VAR_SET
+
 def safe_convert(value):
         try:
             return np.float64(value)
@@ -29,7 +110,7 @@ def safe_convert(value):
             return np.nan
 
 
-cdef _to_float64_array(object out, cnp.ndarray[cnp.float64_t, ndim=1] like):
+cdef _to_float64_array(object out, cnp.ndarray like):
     """Vectorised replacement for ``np.vectorize(safe_convert)``.
 
     The old per-element Python loop ran on every evaluate() call. For the
@@ -46,9 +127,20 @@ cdef _to_float64_array(object out, cnp.ndarray[cnp.float64_t, ndim=1] like):
     cdef object vector_safe_convert = np.vectorize(safe_convert)
     return np.ascontiguousarray(vector_safe_convert(arr), dtype=np.float64).ravel()
 
+
+cdef inline object _flat_fill(object x, double value):
+    """(n,)-shaped constant fill for a domain of shape (n,) or (d, n).
+
+    Flexible-domain invariant (plan §1.1): every leaf output is a 1-D
+    length-n vector with n = x.shape[-1]. The historical
+    ``np.full_like(x, ...)`` breaks that at d > 1 — it returns (d, n),
+    which then broadcasts wrongly (or "successfully") into the residuals.
+    On (n,) input this is value-identical to full_like(...).ravel()."""
+    return np.full(x.shape[-1], value, dtype=np.float64)
+
 cdef class RealFunctionC:
 
-    def __init__(self, object func, object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list params=None, mode='Time', bint compute_grad = False, double constant_value=1.0):
+    def __init__(self, object func, object expr, cnp.ndarray domain, list params=None, mode='Time', bint compute_grad = False, double constant_value=1.0):
         """Initialization"""
         self.func = func
         self.mode = mode 
@@ -168,14 +260,23 @@ cdef class RealFunctionC:
 
 
     cdef classify_symbols(self):
-        
+
         cdef list params = []
         cdef list variables = []
+        cdef str s_str
 
         for s in self.symbols:
-            if re.match(r"^[a-zA-Z]\d+$", str(s)):
+            s_str = str(s)
+            # Flexible domain (plan §0 D4): registry membership takes
+            # precedence over the name-shape regexes — 'x0'-style variable
+            # names match the parameter pattern, and a variable classified
+            # as a parameter would be optimized as a constant. Legacy 'x'
+            # lands in `variables` through either route: bit-identical.
+            if s_str in _VAR_SET:
+                variables.append(s)
+            elif re.match(r"^[a-zA-Z]\d+$", s_str):
                 params.append(s)
-            elif re.match(r"[a-zA-Z]$", str(s)):
+            elif re.match(r"[a-zA-Z]$", s_str):
                 variables.append(s)
 
         return params, variables
@@ -223,7 +324,7 @@ cdef class RealFunctionC:
         return True
 
 
-    cdef object evaluate(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+    cdef object evaluate(self, cnp.ndarray x, dict params=None):
         #print(params)
         if params is None:
             #print('params is NONE')
@@ -249,17 +350,17 @@ cdef class RealFunctionC:
         # Use params dict if available, otherwise fall back to constant_value
             param_name = self.get_description()  # e.g., "a0"
             if param_name in params:
-                return np.full_like(x, params[param_name], dtype=np.float64).ravel()
-            return np.full_like(x, self.constant_value, dtype=np.float64).ravel()
+                return _flat_fill(x, params[param_name])
+            return _flat_fill(x, self.constant_value)
         cdef object out = self.func(x, params=params)
-        
+
         try:
             return _to_float64_array(out, x)
         except:
-            return np.full_like(x,_NAN, dtype=np.float64)
+            return _flat_fill(x, _NAN)
         #return self.func(x, params=params)
     
-    def get_eval(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+    def get_eval(self, cnp.ndarray x, dict params=None):
         return self.evaluate(x, params)
 
     cdef double _log_marginal_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -275,7 +376,7 @@ cdef class RealFunctionC:
         return -0.5 * N * (_LOG(2.0 * _PI * fitness) + 1.0) - 0.5*(len(params) + 1)*_LOG(N) #-0.5 * N * fitness /s2
 
     cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
-                                dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+                                dict params, cnp.ndarray x,
                                 double sigma):
         cdef double mse = self.fitness(y, params, x)
         cdef int N = y.shape[0]
@@ -285,7 +386,7 @@ cdef class RealFunctionC:
         return (-0.5 * N * mse/var - 0.5 * k * _LOG(N))
 
     cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
-                                dict params, cnp.ndarray[cnp.float64_t, ndim=1] x, 
+                                dict params, cnp.ndarray x,
                                 cnp.ndarray[cnp.float64_t, ndim=1] sigma):
         
         cdef double mse = self.fitness_sigma(y, params, x, sigma)
@@ -367,7 +468,7 @@ cdef class RealFunctionC:
         except:
             return np.inf
 
-    cdef double fitness_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, cnp.ndarray[cnp.float64_t, ndim=1] x,
+    cdef double fitness_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, cnp.ndarray x,
                      cnp.ndarray[cnp.float64_t, ndim=1] sigma):
 
         cdef  cnp.ndarray[cnp.float64_t, ndim=1] var = sigma*sigma
@@ -390,9 +491,15 @@ cdef class RealFunctionC:
         """
         if len(self.params) == 0:
             return {}
-        
+        # Flexible domain: symbolic gradients are a d=1 legacy path (plan
+        # §8.2). At d > 1 return no gradient functions — _symbolic_gradient
+        # degrades to finite differences (dimension-agnostic: it perturbs
+        # theta, not x) and _optimize_with_grad falls back to Powell.
+        if len(_VARIABLES) > 1:
+            return {}
+
         cdef dict grad_dict = {}
-        cdef object x_sym = sp.symbols('x')
+        cdef object x_sym = _VAR_SYMS[0]
         cdef object param_sym, grad_expr, grad_func
         cdef RealFunctionC diff_obj
         for param_sym in self.params:
@@ -500,8 +607,8 @@ cdef class RealFunctionC:
         
         return grad
 
-    cdef double _finite_diff_gradient(self, str param_name, dict params, 
-                                       cnp.ndarray[cnp.float64_t, ndim=1] x,
+    cdef double _finite_diff_gradient(self, str param_name, dict params,
+                                       cnp.ndarray x,
                                        cnp.ndarray[cnp.float64_t, ndim=1] y,
                                        double h=1e-7):
         """Finite difference fallback for gradient computation."""
@@ -534,8 +641,8 @@ cdef class RealFunctionC:
         cdef cnp.ndarray[cnp.float64_t, ndim=1] par_values = np.ascontiguousarray(list(params.values()), dtype=np.float64)
         return 2*par_values 
 
-    def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, 
-            cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):
+    def objective(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params,
+            cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         #print(x_data, y_data)
         cdef double fit = self.fitness( y_data,  params_dict, x_data)
@@ -545,8 +652,8 @@ cdef class RealFunctionC:
         
         return fit
 
-    def objective_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, 
-            cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    def objective_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params,
+            cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
             cnp.ndarray[cnp.float64_t, ndim=1] sigma):
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         #print(x_data, y_data)
@@ -559,16 +666,16 @@ cdef class RealFunctionC:
         return fit
     
 
-    def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):   
+    def grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self.gradient( y_data, x_data, params_dict)
-    
-    def symb_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):   
+
+    def symb_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] flat_params, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data):
         cdef dict params_dict = dict(zip(self.params_strs, flat_params))
         return self._symbolic_gradient( y_data, x_data, params_dict)
     
-    cdef _optimize_with_grad(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-              cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    cdef _optimize_with_grad(self, cnp.ndarray x_data,
+              cnp.ndarray[cnp.float64_t, ndim=1] y_data,
               dict input_pars,  str method_str='L-BFGS-B'):
     
         if len(input_pars) == 0:
@@ -639,7 +746,7 @@ cdef class RealFunctionC:
         
         return result
     '''
-    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+    cdef optimize(self, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, str method_str='Powell'):
         cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
         #cdef double[:] initial_params = np.array(list(input_pars.values()))
@@ -667,7 +774,7 @@ cdef class RealFunctionC:
         #print(result)
         return result
 
-    cdef optimize_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
+    cdef optimize_sigma(self, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, str method_str, cnp.ndarray[cnp.float64_t, ndim=1] sigma):
         cdef cnp.ndarray[cnp.float64_t, ndim=1] initial_params = np.ascontiguousarray(list(input_pars.values()), dtype=np.float64)
         #cdef double[:] initial_params = np.array(list(input_pars.values()))
@@ -725,7 +832,7 @@ cdef class RealFunctionC:
         '''
     
     # Use as less as possible: loop on check_single_value is bottleneck 
-    def is_defined(self, cnp.ndarray[cnp.float64_t, ndim=1] x, dict params = None):
+    def is_defined(self, cnp.ndarray x, dict params = None):
         if params is None:
             params = {}
         try:
@@ -734,7 +841,12 @@ cdef class RealFunctionC:
             y_safe = vector_safe_convert(y)
             return np.isfinite(y_safe) & np.isreal(y_safe)
         except Exception as e:
-            return np.full_like(x, False, dtype=np.bool_)
+            # (n,)-shaped mask regardless of domain layout (plan §1.1).
+            # NB x is buffer-typed here, so shape[-1] would compile to raw
+            # C pointer indexing (PyArray_DIMS(x)[-1] — an out-of-bounds
+            # heap read, found by the adversarial review); index with the
+            # explicit non-negative last axis instead.
+            return np.full(x.shape[x.ndim - 1], False, dtype=np.bool_)
     
     #needs improvement. useless so far. cdef?.
     cpdef derivative(self,  x,  h=1e-5, dict params = None):
@@ -744,62 +856,100 @@ cdef class RealFunctionC:
 
         return (self.evaluate(x + h, params) - self.evaluate(x - h, params)) / (2 * h)
 
-    def __call__(self, cnp.ndarray[cnp.float64_t, ndim=1] x):
+    def __call__(self, cnp.ndarray x):
         """Allows standard calling"""
         return self.evaluate(x)
-    # Very important: keep it Python func    
+    # Very important: keep it Python func
     @classmethod
-    def from_string(cls, expr_str,  cnp.ndarray[cnp.float64_t, ndim=1] x, compute_grad=True):
+    def from_string(cls, expr_str,  cnp.ndarray x, compute_grad=True):
         """Creates function class from string"""
-        cdef object x_sym = sp.symbols('x') 
+        # Flexible domain: variables come from the module registry
+        # (default ('x',) — sp.Symbol('x') is the identical sympy object,
+        # so the d=1 branch below is the historical closure verbatim).
+        cdef list var_syms = list(_VAR_SYMS)
+        cdef object x_sym = var_syms[0]
         cdef object expr
-        
-        expr = sp.sympify(expr_str)
-        # Compile ONCE over (x, *params). lambdify is a code-generation
-        # call (~ms each) and expr.subs is symbolic; doing either on every
-        # evaluate() made parameter optimisation thousands of times slower
-        # than necessary (Powell calls the objective hundreds of times per
-        # candidate, and every leaf was re-lambdified on each call). The
-        # compiled callable is captured in the closure and reused, taking
-        # numeric parameter values as positional args.
-        cdef list param_syms = sorted(
-            (s for s in expr.free_symbols if str(s) != 'x'), key=str)
-        cdef list param_names = [str(s) for s in param_syms]
-        cdef object compiled = sp.lambdify([x_sym] + param_syms, expr, "numpy")
 
-        def func(cnp.ndarray[cnp.float64_t, ndim=1] input_x, dict params = None):
-            if params is None:
-                params = {}
-            # Fast path: all (if any) free parameters are supplied -> call the
-            # pre-compiled function directly. Non-parameter leaves (sin(x),
-            # x, ...) have no free params and hit this immediately.
-            if not param_names:
-                arg_vals = [input_x]
-            elif all(name in params for name in param_names):
-                arg_vals = [input_x]
-                for name in param_names:
-                    arg_vals.append(params[name])
-            else:
-                # Rare fallback: a needed parameter is missing. Preserve the
-                # original subs+lambdify semantics exactly (returns NaN on any
-                # leftover free symbol via the except below).
-                expr_with_params = expr
-                for param_name, param_value in params.items():
-                    expr_with_params = expr_with_params.subs(
-                        sp.symbols(param_name), param_value)
+        expr = sp.sympify(expr_str)
+        # Compile ONCE over (*variables, *params). lambdify is a
+        # code-generation call (~ms each) and expr.subs is symbolic; doing
+        # either on every evaluate() made parameter optimisation thousands
+        # of times slower than necessary (Powell calls the objective
+        # hundreds of times per candidate, and every leaf was re-lambdified
+        # on each call). The compiled callable is captured in the closure
+        # and reused, taking numeric parameter values as positional args.
+        cdef list param_syms = sorted(
+            (s for s in expr.free_symbols if str(s) not in _VAR_SET), key=str)
+        cdef list param_names = [str(s) for s in param_syms]
+        cdef object compiled = sp.lambdify(var_syms + param_syms, expr, "numpy")
+        n_vars = len(var_syms)
+
+        if n_vars == 1:
+            def func(cnp.ndarray input_x, dict params = None):
+                if params is None:
+                    params = {}
+                # Fast path: all (if any) free parameters are supplied -> call the
+                # pre-compiled function directly. Non-parameter leaves (sin(x),
+                # x, ...) have no free params and hit this immediately.
+                if not param_names:
+                    arg_vals = [input_x]
+                elif all(name in params for name in param_names):
+                    arg_vals = [input_x]
+                    for name in param_names:
+                        arg_vals.append(params[name])
+                else:
+                    # Rare fallback: a needed parameter is missing. Preserve the
+                    # original subs+lambdify semantics exactly (returns NaN on any
+                    # leftover free symbol via the except below).
+                    expr_with_params = expr
+                    for param_name, param_value in params.items():
+                        expr_with_params = expr_with_params.subs(
+                            sp.symbols(param_name), param_value)
+                    try:
+                        result = sp.lambdify(x_sym, expr_with_params, "numpy")(input_x)
+                        return _to_float64_array(result, input_x)
+                    except Exception:
+                        return np.full_like(input_x, np.nan, dtype=np.float64)
+
                 try:
-                    result = sp.lambdify(x_sym, expr_with_params, "numpy")(input_x)
+                    result = compiled(*arg_vals)
                     return _to_float64_array(result, input_x)
                 except Exception:
                     return np.full_like(input_x, np.nan, dtype=np.float64)
+        else:
+            # d > 1: the domain arrives as ONE (d, n) C-contiguous array;
+            # the compiled callable receives the d coordinate ROWS as
+            # zero-copy views (plan §0 D2). Outputs are always (n,).
+            def func(cnp.ndarray input_x, dict params = None):
+                if params is None:
+                    params = {}
+                arg_vals = [input_x[_i] for _i in range(n_vars)]
+                if not param_names:
+                    pass
+                elif all(name in params for name in param_names):
+                    for name in param_names:
+                        arg_vals.append(params[name])
+                else:
+                    # Rare fallback: a needed parameter is missing —
+                    # subs+lambdify semantics as in the d=1 branch.
+                    expr_with_params = expr
+                    for param_name, param_value in params.items():
+                        expr_with_params = expr_with_params.subs(
+                            sp.symbols(param_name), param_value)
+                    try:
+                        result = sp.lambdify(var_syms, expr_with_params, "numpy")(
+                            *[input_x[_i] for _i in range(n_vars)])
+                        return _to_float64_array(result, input_x)
+                    except Exception:
+                        return _flat_fill(input_x, _NAN)
 
-            try:
-                result = compiled(*arg_vals)
-                return _to_float64_array(result, input_x)
-            except Exception:
-                return np.full_like(input_x, np.nan, dtype=np.float64)
+                try:
+                    result = compiled(*arg_vals)
+                    return _to_float64_array(result, input_x)
+                except Exception:
+                    return _flat_fill(input_x, _NAN)
 
-        return cls(func, expr, x, compute_grad=compute_grad) 
+        return cls(func, expr, x, compute_grad=compute_grad)
 
     def get_description(self):
         """Access str(self.expr) directly --> redundancy with str(get_expr(self))"""
@@ -808,8 +958,8 @@ cdef class RealFunctionC:
     def __add__(self, RealFunctionC other):
         """Addition of two RealFunctions."""
         cdef object new_expr = self.expr + other.expr
-        
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+
+        def new_func(cnp.ndarray x, dict params=None):
             return self.evaluate(x, params) + other.evaluate(x, params)
 
         return RealFunctionC(new_func, new_expr, self.domain)
@@ -818,7 +968,7 @@ cdef class RealFunctionC:
         """Subtraction of two RealFunctions."""
         cdef object new_expr = self.expr - other.expr
 
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+        def new_func(cnp.ndarray x, dict params=None):
             return self.evaluate(x, params) - other.evaluate(x, params)
 
         return RealFunctionC(new_func, new_expr, self.domain)
@@ -827,7 +977,7 @@ cdef class RealFunctionC:
         """Multiplication of two RealFunctions."""
         cdef object new_expr = self.expr * other.expr
 
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+        def new_func(cnp.ndarray x, dict params=None):
             return self.evaluate(x, params) * other.evaluate(x, params)
 
         return RealFunctionC(new_func, new_expr, self.domain)
@@ -836,7 +986,7 @@ cdef class RealFunctionC:
         """Division of two RealFunctions with protection against division by zero."""
         cdef object new_expr = self.expr / other.expr
 
-        def safe_div(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+        def safe_div(cnp.ndarray x, dict params=None):
             cdef object numerator = self.evaluate(x, params)
             cdef object denominator = other.evaluate(x, params)
             return np.where(denominator == 0, np.inf, numerator / denominator)
@@ -844,8 +994,20 @@ cdef class RealFunctionC:
         return RealFunctionC(safe_div, new_expr, self.domain)
 
     def compose(self, RealFunctionC other):
-        """Composition of two RealFunctions (f1(f2(x)))."""
-        cdef object x_sym = sp.symbols('x')
+        """Composition of two RealFunctions (f1(f2(x))). d = 1 ONLY.
+
+        Flexible domain (plan §0 D6 / §8.1): with several variables the
+        substitution slot is undefined — compose-at-d>1 is a STANDING
+        ITEM, not implemented. This is the single innermost gate: every
+        'o' dispatch (Node.fetch_fun / update_func, build_tree,
+        node_from_skel 'O' rebuild, _expr_to_tree function rebuild) lands
+        here, so an 'o' that slips past construction-time validation
+        still cannot execute at d > 1."""
+        if len(_VARIABLES) > 1:
+            raise NotImplementedError(
+                "compose ('o') is not defined for multivariate domains "
+                "(flexible_domain_plan.md §8.1 — standing item)")
+        cdef object x_sym = _VAR_SYMS[0]
         cdef object new_expr = self.expr.subs(x_sym, other.expr)
         if self.is_param():
             new_expr = self.expr * other.expr
@@ -853,8 +1015,8 @@ cdef class RealFunctionC:
             new_expr = self.expr.subs(x_sym, other.expr)
  
             
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
-            if self.is_param(): 
+        def new_func(cnp.ndarray x, dict params=None):
+            if self.is_param():
                 return self.evaluate(x, params) * other.evaluate(x, params)
 
             cdef object is_defined_mask = other.is_defined(x, params)
@@ -873,7 +1035,7 @@ cdef class RealFunctionC:
         """Exponentiation of a RealFunction."""
         cdef object new_expr = self.expr ** other.expr
 
-        def new_func(cnp.ndarray[cnp.float64_t, ndim=1] x, dict params=None):
+        def new_func(cnp.ndarray x, dict params=None):
             return self.evaluate(x, params) ** other.evaluate(x, params)
 
         return RealFunctionC(new_func, new_expr, self.domain)
@@ -932,20 +1094,27 @@ cdef class AtomSpec:
         cdef str s_str
         for s in expr.free_symbols:
             s_str = str(s)
-            if re.fullmatch(r'[a-zA-Z]\d+', s_str):
-                slots.append(s_str)
-            elif s_str == 'x':
+            # Flexible domain (plan §0 D4): registry membership BEFORE the
+            # placeholder regex — 'x0'-style variable names match
+            # [a-zA-Z]\d+ and would otherwise become parameter slots.
+            # Legacy 'x' takes this branch too (it never matched the
+            # regex): bit-identical classification.
+            if s_str in _VAR_SET:
                 has_x = True
+            elif re.fullmatch(r'[a-zA-Z]\d+', s_str):
+                slots.append(s_str)
             else:
                 raise ValueError(
-                    "AtomSpec %r: free symbol %r is neither the variable 'x' "
-                    "nor a placeholder parameter ([a-zA-Z]<digits>)"
-                    % (name, s_str))
+                    "AtomSpec %r: free symbol %r is neither a registered "
+                    "variable %r nor a placeholder parameter "
+                    "([a-zA-Z]<digits>)"
+                    % (name, s_str, _VARIABLES))
         if not has_x:
             raise ValueError(
-                "AtomSpec %r: template must depend on x. A constant template "
-                "IS the ordinary parameter leaf (Psi_1), already registered."
-                % name)
+                "AtomSpec %r: template must depend on at least one "
+                "registered variable %r. A constant template IS the "
+                "ordinary parameter leaf (Psi_1), already registered."
+                % (name, _VARIABLES))
         if len(slots) == 0:
             raise ValueError(
                 "AtomSpec %r: template has no internal parameters (k = 0). "
@@ -967,7 +1136,7 @@ cdef class AtomSpec:
 
 
 cpdef RealFunctionC instantiate_atom(AtomSpec spec,
-                    cnp.ndarray[cnp.float64_t, ndim=1] domain,
+                    cnp.ndarray domain,
                     list fresh_names):
     """Instantiate `spec` as a concrete opaque-leaf RealFunctionC whose
     internal parameters carry `fresh_names` (positionally matched to
@@ -998,6 +1167,11 @@ cpdef RealFunctionC instantiate_atom(AtomSpec spec,
             raise ValueError(
                 "instantiate_atom(%r): %r does not match the parameter "
                 "pattern [a-zA-Z]<digits>" % (spec.name, nm))
+        if nm in _VAR_SET:
+            raise ValueError(
+                "instantiate_atom(%r): fresh name %r is a registered "
+                "variable — the slot substitution would bind the atom "
+                "parameter to the domain" % (spec.name, nm))
     cdef dict sym_map = {}
     for i in range(spec.k):
         sym_map[sp.Symbol(spec.slots[i])] = sp.Symbol(fresh_names[i])
@@ -1054,12 +1228,25 @@ cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept:
     return realf._cfunc(x, w, ndim)
     
 
-cpdef cnp.ndarray[cnp.float64_t, ndim=1] _domain_fixer( 
-                    cnp.ndarray[cnp.float64_t, ndim=1] domain):
-        """Ensure domain is a 1D numpy array of float64."""
-        #cdef double[:] arrview = np.ascontiguousarray(domain, dtype=np.float64).ravel()
-        cdef Py_ssize_t i, N = domain.shape[0]
+cpdef cnp.ndarray _domain_fixer(
+                    cnp.ndarray domain):
+        """Replace exact zeros with 1e-10 (division guards), in place.
+
+        Accepts the legacy (n,) float64 layout or the flexible (d, n)
+        C-contiguous layout (plan §0 D2); shape is preserved — never
+        raveled or coerced to 1-D."""
+        cdef Py_ssize_t i, N
+        cdef double[:] flat
+        if domain.ndim == 1:
+            flat = domain
+        else:
+            if not domain.flags['C_CONTIGUOUS']:
+                raise ValueError(
+                    "_domain_fixer: (d, n) domain must be C-contiguous "
+                    "(coordinate rows, points along the last axis)")
+            flat = domain.reshape(-1)   # view: in-place writes reach domain
+        N = flat.shape[0]
         for i in range(N):
-            if domain[i] == 0.0:
-                domain[i] = 1e-10     
+            if flat[i] == 0.0:
+                flat[i] = 1e-10
         return domain

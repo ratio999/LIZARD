@@ -120,12 +120,12 @@ cdef class Node:
         return self.function._log_marginal_bic(y, params, x)
 
     
-    cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, 
-            cnp.ndarray[cnp.float64_t, ndim=1] x, double sigma):
+    cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params,
+            cnp.ndarray x, double sigma):
             return self.function._log_sigma_bic(y, params, x, sigma)
-    
-    cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params, 
-            cnp.ndarray[cnp.float64_t, ndim=1] x, cnp.ndarray[cnp.float64_t, ndim=1] sigma):
+
+    cdef double _log_sigma_array_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params,
+            cnp.ndarray x, cnp.ndarray[cnp.float64_t, ndim=1] sigma):
             return self.function._log_sigma_array_bic(y, params, x, sigma)
 
     def get_root(self):
@@ -292,14 +292,14 @@ cdef class Node:
         if self.right:
             self.right.posterior_tree(y, parameters)
          
-    cdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    cdef optimize(self, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, str method_str='L-BFGS-B', bint use_gradients=False):
         if use_gradients:
             return self.function._optimize_with_grad(x_data, y_data, input_pars, method_str)
         else:
             return self.function.optimize(x_data, y_data, input_pars, method_str='Powell')
-    
-    cdef optimize_sigma(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+
+    cdef optimize_sigma(self, cnp.ndarray x_data, cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         dict input_pars, cnp.ndarray[cnp.float64_t, ndim=1] sigma, str method_str='L-BFGS-B', bint use_gradients=False):
         return self.function.optimize_sigma(x_data, y_data, input_pars, method_str = 'Powell', sigma=sigma)
         
@@ -572,7 +572,7 @@ cdef class Tree:
      
 
     def __init__(self, int depth, list functions,
-            cnp.ndarray[cnp.float64_t, ndim=1] x,
+            cnp.ndarray x,
             Node node=None, int Npars = 0, object value=1,
             double T=0, double alpha=0.01, object sigma = 1.0,
             double g_tau=1.0, list operations=None):
@@ -847,7 +847,7 @@ cdef class Tree:
         
         return self.root.posterior
             
-    cpdef optimize(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
+    cpdef optimize(self, cnp.ndarray x_data,
         cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str='L-BFGS-B', bint use_gradients=False):
         cdef dict input_pars = self.name_values
@@ -924,8 +924,8 @@ cdef class Tree:
         else:
             return self.root._log_sigma_bic(y, self.name_values, self.domain, <double>(self.sigma))
 
-    cdef _update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    cdef _update_parameters(self, cnp.ndarray x_data,
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str='L-BFGS-B', bint use_gradients=False):
         '''Finds optimal parameters and sets them in the tree'''
 
@@ -961,8 +961,8 @@ cdef class Tree:
         self.tree_update(self.root)
         #print('Updated parameters to: ', self.name_values) #comment out in production
        
-    cdef double _update_parameters_and_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    cdef double _update_parameters_and_fitness(self, cnp.ndarray x_data,
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str='L-BFGS-B', bint use_gradients=False):
         '''Finds optimal parameters and sets them in the tree'''
         
@@ -996,8 +996,8 @@ cdef class Tree:
         self.tree_update(self.root)
         return mse
 
-    cpdef update_parameters(self, cnp.ndarray[cnp.float64_t, ndim=1] x_data, 
-        cnp.ndarray[cnp.float64_t, ndim=1] y_data, 
+    cpdef update_parameters(self, cnp.ndarray x_data,
+        cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str='L-BFGS-B', bint use_gradients=False):
         self._update_parameters(x_data, y_data, method_str, use_gradients)
     cpdef bint is_valid(self, object x=None, double max_abs=1e12):
@@ -1145,7 +1145,7 @@ cpdef object tree_to_skel(Node node):
 
 
 cpdef Node node_from_skel(object skel,
-                          cnp.ndarray[cnp.float64_t, ndim=1] domain,
+                          cnp.ndarray domain,
                           dict atom_specs):
     """Rebuild a Node tree from a skeleton tuple.
 
@@ -1178,7 +1178,7 @@ cpdef Node node_from_skel(object skel,
     return Node(None, left, right, <str> skel[1])
 
 #cdef --> is cpdef for testing purposes only
-cpdef build_tree(int depth, list functions, cnp.ndarray[cnp.float64_t, ndim=1] x,
+cpdef build_tree(int depth, list functions, cnp.ndarray x,
         str output_type=None, int Npars=0, object leaves_count = None, object arr_indices = None,
              dict params_used=None, object value = 1.0, double T=0, double alpha=0.01, object sigma=1.00,
              double g_tau = 1.0, list operations=None):
@@ -1331,29 +1331,61 @@ cdef parameter_parser(int Npars):
     '''
     return parameters
 
-#Naming parameters requires fix!    
+cdef bint _prefix_mints_variable(object prefix):
+    """True iff prefix+digits could equal a REGISTERED variable name.
+
+    Flexible-domain guard (plan §0 D4): with registry ('x0','x1') the
+    prefix 'x' is forbidden for parameter minting; with the legacy
+    registry ('x',) NO prefix is forbidden ('x' alone never matches
+    prefix+digits), so legacy naming is bit-identical. (`object`-typed:
+    this module compiles under language_level 2, where unicode locals
+    do not implicitly coerce to `str` parameters.)"""
+    cdef object v
+    for v in real_functionC.get_variables():
+        if re.fullmatch(re.escape(prefix) + r"\d+", v):
+            return True
+    return False
+
+
+#Naming parameters requires fix!
 cdef new_par(list existing_params, str user_choice=None):
     '''Add a new parameter named with a specific logic'''
     existing_params = [item for sublist in existing_params for item in (sublist if isinstance(sublist, list) else [sublist])]
     if len(existing_params) > 0:
         param_pattern = re.compile(r"([a-zA-Z]+)(\d+)")
         param_names = [param_pattern.match(param).groups()[0] for param in existing_params if param_pattern.match(param)]
-        
+        # Flexible-domain guard: never derive a prefix that could mint a
+        # registered variable name (no-op filter under the legacy
+        # registry — same list, same single RNG draw below).
+        param_names = [p for p in param_names if not _prefix_mints_variable(p)]
+        if not param_names:
+            param_names = ['a']
+
         #unique_prefixes = set(param_names)
+        if user_choice is not None and _prefix_mints_variable(user_choice):
+            user_choice = None
         if user_choice not in param_names or user_choice is None:
             user_choice = _PY_RNG.choice(param_names)
-       
+
 
 
         indices = [int(param_pattern.match(param).groups()[1]) for param in existing_params if param.startswith(user_choice)]
         new_index = max(indices) + 1 if indices else 0
+        # Last-resort skip: a parameter name must never equal a variable.
+        while real_functionC.is_variable_name(f"{user_choice}{new_index}"):
+            new_index += 1
 
         return f"{user_choice}{new_index}"
-    
-    user_choice = user_choice if user_choice else 'a'
-    return f"{user_choice}0"
 
-cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list function_list, dict params_used = None ):
+    user_choice = user_choice if user_choice else 'a'
+    if _prefix_mints_variable(user_choice):
+        user_choice = 'a'
+    new_index = 0
+    while real_functionC.is_variable_name(f"{user_choice}{new_index}"):
+        new_index += 1
+    return f"{user_choice}{new_index}"
+
+cdef _expr_to_tree(object expr, cnp.ndarray domain, list function_list, dict params_used = None ):
     """
     Sympy expr to Tree
 
@@ -1364,11 +1396,22 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
     Returns:
         Tree
     """
-    
+
     cdef Tree left_tree, right_tree, arg_tree, result_tree, inner_tree, neg_one_tree
     cdef Node root_node
     cdef real_functionC.RealFunctionC func, root_func, composed_func
-    
+
+    # Flexible domain (plan §0 D8): the raw-sympy-expr rebuild is a
+    # d=1-only path — function applications rebuild as COMPOSITIONS (see
+    # the sp.Function branch below), which are undefined at d > 1.
+    # Multivariate trees always ride the exact-shape skeleton wire
+    # (tree_to_skel / node_from_skel) instead.
+    if real_functionC.n_variables() > 1:
+        raise NotImplementedError(
+            "_expr_to_tree: raw-expression rebuild is d=1-only; "
+            "multivariate trees use the skeleton wire "
+            "(flexible_domain_plan.md §0 D8)")
+
     if params_used is None:
         params_used = {}
     #print(params_used.values()) 
@@ -1387,8 +1430,11 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
 
     if isinstance(expr, sp.Symbol):
         symbol_str = str(expr)
-        if symbol_str == 'x':
-            func = real_functionC.RealFunctionC.from_string('x', domain)
+        # Flexible domain (plan §0 D4): registry membership, not the
+        # literal 'x' — a registered variable rebuilt as a parameter
+        # would silently lose the expression's x-dependence.
+        if real_functionC.is_variable_name(symbol_str):
+            func = real_functionC.RealFunctionC.from_string(symbol_str, domain)
             root_node = Node(function = func)
         else:
             if symbol_str not in params_used:
@@ -1512,7 +1558,10 @@ cdef _expr_to_tree(object expr, cnp.ndarray[cnp.float64_t, ndim=1] domain, list 
         return result_tree
 
     if isinstance(expr, sp.Function):
-        func_name = ''.join((expr.func.__name__, '(x)'))
+        # Registry-aware primitive key ('sin(x)' legacy; 'sin(f)' for a
+        # custom d=1 variable name). d>1 never reaches here (entry guard).
+        func_name = ''.join(
+            (expr.func.__name__, '(', real_functionC.get_variables()[0], ')'))
         #print('NAME: ', func_name)
         if func_name in function_list:
             root_function = real_functionC.RealFunctionC.from_string(func_name, domain) 
