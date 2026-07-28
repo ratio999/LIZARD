@@ -1518,6 +1518,67 @@ test plan and implementation notes live in **`flexible_domain_plan.md`**
   ~944/981, never exercised by suites); RealFunctionC.is_param() returns
   True/None, never False; module-level `is_parameter` is dead code.
 
+### FD ⋈ master INTEGRATION — MERGED + CERTIFIED 2026-07-28
+Branch `integrate-fd` = merge commit **f69fca5**, parents **7e48140**
+(master line: Phase 4.4 tilt v1+v2 + the 2026-07-24 wire-fidelity fix)
+and **80fa784** (flexible_domain). Merge base dd0f992. FD was fetched
+directly from the sibling clone
+(`gp/2d_domain/machine-scientist`, local path — no remote round-trip;
+80fa784 is NOT yet on origin). The two lines are near-orthogonal: FD
+never touched the six tilt acceptance sums, master never touched the
+registry/shape machinery, so only **groveC.pyx + mpi_worker.pyx**
+conflicted (7 hunks); PLAN.md auto-merged.
+
+**Conflict resolutions — all unions, no semantic compromise:**
+(1)+(2) Grove and Forest ctor signatures take the three tilt kwargs
+THEN `variables=None`; (3) Forest body keeps the tilt mutual-exclusion
+TypeError BEFORE the registry install, so a malformed call cannot
+mutate the process-global variable registry; (4) **the wire predicate
+is the OR of both fixes** — `force_skel or has_atomic or
+real_functionC.n_variables() > 1` — the atomic scan still skipped when
+force_skel (master's cheap path) and d>1 still auto-skeletons (FD's
+invariant); (5) Forest→Grove forwards all four kwargs; (6) `_ctor`
+carries `structural_prior_spec` + `structural_prior_cache` +
+`variables`; (7) mpi_worker sampler Grove ctor takes both features'
+kwargs. **Ordering property that fell out for free:** FD installs the
+registry at mpi_worker ~:414, BEFORE the AtomSpec rebuild and before
+Grove construction — and the tilt spec resolves INSIDE the Grove ctor,
+i.e. strictly after, so a future d>1 constraint builder may reference
+variable names safely.
+
+**Certification (both regimes, one pipeline, 1876s):** rebuild clean
+(123s). d=1 — test_phase23 and test_phase28 logs **BYTE-IDENTICAL** to
+the pre-merge postfix baseline; test_phase210 identical modulo id()
+addresses, fingerprints **2.10o 5.28e-28 / 2.10s 1.72e-28** reproduced;
+test_phase2mpi **[2.12] byte-identical** (paths=68, swaps=4, xover=6,
+best `x + cos(x)`), [2.12d] serial and [2.10f] spawn burn-in identical
+incl. 1.72e-28; test_phase42 pipeline fingerprint **post −64.534224 /
+nrmse 0.009240 (matches reference)**. test_phase212_wire **27/27**,
+test_phase44 **21/21** (T7b 0/6 stale, T7c m3=5). d>1 — test_phaseFD
+**ALL PASSED** both serial (152s) and `--mpi` (159s), including the
+live 2-rung `run_mpi_spawn` at d=2 with an atom on board.
+**The two movers were PROVEN pre-existing nondeterminism, not merge
+effects:** a determinism probe ran test_phase2mpi TWICE on the
+identical merged binary → `[2.10q] polya_paths_replayed` **117 vs 113**
+(cert had 123 vs 111; same band, PASS either way, mse 0.00e+00 both
+runs), and [2.9c] is the long-documented TV-statistic wobble (three
+distinct values from the OLD binary alone). Everything deterministic
+stayed deterministic across the probe ([2.12], [2.10f], [2.12d]).
+**Structural completeness verified:** `git diff 7e48140..HEAD` is
+exactly the FD file set, `git diff 80fa784..HEAD` exactly the
+master-side set, zero conflict markers, and the no-duplication counts
+are exact (`def __init__` 2, `set_variables(_vars)` 2, `cdef tuple
+_vars` 2, `cdef bint _flex` 2) — no hunk lost, none duplicated.
+
+**PERF:** no serial-path change (all FD validation is flexible-mode-
+only; legacy `variables=None` + 1-D x skips every new branch by
+construction) — d=1 walls in the usual environmental band, and FD's
+own timing check reports d=1 0.006s vs d=2 0.007s per 2000 evaluates.
+NB `structural_prior` + d>1 is UNTESTED and the shipped
+`exp_constraints.asymptotic_power` builder is 1-D (x→+∞) by
+construction — treat the tilt as a d=1 feature until a multivariate
+constraint builder exists (deferred item, not a defect).
+
 ---
 
 ## Phase 5 — Writing
