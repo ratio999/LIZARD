@@ -36,3 +36,9 @@ Untitled*.ipynb
 
 # Agent working directory (session-local; not project content)
 .claude/
+
+# ---------------------------------------------------------------------------
+# Writing / handoff briefs — LOCAL ONLY by user decision (2026-07-28).
+# Kept on disk, deliberately never committed.
+# ---------------------------------------------------------------------------
+PROMPT_*.md
