@@ -1,0 +1,17 @@
+{
+  "target": "flux",
+  "feynman_id": "I.12.2",
+  "seed": 17,
+  "rounds": 60,
+  "warmup_steps": 40,
+  "burn_in_workers": 2,
+  "burn_in_top": "(a0 + cos(x))/(x*sin(x))",
+  "best_tree": "a0/(x*(a1*x - exp(x)*cos(x)))",
+  "best_params": {
+    "a0": 269.20510215644,
+    "a1": 137.70012687185573
+  },
+  "best_posterior": -64.53422364551008,
+  "mse_train": 0.01155229418618292,
+  "nrmse_test": 0.00923951971636336
+}
