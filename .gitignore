@@ -1,0 +1,38 @@
+# Experiment outputs — keep on disk, never in git (user decision 2026-07-15)
+results/
+
+# ---------------------------------------------------------------------------
+# Credentials — NEVER commit. token.txt holds a live access token; it has
+# never been committed (verified 2026-07-28) and must stay that way.
+# ---------------------------------------------------------------------------
+token
+token.txt
+*.token
+.env
+.env.*
+
+# ---------------------------------------------------------------------------
+# Build artifacts. The .c files here are Cython-GENERATED from the .pyx
+# sources; the hand-written C under numerical_backend/ is tracked source
+# and is re-included below.
+# ---------------------------------------------------------------------------
+build/
+cython_debug/
+__pycache__/
+*.pyc
+*.so
+*.o
+*.c
+!numerical_backend/*.c
+
+# ---------------------------------------------------------------------------
+# Editor / scratch
+# ---------------------------------------------------------------------------
+*.swp
+*~
+\#*\#
+.ipynb_checkpoints/
+Untitled*.ipynb
+
+# Agent working directory (session-local; not project content)
+.claude/
