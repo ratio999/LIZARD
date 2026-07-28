@@ -1581,6 +1581,123 @@ constraint builder exists (deferred item, not a defect).
 
 ---
 
+## Phase MR — Merger-ringdown closed forms (science case OPENED 2026-07-28)
+Target: SEOBNRv5HM merger-ringdown ansatz (PhysRevD.108.124035 Sec. IV B,
+Eqs. 48–50) — SR on the QNM-factorized residual channels Ã_lm(t), φ̃_lm(t)
+(separately, d=1), per-point σ from NR resolution differences; the
+oscillatory waveform enters ONLY through the σ weights and as the held-out
+waveform-domain judge. Agreed order of work: (1) σ-array kernel route
+[DONE below] → (2) transparent atoms → (3) preprocessing pipeline
+(codebase-independent, parallelizable via a separate instance).
+
+### MR.1 σ-ARRAY FIX — DONE + CERTIFIED 2026-07-28
+The per-point-σ route existed since Phase 2.7(a) but was unreachable.
+THREE defect surfaces (first flagged at FD review, flexible_domain_plan §9):
+  (i)+(ii) `Tree._update_parameters` / `_update_parameters_and_fitness`
+  passed (input_pars, method_str, use_gradients, self.sigma) into
+  `Node.optimize_sigma(..., input_pars, SIGMA, method_str, use_gradients)`
+  — the str landed in the typed float64 sigma slot → TypeError; the
+  optimize path for array σ never ran. (iii) `gp_movesC.parameter_refresh`
+  took `double sigma` → TypeError at the coercion on the FIRST PR draw of
+  any Grove configured with an array (pr_prob=0.02 ⇒ every EMC run dies).
+FIX (additive contract respected):
+  * both call sites repaired to declaration order, σ coerced
+    `np.ascontiguousarray(...,float64).ravel()` at the typed boundary
+    (no-op view for proper arrays; lists/float32 now work);
+  * same coercion at the optimize=False scoring boundary
+    (`_log_sigma_array_bic` call site);
+  * `parameter_refresh` σ `double`→`object`: scalar branch verbatim
+    (verified in generated C: same PyFloat_AsDouble → same vtab call, no
+    added RNG); array branch routes through NEW ADDITIVE
+    `Tree._log_likelihood_at_sigma_arr` (heteroscedastic Gaussian:
+    −0.5Σlog(2πσᵢ²) −0.5Σrᵢ²/σᵢ²; −inf on shape mismatch / any σᵢ≤0 or
+    non-finite / non-finite wssr; plain np.sum, zero-likelihood semantics).
+NORMALIZATION AUDIT: σ applied exactly once on all four scoring paths
+(array/scalar × optimize on/off); `_shortcut_bic`'s array branch consumes
+the already-weighted mse from `objective_sigma`, scalar branch divides once.
+NEW TEST `test_sigma_array.py` (28 checks, no MPI): TypeError regressions
+at all three surfaces; analytic scorer identities (fast + slow path);
+const-array ≡ scalar (exact + same Powell landing); NaN → penalty-scale on
+the array path; PR chains scalar↔const-array step-identical under pinned
+RNG; SA-e4/e5 = full numpy replication of a 12-step heteroscedastic PR
+chain (AM cold+warm proposals, Robbins–Monro, accept draws, per-point
+logL) matched step-for-step — the value-level pin of the only new math;
+guard checks (σᵢ≤0, wrong length ⇒ deterministic reject); Grove smoke
+(σ ramp, PR ACCEPTED≥1, σ-identity pin on trees, stored post == analytic
+weighted BIC, same-seed determinism); d=2×σ-array Grove; Forest
+swaps/crossovers. 28/28 PASS.
+CERTIFICATION (baseline pre-fix binary vs postfix, per-suite logs
+byte-diffed, /tmp/sa_base vs /tmp/sa_post): test_phase23 + 28 diff = 0
+LINES; 210 identical modulo memory addresses/tqdm rates, fingerprints
+2.10o 5.28e-28 + 2.10s 1.72e-28 reproduced; 29 identical except the
+documented [2.9c] TV wobble; 2mpi [2.12] byte-identical (paths=68,
+swaps=4, xover=6, best x+cos(x)), only [2.10q] 113→117 = the documented
+nondeterministic pair; test_phase42 fingerprint EXACT (post −64.534224,
+nrmse 0.009240; identical trajectory lines, diffs = worker stdout
+interleave). test_phaseFD ALL PASSED serial (175s) + --mpi (187s);
+test_phase212_wire 27/27; test_phase44 21/21 (T3b/T7c steering powers
+reproduce). Adversarial review (2 independent lenses over diff + C
+output + repo sweep): correctness/bit-identity CLEAN, no new bug in the
+diff; test-adequacy majors all addressed in the hardened test.
+FOLLOW-UPS RECORDED (kernel lane, none blocking):
+  (a) `logdet` finiteness guard in `_log_likelihood_at_sigma_arr`
+      (defensively incomplete, provably unreachable-wrong today);
+  (b) boundary validation of σ (len==len(y), σ>0, ndim==1) in
+      Grove.__init__/Tree.set_sigma — today a wrong-length σ degrades to
+      silent −inf posts (BIC) / permanent PR no-op;
+  (c) PRE-EXISTING, now numerically relevant under arrays:
+      `compute_posteriors(full=True)`/superficial-posterior path stores an
+      (N,) array into root_posteriors (legacy path, corrupts state);
+      `Grove.set_sigmas` updates trees but not Grove.sigma (PR desync —
+      pass σ via ctor); spawn burn-in workers score σ-blind
+      (profiled-σ at reference θ — extension of the documented 2.13(j)
+      anomaly); rank-parallel burn-in rebuild drops σ (path already
+      broken/unused); `Node.optimize_sigma` ignores use_gradients/
+      method_str — array path is Powell-only BY DESIGN (the symbolic
+      gradient differentiates the unweighted MSE; do not enable);
+  (d) pxd hygiene: new cdef was inserted mid-class (vtab-slot shift is
+      covered by the full rebuild; prefer appending in future); stale
+      samplerC/cpython-38 .so files in-tree are dead, delete some day;
+  (e) SA-e2 accept-sequence comparison is fp-portable only per-box
+      (deterministic under this compiler/BLAS; documented).
+
+### MR.2 NEXT TODO — TRANSPARENT ATOMS (= flexible atoms, PLAN 2.11)
+Kernel lane, Phase-2.10-sized. Needed for the DISCOVERY arm of Phase MR
+(searchable arguments inside frozen shapes: tanh(g(t)), log(1+d·e^{−h(t)}))
+and subsumes compose-at-d>1 (arity-1 case) without reopening 'o'.
+Design decisions to settle BEFORE implementation (from the 2026-07-15
+sketch + this session's assessment): (1) identity rendering — description
+must carry the template head applied to slot descriptions (unexpanded
+Function head; expanding would import the §8.1 hidden-subtree hazard into
+the BIC cache/Pólya keys); (2) slot evaluation NUMERIC (slot outputs fed
+to the template's compiled closure — no sympy subs, sidesteps the blow-up
+that quarantined 'o'; the FD multi-arg closure machinery is the floor);
+(3) "not erased/mutated" semantics: frozen interior = never a move target
+(support restriction); slots fully mutable BOTH ways (expansion-only is
+inadmissible in MH — zero reverse density); optional atom immortality =
+death force-rejected + entry by seeding only; (4) crossover masking policy
+(v1: atoms opaque to crossover, slots evolve by within-slot moves);
+(5) per-template identifiability pruning (affine-wrapper class);
+(6) site-count masking in EVERY selection cardinality + THEORY §4
+irreducibility re-proof on the masked space; skel wire + burn-in token
+extensions. Note: Eq. 49/50-class shapes (affine arguments) are already
+reachable TODAY via opaque atoms (c0*tanh(c1*x+c2)) — stage-1 experiments
+need not wait for this item.
+
+### MR.3 FINAL TODO — PREPROCESSING PIPELINE (NOT codebase-dependent)
+NR merger-ringdown → regression-ready (t, y, σ) products per (simulation,
+mode, channel): SXS acquisition, alignment at t22_peak, remnant/QNM
+factorization, mode-mixing removal for (3,2)/(4,3), channel extraction
+with late-time-flatness validation, per-point σ from resolution
+differences (e^{+σ_I τ} amplification kept — that IS the honest
+likelihood), Eq. 49/50 baseline fits, validation gates V1–V5. Pure
+numpy/scipy + sxs/qnm — runs anywhere, parallelizable with kernel work.
+HANDOFF PROMPT WRITTEN: `PROMPT_PREPROCESSING_PIPELINE.md` (2026-07-28)
+— defines the data contract (float64 (n,) t/y/σ, metadata, manifest),
+the validation gates, and the house rules for a fresh instance.
+
+---
+
 ## Phase 5 — Writing
 **→ The full, consequential section-by-section writing roadmap now lives in
 `PAPER_PLAN.md` (created 2026-07-09). It supersedes the thin skeleton below,

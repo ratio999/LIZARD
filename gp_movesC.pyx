@@ -2357,7 +2357,7 @@ cpdef list pr_coord_names(function_treeC.Tree tree):
 
 cdef tuple _parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
-                              double sigma,
+                              object sigma,
                               AMState am_state,
                               double T):
     """
@@ -2365,6 +2365,14 @@ cdef tuple _parameter_refresh(function_treeC.Tree tree,
     Self-contained MH: scores on raw Gaussian likelihood (D2),
     tempered by 1/T (D7). Symmetric AM proposal => no proposal
     correction => log_q_fwd = log_q_rev = 0.
+
+    sigma-array fix (2026-07-28): `sigma` is now object-typed. A scalar
+    takes the historical code path verbatim (identical arithmetic, no
+    extra RNG draws -- certified bit-identical); a per-point array routes
+    the likelihood through the ADDITIVE heteroscedastic companion
+    Tree._log_likelihood_at_sigma_arr. Previously an array Grove.sigma
+    raised TypeError at the `double sigma` coercion on the first PR draw,
+    killing any EMC run configured with per-point noise.
 
     Mutates `tree` in place ON ACCEPT. Updates am_state in place
     (Robbins-Monro) regardless of accept/reject (required for
@@ -2425,9 +2433,19 @@ cdef tuple _parameter_refresh(function_treeC.Tree tree,
     for j in range(K):
         cand_nv[names[j]] = float(theta_new[j])
 
-    cdef double logL_old = tree._log_likelihood_at(y, cur_nv, sigma)
-    cdef double logL_new = tree._log_likelihood_at(y, cand_nv, sigma)
-    
+    cdef double logL_old
+    cdef double logL_new
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] sig_arr
+    if hasattr(sigma, '__len__'):
+        # Per-point sigma: coerce once (no-op view for contiguous float64)
+        # and score both states with the same array.
+        sig_arr = np.ascontiguousarray(sigma, dtype=np.float64).ravel()
+        logL_old = tree._log_likelihood_at_sigma_arr(y, cur_nv, sig_arr)
+        logL_new = tree._log_likelihood_at_sigma_arr(y, cand_nv, sig_arr)
+    else:
+        logL_old = tree._log_likelihood_at(y, cur_nv, <double> sigma)
+        logL_new = tree._log_likelihood_at(y, cand_nv, <double> sigma)
+
     cdef double log_acc
     if not np.isfinite(logL_new):
         log_acc = -np.inf
@@ -2456,7 +2474,9 @@ cdef tuple _parameter_refresh(function_treeC.Tree tree,
 
 cpdef tuple parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
-                              double sigma,
+                              object sigma,
                               AMState am_state,
                               double T):
+    """sigma may be a positive scalar (historical, bit-identical path) or
+    a per-point float64 array of len(y) (sigma-array fix, 2026-07-28)."""
     return _parameter_refresh(tree, y, sigma, am_state, T)

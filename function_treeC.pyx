@@ -920,7 +920,14 @@ cdef class Tree:
         if self.sigma is None:
             return self.root._log_marginal_bic(y, self.name_values, self.domain)
         elif hasattr(self.sigma, '__len__'):
-                return self.root._log_sigma_array_bic(y, self.name_values, self.domain, self.sigma)
+                # sigma-array fix (2026-07-28): coerce at the typed boundary
+                # (no-op view when the caller already holds a contiguous
+                # float64 vector) so list/float32 sigmas cannot TypeError
+                # deep inside the scorer. Behaviour for ndarray callers is
+                # unchanged.
+                return self.root._log_sigma_array_bic(
+                    y, self.name_values, self.domain,
+                    np.ascontiguousarray(self.sigma, dtype=np.float64).ravel())
         else:
             return self.root._log_sigma_bic(y, self.name_values, self.domain, <double>(self.sigma))
 
@@ -941,8 +948,19 @@ cdef class Tree:
         if not hasattr(self.sigma, '__len__'):
             result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         else:
-            result = self.root.optimize_sigma(x_data, y_data,
-            input_pars, method_str, use_gradients, self.sigma)
+            # sigma-array fix (2026-07-28): the historical call passed
+            # (input_pars, method_str, use_gradients, self.sigma) into
+            # Node.optimize_sigma(..., input_pars, SIGMA, method_str,
+            # use_gradients) -- the str method_str landed in the typed
+            # sigma slot and raised TypeError, so the per-point-sigma
+            # optimize path was unreachable (flagged at FD review,
+            # flexible_domain_plan section 9). Arguments now follow the
+            # declaration order; sigma coerced to a contiguous float64
+            # vector at this boundary (no-op for ndarray callers).
+            result = self.root.optimize_sigma(
+                x_data, y_data, input_pars,
+                np.ascontiguousarray(self.sigma, dtype=np.float64).ravel(),
+                method_str, use_gradients)
         optimized_params = dict(zip(input_pars.keys(), result.x))
         #print(self.tree_get_description(), result)
         for par in self.params:
@@ -978,8 +996,13 @@ cdef class Tree:
         if not hasattr(self.sigma, '__len__'):
             result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         else:
-            result = self.root.optimize_sigma(x_data, y_data,
-            input_pars, method_str, use_gradients, self.sigma)
+            # sigma-array fix (2026-07-28): same positional repair as in
+            # _update_parameters above (arguments were shifted one slot,
+            # method_str landing in the typed sigma buffer -> TypeError).
+            result = self.root.optimize_sigma(
+                x_data, y_data, input_pars,
+                np.ascontiguousarray(self.sigma, dtype=np.float64).ravel(),
+                method_str, use_gradients)
         optimized_params = dict(zip(input_pars.keys(), result.x))
         #print(self.tree_get_description(), result)
         cdef double mse=result.fun
@@ -1041,6 +1064,45 @@ cdef class Tree:
         cdef int n = y.shape[0]
         cdef double s2 = sigma * sigma
         return -0.5 * n * np.log(2.0 * np.pi * s2) - 0.5 * ssr / s2
+
+    cdef double _log_likelihood_at_sigma_arr(self,
+                               cnp.ndarray[cnp.float64_t, ndim=1] y,
+                               dict cand_name_values,
+                               cnp.ndarray[cnp.float64_t, ndim=1] sigma):
+        """
+        Per-point-sigma companion of _log_likelihood_at (sigma-array fix,
+        2026-07-28; ADDITIVE -- the scalar method above is byte-untouched).
+        Raw heteroscedastic Gaussian log-likelihood at a *candidate*
+        parameter assignment, WITHOUT mutating any tree state. Used by
+        parameter_refresh when the run's sigma is a per-point array:
+
+            logL = -0.5 * sum_i log(2 pi sigma_i^2)
+                   -0.5 * sum_i (y_i - f_i)^2 / sigma_i^2
+
+        Returns -inf on any non-finite evaluation, shape mismatch, or any
+        sigma_i <= 0 / non-finite (mirror of the scalar sigma<=0 guard).
+        Plain np.sum, never nansum: any non-finite prediction propagates
+        to NaN and is rejected (zero-likelihood semantics, PLAN 4.2b).
+        """
+        if sigma.shape[0] != y.shape[0]:
+            return -np.inf
+        if (not np.all(np.isfinite(sigma))) or np.any(sigma <= 0.0):
+            return -np.inf
+        cdef object raw
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] y_pred
+        try:
+            raw = self.root.function.evaluate(self.domain, cand_name_values)
+            y_pred = np.asarray(raw, dtype=np.float64).ravel()
+        except Exception:
+            return -np.inf
+        if y_pred.shape[0] != y.shape[0]:
+            return -np.inf
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] resid = y - y_pred
+        cdef double wssr = float(np.sum((resid * resid) / (sigma * sigma)))
+        if not np.isfinite(wssr):
+            return -np.inf
+        cdef double logdet = float(np.sum(np.log(2.0 * np.pi * sigma * sigma)))
+        return -0.5 * logdet - 0.5 * wssr
 
 
     cdef void _apply_param_values(self, dict new_name_values):

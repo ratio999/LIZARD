@@ -186,7 +186,15 @@ cdef class Tree:
                                cnp.ndarray[cnp.float64_t, ndim=1] y,
                                dict cand_name_values,
                                double sigma)
-    
+
+    # sigma-array fix (2026-07-28): ADDITIVE per-point-sigma companion of
+    # _log_likelihood_at, consumed by gp_movesC.parameter_refresh when the
+    # run's sigma is an array. The scalar method above is untouched.
+    cdef double _log_likelihood_at_sigma_arr(self,
+                               cnp.ndarray[cnp.float64_t, ndim=1] y,
+                               dict cand_name_values,
+                               cnp.ndarray[cnp.float64_t, ndim=1] sigma)
+
     cdef void _apply_param_values(self, dict new_name_values)
 
     cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?,

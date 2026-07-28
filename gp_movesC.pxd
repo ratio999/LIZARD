@@ -118,14 +118,18 @@ cdef class AMState:
     
 cpdef list pr_coord_names(function_treeC.Tree tree)
 
+# sigma-array fix (2026-07-28): sigma is object-typed -- scalar keeps the
+# historical bit-identical path, a per-point float64 array routes through
+# Tree._log_likelihood_at_sigma_arr (previously an array raised TypeError
+# at the `double` coercion).
 cdef tuple _parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
-                              double sigma,
+                              object sigma,
                               AMState am_state,
                               double T)
 
 cpdef tuple parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
-                              double sigma,
+                              object sigma,
                               AMState am_state,
                               double T)
