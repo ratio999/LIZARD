@@ -133,3 +133,10 @@ cpdef tuple parameter_refresh(function_treeC.Tree tree,
                               object sigma,
                               AMState am_state,
                               double T)
+# Phase FX (transparent atoms v1, 2026-07-28) — appended additively.
+cdef bint _contains_flex(function_treeC.Node node)
+cdef _rename_flex_internals(function_treeC.Node fnode, dict amap)
+cdef tuple _flex_slot_mutation(function_treeC.Tree tree, list functions,
+                               list operations)
+cpdef tuple flex_slot_mutation(function_treeC.Tree tree, list functions=?,
+                               list operations=?)

@@ -77,6 +77,11 @@ cdef class Grove:
     # Phase 2.12 (MPI sampling): defer Polya reinforcement for replay-sync.
     cdef public bint polya_defer
     cdef public list _deferred_paths
+    # Phase FX (transparent atoms v1, 2026-07-28): flexible scaffold
+    # templates (list of real_functionC.FlexAtomSpec, or None). None =>
+    # bit-identical legacy (no 9th move, no stats key). Appended at the
+    # END of the attribute block (struct-layout hygiene).
+    cdef public object flex_atoms
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
@@ -179,6 +184,10 @@ cdef class Forest:
     cdef public cnp.ndarray _swap_accepts
     cdef public cnp.ndarray _xover_attempts
     cdef public cnp.ndarray _xover_accepts
+    # Phase FX (transparent atoms v1): shared flex templates, forwarded to
+    # every Grove; heads pre-registered in the shared Polya (registration
+    # invariance). None => legacy. Appended at block end (layout hygiene).
+    cdef public object flex_atoms
     cpdef dict ladder_stats(self)
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove)
     cpdef compute_posteriors_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)

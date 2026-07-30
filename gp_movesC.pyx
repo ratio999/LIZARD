@@ -128,11 +128,16 @@ cpdef int get_subtree_rebuild_max_height():
 # ---------------------------------------------------------------------------
 
 cdef list _flatten_nodes(function_treeC.Node node, list out):
-    """Pre-order DFS into `out`, returns `out`. Lists every node exactly once."""
+    """Pre-order DFS into `out`, returns `out`. Lists every node exactly once.
+
+    Phase FX: a transparent-atom scaffold is listed as ONE indivisible
+    unit -- the walk never descends into its slot, so outer-move
+    selections and counts are blind to slot internals (the dedicated
+    slot move owns them). No-op change for legacy trees."""
     if node is None:
         return out
     out.append(node)
-    if not node.is_leaf():
+    if not node.is_leaf() and node.flex_spec is None:
         _flatten_nodes(node.left,  out)
         _flatten_nodes(node.right, out)
     return out
@@ -326,6 +331,40 @@ cdef bint _contains_atomic(function_treeC.Node node):
     return _contains_atomic(node.left) or _contains_atomic(node.right)
 
 
+cdef bint _contains_flex(function_treeC.Node node):
+    """Phase FX: True iff the subtree rooted at `node` contains a
+    transparent-atom scaffold. Used by the immortality guards: any outer
+    move that would destroy, relocate-across-trees, or rebuild a flex
+    scaffold force-rejects (seeding-only support restriction, same class
+    as the depth caps). None-safe; False on every legacy tree."""
+    if node is None:
+        return False
+    if node.flex_spec is not None:
+        return True
+    if node.is_leaf():
+        return False
+    return _contains_flex(node.left) or _contains_flex(node.right)
+
+
+cdef _rename_flex_internals(function_treeC.Node fnode, dict amap):
+    """Phase FX: rename a flex scaffold's internal parameters per amap
+    (old -> new; missing names kept). Remaps theta keys, the ordered
+    flex_names list, and rebuilds the composed function so the head expr
+    carries the new symbols. Renaming is a deterministic bijection on
+    label space -> contributes 0 to every proposal correction (the
+    crossover/compaction argument, verbatim)."""
+    cdef dict new_theta = {}
+    cdef list new_names = []
+    cdef str nm, nn
+    for nm in fnode.flex_names:
+        nn = amap.get(nm, nm)
+        new_names.append(nn)
+        new_theta[nn] = fnode.theta[nm]
+    fnode.theta = new_theta
+    fnode.flex_names = new_names
+    fnode.update_func()
+
+
 cdef function_treeC.Node _make_atom_leaf(object spec_obj, object domain,
                                          list name_pool, double g_tau):
     """Instantiate one opaque atomic leaf from an AtomSpec template.
@@ -364,9 +403,15 @@ cdef function_treeC.Node _make_atom_leaf(object spec_obj, object domain,
 
 cdef int _count_selectable(function_treeC.Node node):
     """Count nodes that are valid selection targets for subtree_mutation:
-    every node that is NOT a parameter leaf."""
+    every node that is NOT a parameter leaf.
+
+    Phase FX: a flex scaffold counts as ONE selectable unit (selected ->
+    force-reject, like opaque-atomic subtrees) and its slot internals are
+    not counted -- consistent with the masked _flatten_nodes selection."""
     if node is None:
         return 0
+    if node.flex_spec is not None:
+        return 1
     if node.is_leaf():
         return 0 if node.is_param() else 1
     return 1 + _count_selectable(node.left) + _count_selectable(node.right)
@@ -470,6 +515,13 @@ cdef tuple _subtree_mutation(function_treeC.Tree tree, list functions,
     # Irreducibility is unaffected: ETR and point_mutation create/destroy
     # opaque leaves.
     if _contains_atomic(old_subtree):
+        return 0.0, -np.inf
+
+    # Phase FX: an immortal flex scaffold inside the selected subtree can
+    # never be rebuilt by the function-leaf-only rebuild -> zero reverse
+    # density. Force-reject WITHOUT mutating (covers v itself being the
+    # scaffold unit picked from the masked selection).
+    if _contains_flex(old_subtree):
         return 0.0, -np.inf
 
     # ---- 3. Build a fresh non-parametric subtree of height d_max --------
@@ -684,6 +736,15 @@ cdef tuple _subtree_crossover(function_treeC.Tree parent1,
     v = nodes_a[_PY_RNG.randrange(n_int_a)]
     w = nodes_b[_PY_RNG.randrange(n_int_b)]
 
+    # Phase FX: relocating an immortal flex scaffold across trees would
+    # break the seeded-scaffold bookkeeping (a slot could end up with two
+    # scaffolds, another with none). Force-reject when either selected
+    # subtree contains one; the swap has not happened yet, and the
+    # preceding rename is a density-neutral bijection, so rejecting here
+    # is target-preserving. Selection itself is flex-unit-masked.
+    if _contains_flex(v) or _contains_flex(w):
+        return (0.0, -np.inf)
+
     parent_v = parent1.root.find_parent(v)   # None iff v is parent1.root
     parent_w = parent2.root.find_parent(w)   # None iff w is parent2.root
 
@@ -772,8 +833,24 @@ cpdef rename_prefix(function_treeC.Tree tree, str new_prefix = 'b'):
             for nm in node.leaf_param_names():
                 amap[nm] = f"{new_prefix}{nm[1:]}"
             node.rename_atomic(amap)
+    # Phase FX: flex scaffolds' internal names move to the new prefix too
+    # -- they share the tree's label space exactly like opaque internals.
+    for node in function_treeC.collect_flex_nodes(tree.get_root(), None):
+        amap = {}
+        for nm in node.flex_names:
+            amap[nm] = f"{new_prefix}{nm[1:]}"
+        _rename_flex_internals(node, amap)
     tree.tree_update(tree.root)
-    
+    # EXIT-STATE CONTRACT (review 2026-07-29): tree_update(root) rebuilds
+    # only the root and its (nonexistent) ancestors -- interior op
+    # functions below depth 1, and any flex closure over a renamed slot,
+    # still reference PRE-rename leaf functions here. Every live caller
+    # follows with _compact_param_labels (whose _post_order_update
+    # rebuilds bottom-up) or discards the tree on reject; any NEW caller
+    # that evaluates or serializes after rename_prefix alone MUST run
+    # function_treeC._post_order_update(tree.root) first, or deep trees
+    # evaluate against stale names (silent all-NaN predictions).
+
 cdef _compact_param_labels(function_treeC.Tree tree, str prefix='a'):
     """Re-label every parameter in `tree` to a contiguous
     `<prefix>0`, `<prefix>1`, ... sequence in tree.params order.
@@ -823,6 +900,13 @@ cdef _compact_param_labels(function_treeC.Tree tree, str prefix='a'):
                 if nm not in rename_map:
                     rename_map[nm] = f"{prefix}{counter}"
                     counter += 1
+    # Pass 1c (Phase FX): flex scaffolds' internal names continue the same
+    # counter, in pre-order scaffold order (mirrors get_param_values).
+    for leaf in function_treeC.collect_flex_nodes(tree.get_root(), None):
+        for nm in leaf.flex_names:
+            if nm not in rename_map:
+                rename_map[nm] = f"{prefix}{counter}"
+                counter += 1
     # Pass 2: apply. Reading node.function.get_description() inside the
     # loop is safe even with renames-in-flight, because each Node owns
     # its own RealFunctionC and renaming one Node never aliases another.
@@ -845,6 +929,17 @@ cdef _compact_param_labels(function_treeC.Tree tree, str prefix='a'):
                     changed = True
             if changed:
                 leaf.rename_atomic(amap)
+    # Pass 2c (Phase FX): apply to flex scaffolds (theta keys, ordered
+    # names and the composed head expr together).
+    for leaf in function_treeC.collect_flex_nodes(tree.get_root(), None):
+        amap = {}
+        changed = False
+        for nm in leaf.flex_names:
+            amap[nm] = rename_map.get(nm, nm)
+            if amap[nm] != nm:
+                changed = True
+        if changed:
+            _rename_flex_internals(leaf, amap)
     # Rebuild internal functions bottom-up + refresh tree metadata.
     function_treeC._post_order_update(tree.root)
     tree.update_tree_description()
@@ -904,6 +999,12 @@ cpdef rename_prefix_downwards(function_treeC.Tree tree, str new_prefix = 'b'):
             for nm in node.leaf_param_names():
                 amap[nm] = f"{new_prefix}{nm[1:]}"
             node.rename_atomic(amap)
+    # Phase FX: flex internals too (see rename_prefix).
+    for node in function_treeC.collect_flex_nodes(tree.get_root(), None):
+        amap = {}
+        for nm in node.flex_names:
+            amap[nm] = f"{new_prefix}{nm[1:]}"
+        _rename_flex_internals(node, amap)
     # Bottom-up rebuild all intermediate functions, then refresh metadata
     function_treeC._post_order_update(tree.root)
     tree.update_tree_description()
@@ -1012,6 +1113,12 @@ cdef tuple _point_mutation(function_treeC.Tree tree, list functions, list operat
     # 1. Uniform node selection.
     v = _select_uniform_node(tree)
     parent = tree.root.find_parent(v)
+
+    # Phase FX: a selected flex scaffold is immutable to point_mutation
+    # (no op to resample, no relabel in v1) -- force-reject without
+    # mutating. Unreachable on legacy trees.
+    if v.flex_spec is not None:
+        return (0.0, -np.inf)
 
     # 2. Internal node -> op resample (symmetric).
     if not v.is_leaf():
@@ -1315,6 +1422,10 @@ cdef tuple _hoist_mutation(function_treeC.Tree tree, list functions, list operat
     cdef int n_nodes_Tnew, n_leaves_Tnew
     cdef double log_select_rev
     d_S = sibling.depth()
+    # Phase FX: dropping a sibling that contains an immortal flex scaffold
+    # is forbidden regardless of A (seeding-only convention).
+    if _contains_flex(sibling):
+        return (log_q_fwd, -np.inf)
     if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
         log_q_rev = -np.inf
         return (log_q_fwd, log_q_rev)
@@ -1405,6 +1516,10 @@ cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations
 
     if tree.root is None or tree.root.is_leaf():
         return (0.0, 0.0)
+    # Phase FX: exact mirror of the _add_node guard (pair equality) --
+    # leaf selection/counting would otherwise reach into flex slots.
+    if _contains_flex(tree.root):
+        return (0.0, -np.inf)
     M = len(functions)
     O = len(operations)
 
@@ -1442,6 +1557,10 @@ cdef tuple _leaf_hoist(function_treeC.Tree tree, list functions, list operations
     cdef int n_leaves_Tnew
     cdef double log_select_rev
     d_S = sibling.depth()
+    # Phase FX: dropping a flex-bearing sibling is forbidden regardless
+    # of A (immortality; see _hoist_mutation note).
+    if _contains_flex(sibling):
+        return (log_q_fwd, -np.inf)
     if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
         log_q_rev = -np.inf
         return (log_q_fwd, log_q_rev)
@@ -1562,6 +1681,10 @@ cdef tuple _internal_hoist(function_treeC.Tree tree, list functions, list operat
     cdef int n_int_Tnew
     cdef double log_select_rev
     d_S = sibling.depth()
+    # Phase FX: dropping a flex-bearing sibling is forbidden regardless
+    # of A (immortality; see _hoist_mutation note).
+    if _contains_flex(sibling):
+        return (log_q_fwd, -np.inf)
     if d_S < 1 or d_S > _ADD_NODE_DEPTH_MAX or not _is_perfect_binary(sibling, d_S):
         log_q_rev = -np.inf
         return (log_q_fwd, log_q_rev)
@@ -1745,6 +1868,16 @@ cdef tuple _add_node(function_treeC.Tree tree, list functions, list operations,
     from _choose_move. For Phase 2.1 we assume p_add = p_hoist (term = 0);
     Phase 2.8 (move-rate calibration) will revisit. TODO[move-pair-balance].
     """
+    # Phase FX: add_node targets tree LEAVES, and get_leaves (by design)
+    # lists the SLOT leaves of flex scaffolds -- targeting or counting
+    # those from the outer kernel would edit slot internals outside the
+    # dedicated slot move. v1: this move and its exact reverse
+    # (leaf_hoist) both force-reject on any flex-bearing tree; outer
+    # growth stays connected via ETR + split/internal_hoist (THEORY_2_13
+    # par.4: ETR alone carries connectivity).
+    if _contains_flex(tree.root):
+        return (0.0, -np.inf)
+
     cdef list leaves = tree.root.get_leaves(leaves_list=[])
     cdef int n_leaves_T = len(leaves)
     cdef int M = len(functions)
@@ -2005,6 +2138,10 @@ cdef list _collect_ets(function_treeC.Node node, list out):
     """
     if node is None:
         return out
+    # Phase FX: a flex scaffold is neither an ET nor traversable -- slot
+    # internals belong to the dedicated slot move only.
+    if node.flex_spec is not None:
+        return out
     if node.is_leaf():
         out.append(node)
         return out
@@ -2210,6 +2347,111 @@ cpdef tuple etr_mutation(function_treeC.Tree tree, list functions=None,
         operations = ["+", "-", "*", "/", "**", "o"]
     return _etr_mutation(tree, list(functions), list(operations), atoms)
 
+# ---------------------------------------------------------------------------
+# Phase FX (transparent atoms v1): the dedicated SLOT move.
+# ---------------------------------------------------------------------------
+cdef tuple _flex_slot_mutation(function_treeC.Tree tree, list functions,
+                               list operations):
+    """Pick a flex scaffold uniformly, apply ONE standard kernel move to
+    its SLOT subtree (wrapped as a Tree), and pass the inner move's
+    (log_q_fwd, log_q_rev) through.
+
+    Densities
+    ---------
+        q(T'|T) = p_slotmove * (1/n_flex) * (1/7) * q_inner(s'|s)
+    n_flex is INVARIANT (this move never creates or destroys scaffolds),
+    the inner move is drawn uniformly from a 7-set that contains BOTH
+    members of each birth/death pair (add_node<->leaf_hoist,
+    split<->internal_hoist; point/subtree/ETR are self-inverse), so every
+    factor except q_inner cancels between forward and reverse -- the
+    returned correction is exactly the inner move's. Inner moves run with
+    atoms=None (no opaque births inside slots; flex nesting is impossible
+    by construction) and inherit every inner convention verbatim: depth
+    caps on the slot-as-a-tree, force-rejects, perfect-binary supports.
+
+    Name discipline: the slot Tree's name pool is pre-seeded with the
+    FULL outer name_values keys before dispatch, so inner births can
+    never mint a name colliding with any name elsewhere in the tree (the
+    inner moves capture their pool once, at entry).
+
+    Mutates `tree` in place (the caller deepcopied); reattaches the slot
+    root and rebuilds the scaffold + ancestors unconditionally, so the
+    candidate is structurally consistent even on force-reject paths.
+    """
+    cdef list flexes = function_treeC.collect_flex_nodes(tree.root, None)
+    cdef int n_flex = len(flexes)
+    if n_flex == 0:
+        # Flex-free tree in a mixed population: the move has NO support
+        # here -- hard reject, the same convention as every structurally
+        # impossible move. (Review 2026-07-29: an earlier (0, 0) no-op
+        # was a guaranteed accept that re-reinforced the incumbent's
+        # Polya path on ~p_flex of draws -- an adaptation bias.)
+        return (0.0, -np.inf)
+    cdef function_treeC.Node fnode = flexes[_PY_RNG.randrange(n_flex)]
+    cdef function_treeC.Tree slot_tree = function_treeC.Tree(
+        0, functions, tree.domain, fnode.left, 0, 1, tree.T, 0.01,
+        tree.sigma, tree.g_tau, None)
+    # Pool injection. INVARIANT (review 2026-07-29): every inner move
+    # reads its name pool from tree.name_values BEFORE its first
+    # tree_update (which rebuilds name_values from slot leaves only,
+    # dropping the outer names injected here). All 5 pool-reading inner
+    # moves capture pre-update today; any new inner move (or code motion
+    # of a birth past a tree_update) MUST preserve that order or fresh
+    # names can collide with outer-tree parameters, silently coupling
+    # unrelated coordinates.
+    cdef dict pool = dict(tree.name_values)
+    pool.update(slot_tree.name_values)
+    slot_tree.name_values = pool
+
+    cdef int mi = _PY_RNG.randrange(7)
+    cdef double lqf, lqr
+    if mi == 0:
+        lqf, lqr = _point_mutation(slot_tree, functions, operations, None)
+    elif mi == 1:
+        lqf, lqr = _add_node(slot_tree, functions, operations, None)
+    elif mi == 2:
+        lqf, lqr = _leaf_hoist(slot_tree, functions, operations, None)
+    elif mi == 3:
+        lqf, lqr = _split(slot_tree, functions, operations, None)
+    elif mi == 4:
+        lqf, lqr = _internal_hoist(slot_tree, functions, operations, None)
+    elif mi == 5:
+        lqf, lqr = _subtree_mutation(slot_tree, functions, operations)
+    else:
+        lqf, lqr = _etr_mutation(slot_tree, functions, operations, None)
+
+    # Reattach (the inner move may have replaced the slot ROOT object)
+    # and rebuild the scaffold composition + every ancestor.
+    if slot_tree.root is not fnode.left:
+        fnode.assign_left(slot_tree.root, False)
+    fnode.update_func()
+    tree.tree_update(fnode)
+    # OUTER depth cap (review 2026-07-29): the inner caps bound the
+    # SLOT-as-a-tree only, but a scaffold adds its slot's depth to the
+    # outer tree -- unchecked, slot growth drives the tree past
+    # _MAX_TREE_DEPTH, where an outer internal_hoist death would claim a
+    # finite split reverse that split's own post-move cap zeroes (a
+    # one-way probability leak at the boundary). Force-rejecting HERE
+    # closes the only channel into over-cap flex states (outer births
+    # carry their own total-depth caps; seeds must start in-support,
+    # the legacy node_list convention). Same post-move-check convention
+    # as add_node/split.
+    if tree.root.depth() > _MAX_TREE_DEPTH:
+        return (lqf, -np.inf)
+    return (lqf, lqr)
+
+
+cpdef tuple flex_slot_mutation(function_treeC.Tree tree, list functions=None,
+                               list operations=None):
+    """Phase FX public entry point. Returns (log_q_fwd, log_q_rev); the
+    correction reduces to the inner move's (see _flex_slot_mutation)."""
+    if functions is None:
+        functions = tree.functions
+    if operations is None:
+        operations = ["+", "-", "*", "/", "**", "o"]
+    return _flex_slot_mutation(tree, list(functions), list(operations))
+
+
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):
     """Generates a random subtree with chosen size"""
     depth = size // 2  #  profondità approssimativa
@@ -2350,7 +2592,11 @@ cpdef list pr_coord_names(function_treeC.Tree tree):
         if lf.is_atomic():
             has_atomic = True
             break
-    if not has_atomic:
+    # Phase FX: flex-scaffold internal theta are refresh coordinates too
+    # (they live in name_values via get_param_values), so flex trees take
+    # the name_values route exactly like atomic ones. This derivation
+    # MUST stay identical to _parameter_refresh's below (Stage 3a lesson).
+    if not has_atomic and not function_treeC.tree_has_flex(tree.root):
         return [p.get_fun().get_description() for p in tree.params]
     return list(tree.name_values.keys())
 
@@ -2400,6 +2646,10 @@ cdef tuple _parameter_refresh(function_treeC.Tree tree,
         if lf.is_atomic():
             has_atomic = True
             break
+    # Phase FX: identical routing to pr_coord_names -- flex trees use
+    # name_values (which carries the scaffold's internal theta).
+    if not has_atomic and function_treeC.tree_has_flex(tree.root):
+        has_atomic = True
 
     cdef int K
     cdef list names

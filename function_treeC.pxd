@@ -94,6 +94,13 @@ cdef class Node:
     cpdef update_func(self, list params_list=?, str user_prefix=?)
     cpdef flag_constants(self, list constants=?)
     cdef replace_constants_with_pars(self, dict name_values=?)
+    # Phase FX (transparent atoms v1, 2026-07-28) — appended at the END of
+    # the Node block (vtab hygiene). flex_spec: real_functionC.FlexAtomSpec
+    # or None; flex_names: ordered internal-parameter names; the mutable
+    # slot subtree lives in self.left, self.right is None.
+    cdef public object flex_spec
+    cdef public object flex_names
+    cpdef bint is_flex(self)
 
 cdef class Tree:
     cdef double T
@@ -223,3 +230,13 @@ cdef _expr_to_tree(object expr, cnp.ndarray domain, list function_list, dict par
 cdef list _symbol_values(dict name_values)
 
 cdef _parameter_simplifier(object expr, list used_params)
+
+# Phase FX (transparent atoms v1, 2026-07-28) — module machinery. See
+# function_treeC.pyx for contracts; cross-module calls POSITIONAL ONLY.
+cdef real_functionC.RealFunctionC _flex_function(object spec_obj, list names,
+                                                 Node slot)
+cdef list _collect_flex_nodes(Node node, list out)
+cpdef list collect_flex_nodes(Node node, list out=?)
+cpdef bint tree_has_flex(Node node)
+cpdef Node make_flex_node(object spec_obj, Node slot, list fresh_names,
+                          object theta=?)

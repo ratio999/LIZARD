@@ -1661,28 +1661,136 @@ FOLLOW-UPS RECORDED (kernel lane, none blocking):
   (e) SA-e2 accept-sequence comparison is fp-portable only per-box
       (deterministic under this compiler/BLAS; documented).
 
-### MR.2 NEXT TODO — TRANSPARENT ATOMS (= flexible atoms, PLAN 2.11)
-Kernel lane, Phase-2.10-sized. Needed for the DISCOVERY arm of Phase MR
-(searchable arguments inside frozen shapes: tanh(g(t)), log(1+d·e^{−h(t)}))
-and subsumes compose-at-d>1 (arity-1 case) without reopening 'o'.
-Design decisions to settle BEFORE implementation (from the 2026-07-15
-sketch + this session's assessment): (1) identity rendering — description
-must carry the template head applied to slot descriptions (unexpanded
-Function head; expanding would import the §8.1 hidden-subtree hazard into
-the BIC cache/Pólya keys); (2) slot evaluation NUMERIC (slot outputs fed
-to the template's compiled closure — no sympy subs, sidesteps the blow-up
-that quarantined 'o'; the FD multi-arg closure machinery is the floor);
-(3) "not erased/mutated" semantics: frozen interior = never a move target
-(support restriction); slots fully mutable BOTH ways (expansion-only is
-inadmissible in MH — zero reverse density); optional atom immortality =
-death force-rejected + entry by seeding only; (4) crossover masking policy
-(v1: atoms opaque to crossover, slots evolve by within-slot moves);
-(5) per-template identifiability pruning (affine-wrapper class);
-(6) site-count masking in EVERY selection cardinality + THEORY §4
-irreducibility re-proof on the masked space; skel wire + burn-in token
-extensions. Note: Eq. 49/50-class shapes (affine arguments) are already
-reachable TODAY via opaque atoms (c0*tanh(c1*x+c2)) — stage-1 experiments
-need not wait for this item.
+### MR.2 TRANSPARENT ATOMS (Phase FX v1) — IMPLEMENTED 2026-07-29
+Kernel lane. Enables the DISCOVERY arm of Phase MR (searchable arguments
+inside frozen shapes: tanh(g(t)), log(1+d·e^{−h(t)})) and subsumes
+compose-at-d>1 (arity-1 case) without reopening 'o'.
+
+**What shipped.** `real_functionC.FlexAtomSpec(name, template,
+slot_symbol='s')`: validated template (name must sympify to an
+UndefinedFunction head — never a known function or a variable or the
+param pattern; slot-purity: free symbols = slot ∪ placeholders; slots
+sorted by `_slot_sort_key`; compiled once via lambdify over
+`[slot] + slots`; picklable via `__reduce__` with re-validation). A flex
+scaffold is a UNARY Node: `flex_spec` set, `left` = live slot subtree,
+`right` = None, `theta` dict for internal values. Entry by SEEDING only:
+`function_treeC.make_flex_node` (positional; validates live slot, no
+nesting, k distinct legal names), Grove `node_list`, or the new `('F',
+head, (names…), slot_skel)` wire tag (`tree_to_skel`/`node_from_skel`;
+`_tree_to_wire` always ships flex trees as skel3b; θ travels in
+name_values via the extended `_install_cached_theta`). The six 2026-07-15
+design decisions resolved as: (1) identity = UNEXPANDED head
+`W(c0,…,slot_expr)` (description injective, BIC-cache/Pólya-key safe);
+(2) evaluation = numeric composition — `_flex_function` closure feeds the
+slot's output into the compiled template, NaN-fills on any failure
+(zero-likelihood semantics pinned by FX-b10); (3) frozen interior = never
+a move target + full immortality: every outer move that would destroy/
+replace/rebuild a scaffold or select slot internals force-rejects
+(`_contains_flex` guards; `_flatten_nodes` masks slot descent); split MAY
+wrap a scaffold and internal_hoist MAY unwrap (sibling guards allow death
+only when no flex node is deleted); slots mutable BOTH ways via ONE new
+move `flex_slot_mutation` (uniform flex pick × uniform inner move from
+the 7-set on the slot wrapped as a Tree with the outer name pool
+injected; correction = the inner move's (lqf, lqr) exactly);
+(4) crossover force-rejects when either selected subtree contains flex;
+(5) identifiability pruning DEFERRED to the application layer (template
+authors' responsibility in v1); (6) selection cardinalities masked
+everywhere (`_count_selectable` counts a scaffold as 1;
+`_collect_ets`/param-leaf walks guarded); Pólya = ONE template cell then
+the slot path continues in the child subtrie (registration invariance via
+Forest pre-registration; auto_register fallback for standalone use).
+Grove/Forest: `flex_atoms=` kwarg (OFF by default ⇒ bit-identical
+legacy); move probs = legacy 8-vector ×0.8 + 0.2 appended (both
+birth/death pair equalities preserved ⇒ Green term stays 0); stats key
+`flex_slot_mutation` exists ONLY when the feature is on; internal θ
+counts 1 each toward BIC k; PR routes flex trees through name_values
+coordinates (mirrored predicates in `pr_coord_names` and
+`_parameter_refresh`). Burn-in token extension NOT done (refused instead,
+see below).
+
+**v1 refusals (fail-fast, all tested):** adapt_moves+flex (logit map is
+8-move), burn_in+flex (burn-in constant folding is not flex-aware and
+would destroy/crash on scaffolds), run_mpi_spawn+flex (workers lack the
+FlexAtomSpec registry; serial EMC fully supported), flex/opaque name
+collisions.
+
+**Adversarial review (2026-07-29, 3 inline agents: sampler math /
+bit-identity / object lifecycle) + fixes applied:** (a) OUTER depth-cap
+post-check added to `_flex_slot_mutation` — the inner caps bound the
+slot-as-a-tree only, and unchecked slot growth drove the OUTER tree past
+`_MAX_TREE_DEPTH`, where an accepted internal_hoist claims a finite
+split-reverse that split's own cap zeroes (one-way probability leak at
+the boundary); the post-check closes the only channel into over-cap flex
+states (seeds must start in-support — legacy node_list convention,
+documented in make_flex_node). (b) `flex_slot_mutation` on a flex-free
+tree now returns (0, −inf) hard reject — the earlier (0,0) no-op was a
+guaranteed accept that re-reinforced the incumbent's Pólya path on
+~p_flex of draws in mixed groves (adaptation bias). Bit-identity lens:
+CLEAN — every legacy-path hunk cleared (arange sizing argument-identical,
+guards precede RNG draws and are unreachable on legacy trees, key sets/
+wire bytes/pxd layouts intact). Lifecycle lens: no chain-corrupting
+defect in v1 as shipped.
+
+**Caveats ledger (recorded, deliberately NOT fixed — several would break
+legacy bit-identity):** (i) legacy `_add_node` leaf selection uses
+depth-biased `select_random_leaf` while its density charges uniform —
+PRE-EXISTING legacy defect, now inherited into slots via the inner move;
+fixing it changes legacy RNG streams ⇒ own certified lane. (ii)
+`rename_prefix` exit-state is stale below depth 1 (pre-existing; live
+callers heal via `_compact_param_labels`' `_post_order_update` —
+exit-contract comment added). (iii) `_flex_slot_mutation` name-pool
+injection relies on inner moves capturing the pool BEFORE their first
+tree_update (invariant comment added at the injection site). (iv)
+`fetch_fun`/constant-folding/`flag_constants` ancestors are not
+flex-threaded (burn-in-only today — hence the burn_in refusal). (v)
+Seeding flex trees WITHOUT `flex_atoms=` is a silent-degradation trap
+(slots frozen, no slot move); standalone Groves with `flex_atoms` +
+their own polya rely on auto_register or pre-registration. (vi)
+`sample_construction_path` treats a registered template cell as terminal
+(diagnostics only; zero kernel callers). (vii) Node/Grove pickle streams
+widened by the new fields (no in-repo pickle path). (viii) O(n)
+`_contains_flex`/`tree_has_flex` walks added to some legacy hot paths —
+pure CPU, no RNG/bytes.
+
+**Tests:** `test_phaseFX.py` — 71/71 PASS (spec validation/pickle;
+composition exactness vs numpy; NaN policy; BIC k analytic pin under a
+σ-array; deepcopy isolation; optimizer θ write-back; per-move immortality
+guards incl. legal split-wrap/hoist-unwrap; slot-move invariance/motion/
+name-discipline/determinism (pin BOTH gp_movesC and function_treeC RNGs)
++ outer-cap pin FX-e7; Pólya path/coverage/KeyError/auto-register; 'F'
+wire round trip + missing-spec reject; Grove ctor refusals, 9-vector,
+conditional stats key, 300-step immortality + same-seed determinism;
+Forest shared-Pólya registration, serial smoke, spawn refusal;
+end-to-end: y = 2·tanh(1.5x−1)+ε recovered through a seeded c0·tanh(s)
+scaffold, NRMSE ≈ 0.011, scaffold intact). Harness lessons: expr_to_tree
+canonicalizes names to the 'a' family (seed slots with canonical names);
+Grove(node_list=…) needs compute_posteriors before run.
+
+**Certification (2026-07-29, vs /tmp/sa_post σ-fix baseline, logs in WSL
+/tmp/fx_cert2/ + Windows scratchpad backup):** all 12 suites exit 0.
+Byte-identical outright: test_sigma_array (28/28), test_phase23,
+test_phase28. Identical after normalizing memory addresses
+(`id(...)=N` debug prints), tqdm throughput, async MPI print order, and
+timing values: test_phase210, test_phase42, test_phaseFD,
+test_phaseFD --mpi, test_phase212_wire (27/27), test_phase44 (21/21) —
+every RNG-driven value, candidate expression and fingerprint EXACT
+([2.10o] mse 5.28e-28, [2.10s] 1.72e-28, [4.2reg] post −64.534224 /
+nrmse 0.009240 "fingerprint matches reference", [I.12.2] RECOVERED
+nrmse 0.0092 best 269.205/(x·(137.7x − eˣcos x))). Only the two
+DOCUMENTED wobbles moved: [2.9c] TV statistic (PASS both sides) and
+[2.10q] polya_paths_replayed 117→113 with its companion wire-skip
+messages (PASS). Why addresses moved when the σ-cert had them
+byte-stable: FX adds transient guard-walk list allocations on legacy
+paths, shifting heap layout — the id() debug prints in some suite logs
+were never a real invariant (exactly the one legacy-path side effect the
+bit-identity review predicted). RNG streams and numerics are unchanged
+everywhere. OPS NOTE: suites that MPI-spawn (2mpi, 42, FD --mpi,
+212_wire, 44) MUST be launched under the ENV's `mpiexec -n 1` (as
+sa_cert.sh did) — a plain-python launch resolves the spawn through the
+system /usr/bin/mpiexec and hangs on `-pmi_args`.
+
+Note: Eq. 49/50-class shapes (affine arguments) remain reachable via
+opaque atoms; FX scaffolds now make the ARGUMENTS searchable.
 
 ### MR.3 FINAL TODO — PREPROCESSING PIPELINE (NOT codebase-dependent)
 NR merger-ringdown → regression-ready (t, y, σ) products per (simulation,
@@ -1695,6 +1803,126 @@ numpy/scipy + sxs/qnm — runs anywhere, parallelizable with kernel work.
 HANDOFF PROMPT WRITTEN: `PROMPT_PREPROCESSING_PIPELINE.md` (2026-07-28)
 — defines the data contract (float64 (n,) t/y/σ, metadata, manifest),
 the validation gates, and the house rules for a fresh instance.
+
+### MR.4 MULTI-DATASET JOINT EVIDENCE — DESIGN AGREED 2026-07-31
+Spec: `PROMPT_DEV_MULTIDATASET_BIC.md` (written by the preprocessing
+instance). Model (settled, not up for redesign): ONE shared skeleton tau,
+per-dataset parameters theta_j over datasets D_j = (x_j, y_j, sigma_j),
+
+    log post(tau) ∝ log pi_polya(tau) [− lambda*C(tau)]
+                    + SUM_j [ log L_j(theta_hat_j) − (k/2) log n_j ]
+
+Prior / tilt / moves / reinforcement UNCHANGED (they never see data).
+Validity strictest-wins. Additive, opt-in via `datasets=`, OFF by default,
+bit-identical when off. Feasibility assessed 2026-07-31: FEASIBLE, sized
+like Phase FX; no detailed-balance surface (no move or density changes),
+but it edits the hottest path (candidate scoring) and has a larger hidden
+surface than the spec implies.
+
+**Decisions agreed with the user (2026-07-31), before coding:**
+
+* **D1 — parameter_refresh REFUSED under `datasets`.** PR proposes theta
+  and accepts on the raw likelihood of ONE (y, sigma); refreshing only a
+  reference theta would leave the chain's accepted state inconsistent
+  with the reported joint score. BIC profiles theta anyway, so PR is a
+  mixing aid, not a correctness requirement. Raise if `datasets` and
+  `pr_prob > 0`. (A J*k-dimensional AMState is the v2 option.)
+* **D2 — burn-in REFUSED under `datasets`.** Not one function: the ctor
+  path (groveC `if self.burn_in:`) fans out into candidate scoring in
+  five places (depth-1 enumeration + serial / MPI-parallel / MPI-spawn
+  stage 2 + the public burn_in_combinations / burn_in_depth2 wrappers),
+  ALL scoring against the single `self.data` / `self.domain`; two of them
+  score inside worker processes that rebuild candidates from string
+  tokens, so going joint means shipping J datasets into every worker and
+  reworking the gather protocol (spawn-wire risk, cf. Phase 4.4). Silent
+  reference-dataset selection is forbidden by the spec, so v1 raises,
+  exactly as Phase FX does. Documented alternatives for the user:
+  (i) seed with `node_list=` (incumbent ansatz + FX scaffolds — the
+  intended workflow anyway); (ii) run single-dataset burn-in on one
+  representative simulation and pass the winners as `node_list` (the same
+  approximation, but performed visibly in the experiment script);
+  (iii) `burn_in=False` and longer chains. Joint burn-in is a clean,
+  strictly-additive v2 once the joint scorer exists.
+* **D3 — per-dataset (x, sigma) travel as ARGUMENTS.** `_shortcut_bic`
+  reads `self.sigma` off the Tree, so a naive loop would call
+  `set_sigma_recursive` per dataset per candidate (O(nodes*J) of churn on
+  the hot path, plus mid-scoring state mutation — the aliasing trap the
+  FX lifecycle review flagged). Add an explicit-argument scoring entry;
+  legacy method delegates to it.
+* **D4 — combination is a REDUCTION POINT over the per-dataset score
+  vector.** The scorer computes [S_1 … S_J] and then reduces.
+  `combine='sum'` is the DEFAULT and the scientific claim (it is the
+  joint evidence: the Laplace approximation of ∫ prod_j L_j(theta_j)
+  dtheta_j with independent theta_j, scale-consistent, covered by the
+  existing formalism). `'min'` and `'softmin'` (one beta knob, smoothly
+  interpolating mean → min) ship as OPT-IN, OFF by default. The J fits
+  dominate the cost, so the reduction is nearly free.
+* **D5 — min-of-ALPHAS is REJECTED (invalid MCMC).** Taking the smallest
+  acceptance ratio across datasets equals MH with the worst-case score
+  difference (min_j min(1,e^{x_j}) = min(1,e^{min_j x_j})), and
+  min_j [F_j(tau') − F_j(tau)] is NOT the difference of any function of
+  tau, so no stationary distribution exists. Counterexample (checkable):
+  three skeletons with per-dataset scores A=(0,0), B=(3,−1), C=(1,1)
+  under symmetric proposals imply pi(B)/pi(A)=e^2 and pi(C)=pi(B), yet
+  pi(C)/pi(A)=e^1 — inconsistent; probability circulates A→B→C→A. The
+  VALID form of the same intent is the min of the SCORES (D4 `'min'`),
+  which is a genuine energy.
+* **D6 — `'min'` mode requires baseline subtraction.** Raw log L_j scales
+  with n_j and 1/sigma_j^2, so an unnormalized min means "largest /
+  tightest dataset", not "worst fit". Use per-dataset constants (the
+  incumbent ansatz's score on that dataset): U = log pi + min_j [S_j(tau)
+  − S_j(tau_incumbent)], still a valid energy (constants are
+  tau-independent), scale-free, and literally the paper's question
+  ("does it beat the incumbent on EVERY simulation?"). Under `'min'` the
+  complexity term stays SUMMED (a min over the full BIC_j would charge
+  complexity once instead of J times and bias toward complex forms).
+* **D7 — tests:** spec's a–f, PLUS **(g) joint x transparent atoms**
+  (one FX-scaffolded skeleton across two datasets, per-dataset theta for
+  the flex internals) — that is the actual science configuration and it
+  exercises the three-kinds-of-theta install path. Test (b) caveat:
+  warm-start each dataset from its OWN previous fit, never from the
+  neighbouring dataset's, or `datasets=[D,D]` passes trivially while
+  violating "independently optimized".
+* **D8 — spawn: `NotImplementedError` in v1** (precedent: raw-callable
+  structural_prior, and flex_atoms).
+
+**Representation note (lowers risk):** per-dataset theta = J
+`name_values` dicts. `groveC._install_cached_theta` is already exactly
+the "install theta_j into this tree" primitive and already covers all
+three theta kinds (plain parameter leaves, opaque atom internals, FX
+flex internals), so the joint feature composes with Phase FX for free.
+BIC cache: keep description keying, store (joint_post, [nv_0 … nv_{J−1}]),
+invalidate on the datasets-object identity instead of `_cache_y is not y`,
+keep the penalty-exclusion invariant (< −1e90 never cached) PER dataset.
+
+**First-hour check before plumbing:** n_j differ across datasets — verify
+parameter/constant leaves broadcast from the PASSED x, not from the
+construction-time `self.domain`; otherwise dataset 2 silently inherits
+dataset 1's length.
+
+**Penalty-scaling observations (carry into the handoff note):**
+  1. Three factors raise the BIC penalty, not one: k (= `len(name_values)`,
+     which counts opaque-atom and FX-scaffold internals, +1 in the
+     profiled-sigma branch), each n_j (through log), and J (through the
+     sum). Under the joint sum a k-parameter form pays k/2*log n_j on
+     EVERY dataset, so atoms/scaffolds get ~J times more expensive than
+     in a single-dataset run.
+  2. Likelihood AND penalty scale with J while the Pólya prior and the
+     tilt do NOT, so the structural prior's relative influence falls ~1/J.
+     If the tilt is meant to be worth a fixed amount of evidence, lambda
+     should be scaled deliberately (DO NOT silently retune defaults;
+     measure and document, same discipline as the ladder note).
+  3. Practical regime: with the measured incumbent baseline at
+     chi^2/dof ~ 111 on n ~ O(10^3) points, likelihood differences are
+     O(10^4) per dataset while the penalty is O(10^1–10^2). The BIC
+     complexity term is effectively negligible until candidates approach
+     the noise floor; it only starts biting near chi^2/dof ~ 1.
+  4. CAVEAT to document, not fix here: NR time series are oversampled, so
+     adjacent residuals are correlated and n overstates the independent
+     information. BIC assumes iid, so the fit term is over-weighted
+     relative to log n, making model selection more permissive. Thinning
+     to the effective resolution or a correlated-noise likelihood are the
+     honest fixes; both are out of scope for this feature.
 
 ---
 

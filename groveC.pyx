@@ -72,6 +72,15 @@ cdef bint _install_cached_theta(function_treeC.Tree cand, dict cached_nv):
             for pname in leaf.leaf_param_names():
                 if pname in cached_nv:
                     leaf.theta[pname] = float(cached_nv[pname])
+    # Phase FX: flex-node internal thetas (same contract as opaque-leaf
+    # theta above; slot-subtree parameter LEAVES are plain params and were
+    # already restored by the cand.params pass). No-op on flex-free trees.
+    cdef function_treeC.Node fx
+    for fx in function_treeC.collect_flex_nodes(cand.get_root(), None):
+        has_any = True
+        for pname in fx.flex_names:
+            if pname in cached_nv:
+                fx.theta[pname] = float(cached_nv[pname])
     return has_any
 
 
@@ -210,7 +219,8 @@ cdef class Grove:
                  object structural_prior=None,
                  bint structural_prior_cache=True,
                  object structural_prior_spec=None,
-                 object variables=None):
+                 object variables=None,
+                 object flex_atoms=None):
 
         # --- Flexible domain (flexible_domain_plan.md §3) -----------------
         # Resolve and install the variable registry BEFORE any leaf is
@@ -304,6 +314,43 @@ cdef class Grove:
             self.atoms = list(atoms)
         else:
             self.atoms = None
+        # Phase FX (transparent atoms v1, 2026-07-28): flexible scaffolds.
+        # None => bit-identical legacy (no extra move, no stats key, no
+        # RNG change). v1 semantics: scaffolds enter trees by SEEDING only
+        # (node_list / make_flex_node / the 'F' wire tag), are immortal
+        # under the outer kernel, and their slots evolve via the dedicated
+        # flex_slot_mutation move (9th physical move, self-inverse class).
+        if flex_atoms:
+            for _f in flex_atoms:
+                if not isinstance(_f, real_functionC.FlexAtomSpec):
+                    raise TypeError(
+                        "Grove: flex_atoms entries must be real_functionC."
+                        "FlexAtomSpec instances, got %r" % type(_f))
+            if adapt_moves:
+                raise ValueError(
+                    "Grove: adapt_moves=True with flex_atoms is not "
+                    "supported in v1 (the adaptive logit map covers the 8 "
+                    "legacy moves only)")
+            if burn_in:
+                raise ValueError(
+                    "Grove: burn_in=True with flex_atoms is not supported "
+                    "in v1 (the burn-in enumeration is legacy/opaque-only "
+                    "and its constant folding is not flex-aware -- it "
+                    "would destroy or crash on scaffolds)")
+            if self.atoms is not None:
+                for _f in flex_atoms:
+                    for _a in self.atoms:
+                        if _a.name == _f.name:
+                            raise ValueError(
+                                "Grove: flex template %r collides with an "
+                                "opaque atom name" % _f.name)
+            # Re-validate under the CURRENT variable registry (mirrors the
+            # AtomSpec re-derivation above; deterministic).
+            flex_atoms = [real_functionC.FlexAtomSpec(
+                _f.name, _f.template, _f.slot_symbol) for _f in flex_atoms]
+            self.flex_atoms = list(flex_atoms)
+        else:
+            self.flex_atoms = None
         # Phase 4.4: structural-constraint prior tilt (opt-in; None =
         # bit-identical legacy). Validated callable; see _sp().
         # v2 (2026-07-22): a declarative picklable spec may be passed
@@ -373,6 +420,11 @@ cdef class Grove:
             "etr_mutation":       0,
             "parameter_refresh":  0,
         }
+        if self.flex_atoms is not None:
+            # Phase FX: the stats key exists ONLY when the feature is on,
+            # keeping move_stats()'s key set byte-identical for legacy
+            # runs (test_phase23(f) asserts nonzero proposals per key).
+            self.move_proposals["flex_slot_mutation"] = 0
         self.move_accepts = dict.fromkeys(self.move_proposals, 0)
         self.cache = {}
         self._am_states = {}
@@ -613,13 +665,27 @@ cdef class Grove:
             # Phase 2.8: adaptive path overrides the fixed weights computed
             # above. _adapted_move_probs keeps the pair equality and floor.
             probs = self._adapted_move_probs()
+        if self.flex_atoms is not None:
+            # Phase FX: append flex_slot_mutation as a 9th physical move.
+            # Scaling the 8-vector UNIFORMLY preserves both birth/death
+            # pair equalities exactly (p_add==p_leaf_hoist,
+            # p_split==p_internal_hoist), so every RJMCMC move-selection
+            # term stays zero; the slot move is self-inverse-class (its
+            # forward and reverse selection probabilities are equal by
+            # construction), so any fixed weight is balance-safe. The
+            # ctor forbids adapt_moves+flex, so the adapted branch above
+            # never feeds this line.
+            probs = np.concatenate(
+                (probs * 0.80, np.array([0.20], dtype=np.float64)))
         return probs
 
     cpdef cnp.ndarray get_move_probs(self):
-        """Phase 2.8 introspection: current physical move-probability 8-vector
+        """Phase 2.8 introspection: current physical move-probability vector
         (adapted if adapt_moves else the fixed temperature-shaped weights).
         Read-only; does not advance any RNG. Order:
-        [point, leaf_hoist, internal_hoist, add, split, subtree, cross, etr]."""
+        [point, leaf_hoist, internal_hoist, add, split, subtree, cross, etr]
+        -- 8 entries; with flex_atoms set, flex_slot_mutation is appended
+        as a 9th entry (Phase FX)."""
         return self._compute_move_probs()
 
     cdef _choose_move(self) :
@@ -628,7 +694,10 @@ cdef class Grove:
         Returns (name, kwargs_dict).
         """
         cdef cnp.ndarray probs = self._compute_move_probs()
-        idx = int(self._np_rng.choice(np.arange(8), p=probs))
+        # Phase FX: arange sized to the vector (8 legacy / 9 with flex);
+        # for the legacy 8-vector the np.choice call is argument-identical
+        # to the historical form, so the RNG stream is unchanged.
+        idx = int(self._np_rng.choice(np.arange(probs.shape[0]), p=probs))
         #random_depth = (tau > 0.7)  # deeper/remoter edits at higher T
         if idx == 0:
             return ("point_mutation", {"operations": self.operations})
@@ -644,8 +713,10 @@ cdef class Grove:
             return ("subtree_mutation", {})
         elif idx == 6:
             return ("subtree_crossover", {})
-        else:
+        elif idx == 7:
             return ("etr_mutation", {"operations": self.operations})
+        else:
+            return ("flex_slot_mutation", {"operations": self.operations})
 
     cdef cnp.ndarray _adapted_move_probs(self):
         """Map the 6 logical-group logits to the 8 physical move probabilities.
@@ -800,6 +871,15 @@ cdef class Grove:
                 lqf, lqr = gp_movesC.etr_mutation(
                     cand, self.funcs, kwargs.get("operations", None),
                     self.atoms)
+            elif move_name == "flex_slot_mutation":
+                # Phase FX: dedicated slot move — uniform flex pick x
+                # uniform inner move on the slot subtree. Takes no atoms:
+                # slots are plain trees by design (no opaque atoms, no
+                # nesting). If the tree has no flex node the move returns
+                # (0, -inf) -> hard reject, same convention as every
+                # structurally-impossible move.
+                lqf, lqr = gp_movesC.flex_slot_mutation(
+                    cand, self.funcs, self.operations)
             else:
                 lqf, lqr = gp_movesC.point_mutation(
                     cand, self.funcs, self.operations,
@@ -2487,7 +2567,12 @@ cpdef tuple _tree_to_wire(function_treeC.Tree tree, double post,
     # _expr_to_tree, whose function-application branch composes (d=1-only).
     # Atom-free d=1 trees keep the HISTORICAL raw-expr payload bytes; the
     # SAMPLING wire forces the skeleton at any d (wire-fidelity fix).
-    if force_skel or has_atomic or real_functionC.n_variables() > 1:
+    # Phase FX: a flex-bearing tree ALWAYS ships as skeleton — its expr is
+    # an unexpanded sympy Function head that _expr_to_tree cannot rebuild.
+    # tree_has_flex is a plain walk returning False on legacy trees (no
+    # RNG, no payload change).
+    if (force_skel or has_atomic or real_functionC.n_variables() > 1
+            or function_treeC.tree_has_flex(tree.root)):
         return (('skel3b',
                  function_treeC.tree_to_skel(tree.root),
                  tree.tree_get_description()),
@@ -2607,7 +2692,8 @@ cdef class Forest:
                  object structural_prior=None,
                  bint structural_prior_cache=True,
                  object structural_prior_spec=None,
-                 object variables=None):
+                 object variables=None,
+                 object flex_atoms=None):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
@@ -2745,6 +2831,40 @@ cdef class Forest:
             self.atoms = list(atoms)
         else:
             self.atoms = None
+        # Phase FX (transparent atoms v1): validate + register each flex
+        # template head in the ONE shared Polya, exactly like the opaque
+        # atoms above (registration invariance: cells exist from t = 0,
+        # never enter via mid-run auto_register). Same untyped dispatch /
+        # positional-mass rules. Each Grove re-validates its own copy
+        # under the current registry.
+        if flex_atoms:
+            for _spec_obj in flex_atoms:
+                if not isinstance(_spec_obj, real_functionC.FlexAtomSpec):
+                    raise TypeError(
+                        "Forest: flex_atoms entries must be real_functionC."
+                        "FlexAtomSpec instances, got %r" % type(_spec_obj))
+            if adapt_moves:
+                # Fail HERE, before the shared-Polya registration below,
+                # so a rejected call cannot leave stray cells behind
+                # (each Grove would also raise, but only after mutation).
+                raise ValueError(
+                    "Forest: adapt_moves=True with flex_atoms is not "
+                    "supported in v1 (the adaptive logit map covers the 8 "
+                    "legacy moves only)")
+            if burn_in:
+                raise ValueError(
+                    "Forest: burn_in=True with flex_atoms is not "
+                    "supported in v1 (burn-in constant folding is not "
+                    "flex-aware)")
+            flex_atoms = [real_functionC.FlexAtomSpec(
+                _spec_obj.name, _spec_obj.template, _spec_obj.slot_symbol)
+                for _spec_obj in flex_atoms]
+            _polya_any = self.polya
+            for _spec_obj in flex_atoms:
+                _polya_any.add_primitive(_spec_obj.name, None)
+            self.flex_atoms = list(flex_atoms)
+        else:
+            self.flex_atoms = None
         # --- Forest-level RNGs ---------------------------------------------
         # Fixes the previously-missing _py_rng (the old swap referenced it and
         # would AttributeError) and drives the R3 random consecutive-pair
@@ -2776,7 +2896,8 @@ cdef class Forest:
                       # (bit-identical: no funcs validation, no atom
                       # re-derivation); flexible mode passes the resolved
                       # tuple explicitly.
-                      variables=(_vars if _flex else None))
+                      variables=(_vars if _flex else None),
+                      flex_atoms=self.flex_atoms)
             )
         # Phase 2.12 (MPI sampling): stash the Grove constructor arguments so
         # run_mpi_spawn can ship them to spawned workers, which rebuild
@@ -3094,6 +3215,16 @@ cdef class Forest:
                     "structural_prior_spec=('module', 'builder', "
                     "kwargs) instead (see exp_constraints.spec), or "
                     "use the serial EMC loop.")
+        # Phase FX v1: flex scaffolds do not cross the spawn boundary yet
+        # (workers would need the FlexAtomSpec registry in their startup
+        # config plus 'F'-aware wire configs on both spawn wires). The
+        # serial EMC loop fully supports them. Refusing beats silently
+        # dropping scaffolds at the wire.
+        if self.flex_atoms:
+            raise NotImplementedError(
+                "flex_atoms is not supported under run_mpi_spawn in v1: "
+                "use the serial EMC loop (run_all / attempt_swaps / "
+                "attempt_crossovers).")
         # Phase 2.10 Stage 3b: opaque primitives cross the wire as
         # ('skel3b', ...) payloads (see _tree_to_wire). The master-side
         # rebuilds below need the template registry; workers receive the

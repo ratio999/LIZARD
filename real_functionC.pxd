@@ -136,3 +136,15 @@ cpdef RealFunctionC instantiate_atom(AtomSpec spec,
                     list fresh_names)
 
 cpdef RealFunctionC rename_leaf_params(RealFunctionC rf, dict name_map)
+
+# Phase FX (transparent/flexible atoms v1, 2026-07-28): scaffold template
+# with one mutable slot. New class APPENDED at file end (no vtab shift of
+# existing types). See real_functionC.pyx for the contract.
+cdef class FlexAtomSpec:
+    cdef public str name
+    cdef public str template
+    cdef public str slot_symbol
+    cdef public list slots
+    cdef public int k
+    cdef public object expr
+    cdef public object compiled

@@ -1219,6 +1219,109 @@ cpdef RealFunctionC rename_leaf_params(RealFunctionC rf, dict name_map):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Phase FX (transparent/flexible atoms v1, 2026-07-28; PLAN Phase MR.2).
+# A FlexAtomSpec is a user-registered SCAFFOLD Psi(theta; s): a frozen
+# functional shape with k >= 0 internal parameters and ONE slot `s` that a
+# GP subtree fills at sampling time. Unlike the opaque AtomSpec above, the
+# slot content is mutable (gp_movesC.flex_slot_mutation); the shape and its
+# theta names are frozen. v1 semantics: flex atoms enter trees by SEEDING
+# only and are immortal (destructive outer moves force-reject); see
+# function_treeC.make_flex_node and gp_movesC for the kernel side.
+# ---------------------------------------------------------------------------
+
+cdef class FlexAtomSpec:
+    """A transparent-atom TEMPLATE.
+
+    Parameters
+    ----------
+    name : str
+        Canonical vocabulary symbol (ONE Polya cell per template) AND the
+        sympy Function head used in descriptions: a tree containing this
+        atom prints as  name(theta_names..., slot_expr)  UNEXPANDED, so
+        descriptions stay injective w.r.t. transparent expressions and
+        sympy never substitutes into the template (no `subs` blow-up --
+        evaluation is numeric composition of the compiled template over
+        the slot subtree's output).
+    template : str
+        Expression over the slot symbol and >= 0 placeholder parameters
+        matching [a-zA-Z]\\d+, e.g. "c0*tanh(c1*s + c2)". Slot-purity:
+        every free symbol must be the slot or a placeholder (registered
+        variables may NOT appear -- the slot carries all x-dependence).
+    slot_symbol : str
+        The slot's symbol inside `template` (default "s").
+    """
+
+    def __init__(self, str name, str template, str slot_symbol="s"):
+        cdef object head, expr, s
+        cdef list slots = []
+        cdef bint has_slot = False
+        cdef str s_str
+        if name is None or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name) is None:
+            raise ValueError(
+                "FlexAtomSpec: name %r must be a plain identifier" % (name,))
+        if re.fullmatch(r'[a-zA-Z]\d+', name):
+            raise ValueError(
+                "FlexAtomSpec: name %r matches the parameter pattern "
+                "[a-zA-Z]<digits> and would collide with parameter leaves"
+                % (name,))
+        if is_variable_name(name):
+            raise ValueError(
+                "FlexAtomSpec: name %r is a registered variable" % (name,))
+        try:
+            head = sp.sympify(name + "(__fx_probe)").func
+        except Exception:
+            raise ValueError(
+                "FlexAtomSpec: name %r is not usable as a sympy Function "
+                "head" % (name,))
+        if head.__class__.__name__ != 'UndefinedFunction':
+            raise ValueError(
+                "FlexAtomSpec: name %r shadows a known sympy function -- "
+                "descriptions would silently evaluate/fold" % (name,))
+        if (slot_symbol is None or len(slot_symbol) == 0
+                or re.fullmatch(r'[a-zA-Z]\d+', slot_symbol)
+                or is_variable_name(slot_symbol) or slot_symbol == 'y'):
+            raise ValueError(
+                "FlexAtomSpec: slot_symbol %r must be a plain symbol that "
+                "is neither a placeholder parameter, a registered variable "
+                "nor 'y'" % (slot_symbol,))
+        expr = sp.sympify(template)
+        for s in expr.free_symbols:
+            s_str = str(s)
+            if s_str == slot_symbol:
+                has_slot = True
+            elif re.fullmatch(r'[a-zA-Z]\d+', s_str) and not is_variable_name(s_str):
+                slots.append(s_str)
+            else:
+                raise ValueError(
+                    "FlexAtomSpec %r: free symbol %r is neither the slot "
+                    "%r nor a placeholder parameter (registered variables "
+                    "are forbidden inside templates -- slot-purity)"
+                    % (name, s_str, slot_symbol))
+        if not has_slot:
+            raise ValueError(
+                "FlexAtomSpec %r: template must contain the slot symbol %r "
+                "(a slot-free template is an opaque AtomSpec)"
+                % (name, slot_symbol))
+        slots.sort(key=_slot_sort_key)
+        self.name = name
+        self.template = template
+        self.slot_symbol = slot_symbol
+        self.slots = slots
+        self.k = len(slots)
+        self.expr = expr
+        # Compile ONCE over (slot_values, *placeholders); reused by every
+        # instantiation's closure (function_treeC._flex_function).
+        self.compiled = sp.lambdify(
+            [sp.Symbol(slot_symbol)] + [sp.Symbol(nm) for nm in slots],
+            expr, "numpy")
+
+    def __reduce__(self):
+        # Wire/pickle contract identical to AtomSpec: (name, template,
+        # slot_symbol) fully determines the spec; __init__ re-validates.
+        return (FlexAtomSpec, (self.name, self.template, self.slot_symbol))
+
+
 cdef is_parameter(str name):
     """Is name a parameter declaration?"""
     return bool(re.fullmatch(r'[a-zA-Z]\d+', name))

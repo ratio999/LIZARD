@@ -391,6 +391,19 @@ cdef class PolyaTree:
             if idx >= 0:
                 path.append(('prim', idx))
             return
+        # Phase FX: template cell + slot subtrie (silent-drop style of this
+        # legacy walker preserved for the cell itself).
+        if node.is_flex():
+            idx = self._prim_to_idx.get(node.flex_spec.name, -1)
+            if idx >= 0:
+                path.append(('prim', idx))
+            # Stay in THIS walker for the slot (silent-drop convention
+            # throughout; delegating to the strict walker could raise,
+            # contradicting this legacy path's contract). NB dropping an
+            # unregistered head changes the path SHAPE, not just one
+            # cell -- acceptable only because this walker has no callers.
+            self._legacy_extract_recursive(node.get_left(), path)
+            return
         op = node.get_op()
         idx = self._op_to_idx.get(op, -1)
         if idx >= 0:
@@ -430,6 +443,26 @@ cdef class PolyaTree:
                             f"introduced this symbol."
                         )
                 path.append(('prim', idx))
+                return
+            # Phase FX (transparent atoms v1): ONE cell for the template
+            # head, then the slot's construction path continues in the
+            # child subtrie under that cell -- slot-specific reinforcement
+            # is automatic; the frozen interior emits with probability 1
+            # and contributes no steps. Unreachable on legacy trees.
+            if node.is_flex():
+                desc = node.flex_spec.name
+                idx = self._prim_to_idx.get(desc, -1)
+                if idx < 0:
+                    if self.auto_register:
+                        idx = self.add_primitive(desc)
+                    else:
+                        raise KeyError(
+                            f"PolyaTree: unknown flex template '{desc}'. "
+                            f"Pre-register it (Forest does this at "
+                            f"construction) or enable auto_register."
+                        )
+                path.append(('prim', idx))
+                self._extract_recursive(node.get_left(), path)
                 return
             op = node.get_op()
             idx = self._op_to_idx.get(op, -1)
@@ -516,6 +549,16 @@ cdef class PolyaTree:
                     f"PolyaTree.assert_covers: leaf primitive '{desc}' "
                     f"is not in the vocabulary."
                 )
+            return
+        # Phase FX: the template head must be a registered cell; the slot
+        # is checked like any subtree.
+        if node.is_flex():
+            if node.flex_spec.name not in self._prim_to_idx:
+                raise KeyError(
+                    f"PolyaTree.assert_covers: flex template "
+                    f"'{node.flex_spec.name}' is not in the vocabulary."
+                )
+            self._assert_covers_recursive(node.get_left())
             return
         op = node.get_op()
         if op not in self._op_to_idx:

@@ -102,9 +102,15 @@ cdef class Node:
         self.sigma = sigma
 
     def __copy__(self):
-        return Node(copy(self.function), copy(self.left), copy(self.right),
+        cdef Node shallow = Node(copy(self.function), copy(self.left), copy(self.right),
             self.op_symbol, alpha=self.alpha, sigma=self.sigma,
             theta=(None if self.theta is None else dict(self.theta)))
+        # Phase FX: transparent-atom identity travels with the node (spec
+        # is immutable and shared; names copied). None for legacy nodes.
+        shallow.flex_spec = self.flex_spec
+        shallow.flex_names = (None if self.flex_names is None
+                              else list(self.flex_names))
+        return shallow
 
     def __deepcopy__(self, memo1):
         cdef Node node_copy = Node(deepcopy(self.function, memo1),
@@ -113,6 +119,15 @@ cdef class Node:
                 value=self.value,
                 theta=(None if self.theta is None else dict(self.theta))
                 )
+        # Phase FX: forward the scaffold identity. The copied function's
+        # closure still references the ORIGINAL slot function object --
+        # values are identical at copy time (closures are state-free wrt
+        # theta), and any structural slot change on the copy goes through
+        # update_func, which rebuilds the composition over the COPIED
+        # slot, so stale closures cannot leak.
+        node_copy.flex_spec = self.flex_spec
+        node_copy.flex_names = (None if self.flex_names is None
+                                else list(self.flex_names))
         memo1[id(self)] = node_copy
         return node_copy
 
@@ -145,7 +160,12 @@ cdef class Node:
         return False
     
     cpdef is_constant(self):
-        return (len(self.function.variables)==0) and not self.is_leaf()
+        # Phase FX: a flex scaffold is NEVER foldable-as-constant, even if
+        # its slot is momentarily variable-free -- folding would evaluate
+        # np.float64(Psi(...)) on an undefined Function head (crash) and
+        # destroy the immortal scaffold.
+        return ((len(self.function.variables)==0) and not self.is_leaf()
+                and self.flex_spec is None)
 
     # ------------------------------------------------------------------
     # Phase 2.10 Stage 2 — the atomic-leaf taxonomy (DESIGN §1, §9 item 2).
@@ -161,6 +181,15 @@ cdef class Node:
         return False.'''
         return (self.is_leaf() and self.function is not None
                 and self.function.atom_symbol is not None)
+
+    cpdef bint is_flex(self):
+        '''Phase FX: is this node a TRANSPARENT (flexible) atom -- a frozen
+        scaffold (real_functionC.FlexAtomSpec) whose mutable slot subtree
+        lives in self.left (self.right is None)? Not a leaf, not opaque-
+        atomic; the outer move kernel treats it as an indivisible,
+        immortal unit and only gp_movesC.flex_slot_mutation edits the
+        slot. False on every legacy node.'''
+        return self.flex_spec is not None
 
     cpdef int leaf_k(self):
         '''Continuous parameters this LEAF contributes to the tree's
@@ -230,7 +259,10 @@ cdef class Node:
         self.set_sigma(new_sigma)
         if not self.is_leaf():
             self.left.set_sigma_recursive(new_sigma)
-            self.right.set_sigma_recursive(new_sigma)
+            # Phase FX: flex scaffolds are unary (right is None); no-op
+            # guard for every legacy node (non-leaf => both children).
+            if self.right is not None:
+                self.right.set_sigma_recursive(new_sigma)
     
    
     
@@ -372,6 +404,11 @@ cdef class Node:
         if self.is_leaf():
             return self
         else:
+            # Phase FX: unary flex scaffold descends into its slot WITHOUT
+            # consuming RNG; checked before the draw so legacy trees keep
+            # their historical RNG stream bit-identically.
+            if self.right is None:
+                return self.left.select_random_leaf()
             if _PY_RNG.choice([True, False]):
                 return self.left.select_random_leaf()
             else:
@@ -389,11 +426,15 @@ cdef class Node:
         
         if self.is_leaf():
             return self
-        
-        
+
+        # Phase FX: unary flex scaffold (right is None) descends left
+        # without consuming RNG (guard precedes the draw: legacy stream
+        # bit-identical).
+        if self.right is None:
+            return self.left.select_random_node(threshold)
         if _PY_RNG.random() < 0.5:
             return self.left.select_random_node(threshold)
-        else: 
+        else:
             return self.right.select_random_node(threshold)
 
     cpdef compute_subtree_size(self):
@@ -410,9 +451,18 @@ cdef class Node:
     #cdef?
     cpdef update_func(self, list params_list=[], str user_prefix=None):
         """Update function after attribute changes"""
+        if self.flex_spec is not None:
+            # Phase FX: rebuild the numeric composition over the CURRENT
+            # slot child. Structural slot changes always REPLACE function
+            # objects, so this is the single point keeping the scaffold's
+            # closure/expr in sync (op-symbol chain below would otherwise
+            # silently leave the function stale: op_symbol is None here).
+            self.function = _flex_function(self.flex_spec, self.flex_names,
+                                           self.left)
+            return
         if self.is_leaf():
-            
-            return 
+
+            return
         else:
             
             if self.op_symbol == '+':
@@ -444,10 +494,15 @@ cdef class Node:
             leaves_list.append(self)
             #print(self.get_fun().get_description())
         else:
-            
+
             self.left.get_leaves(leaves_list = leaves_list)
-            self.right.get_leaves(leaves_list = leaves_list)
-    
+            # Phase FX: a flex scaffold is unary (right is None); its SLOT
+            # leaves (under left) ARE tree leaves, so slot parameters flow
+            # into params/name_values unchanged. The None-guard is a no-op
+            # for every legacy node (non-leaf => both children present).
+            if self.right is not None:
+                self.right.get_leaves(leaves_list = leaves_list)
+
         return leaves_list
 
     cpdef node_count(self):
@@ -662,6 +717,16 @@ cdef class Tree:
                 for nm in leaf.leaf_param_names():
                     names_values[nm] = leaf.theta[nm]
                     penalty += 1
+        # Phase FX: flex-scaffold internal parameters, pre-order flex-node
+        # order, AFTER plain + opaque names (mirrors get_params). Each
+        # counts 1 toward the penalty -> _shortcut_bic's k stays the true
+        # effective dimension. Empty walk (and zero cost) on legacy trees.
+        cdef Node fx_node
+        cdef str fx_nm
+        for fx_node in _collect_flex_nodes(self.root, []):
+            for fx_nm in fx_node.flex_names:
+                names_values[fx_nm] = fx_node.theta[fx_nm]
+                penalty += 1
         return params_values, names_values, penalty
 
     def get_param_dicts(self):
@@ -715,6 +780,12 @@ cdef class Tree:
         for leaf in self.leaves:
             if leaf.is_atomic():
                 order_names.extend(leaf.leaf_param_names())
+        # Phase FX: flex internal names continue the same order (mirrors
+        # get_param_values so root-function order, name_values and the
+        # optimizer's flat vector stay aligned).
+        cdef Node fx_node
+        for fx_node in _collect_flex_nodes(self.root, []):
+            order_names.extend(fx_node.flex_names)
         self.root.sort_params_by_names(order_names)
         return params_list
     #def?
@@ -755,17 +826,25 @@ cdef class Tree:
 
     def tree_to_string(self,  Node node, str prefix='', bint is_left=True):
         """Creation of fancy scheme. REVERSE POLISH"""
-        
+
         if node.is_leaf():
             return f"{prefix}{'└── ' if is_left else '├── '}{str(node.function.get_description())}\n"
-        
+
+        if node.is_flex():
+            # Phase FX: unary scaffold -- print the head + internal names,
+            # then the slot subtree (right is None).
+            result = f"{prefix}{'└── ' if is_left else '├── '}{node.flex_spec.name}[{', '.join(node.flex_names)}]\n"
+            prefix += '    ' if is_left else '│   '
+            result += self.tree_to_string(node.left, prefix, True)
+            return result
+
         result = f"{prefix}{'└── ' if is_left else '├── '}{node.op_symbol}\n"
         prefix += '    ' if is_left else '│   '
 
         result += self.tree_to_string(node.left, prefix, True)
         result += self.tree_to_string(node.right, prefix, False)
 
-        return result    
+        return result
     
     #def?
     cpdef tree_get_description(self):
@@ -973,6 +1052,12 @@ cdef class Tree:
                 for nm in leaf.leaf_param_names():
                     if nm in optimized_params:
                         leaf.theta[nm] = optimized_params[nm]
+        # Phase FX: same write-back for flex-scaffold internal theta.
+        cdef Node fx_node
+        for fx_node in _collect_flex_nodes(self.root, []):
+            for nm in fx_node.flex_names:
+                if nm in optimized_params:
+                    fx_node.theta[nm] = optimized_params[nm]
 
         self.param_values, self.name_values, self.penalty = self.get_param_values()
 
@@ -1014,6 +1099,12 @@ cdef class Tree:
                 for nm in leaf.leaf_param_names():
                     if nm in optimized_params:
                         leaf.theta[nm] = optimized_params[nm]
+        # Phase FX: same write-back for flex-scaffold internal theta.
+        cdef Node fx_node
+        for fx_node in _collect_flex_nodes(self.root, []):
+            for nm in fx_node.flex_names:
+                if nm in optimized_params:
+                    fx_node.theta[nm] = optimized_params[nm]
 
         self.param_values, self.name_values, self.penalty = self.get_param_values()
         self.tree_update(self.root)
@@ -1127,6 +1218,13 @@ cdef class Tree:
                 for name in leaf.leaf_param_names():
                     if name in new_name_values:
                         leaf.theta[name] = float(new_name_values[name])
+        # Phase FX: flex-scaffold internal theta are ordinary refresh
+        # coordinates too.
+        cdef Node fx_node
+        for fx_node in _collect_flex_nodes(self.root, []):
+            for name in fx_node.flex_names:
+                if name in new_name_values:
+                    fx_node.theta[name] = float(new_name_values[name])
         self.tree_update(self.root)
 
     cdef _root_replacement(self, object replacement=None, int replace_all = 0, dict kwargs= None,
@@ -1196,12 +1294,20 @@ cdef _post_order_update(Node node):
 # ---------------------------------------------------------------------------
 
 cpdef object tree_to_skel(Node node):
-    """Serialize the (sub)tree rooted at `node` to a skeleton tuple."""
+    """Serialize the (sub)tree rooted at `node` to a skeleton tuple.
+
+    Phase FX adds the transparent-atom tag:
+        ('F', head_name, (theta_names...), slot_skel)
+    -- exact-shape, sympy-free, mirrors the 'A' contract (values travel in
+    name_values; the caller installs them and runs tree_update)."""
     if node.is_leaf():
         if node.is_atomic():
             return ('A', node.function.atom_symbol,
                     tuple(node.leaf_param_names()))
         return ('L', node.function.get_description())
+    if node.flex_spec is not None:
+        return ('F', node.flex_spec.name, tuple(node.flex_names),
+                tree_to_skel(node.left))
     return ('O', node.op_symbol,
             tree_to_skel(node.left), tree_to_skel(node.right))
 
@@ -1233,11 +1339,159 @@ cpdef Node node_from_skel(object skel,
             <real_functionC.AtomSpec> atom_specs[skel[1]], domain,
             list(skel[2]))
         return Node(rf)
+    if tag == 'F':
+        # Phase FX: rebuild the slot first, then the scaffold over it.
+        # Registry shares the atom_specs dict (FlexAtomSpec entries);
+        # a missing template keeps the KeyError->reject convention.
+        if atom_specs is None or skel[1] not in atom_specs:
+            raise KeyError(
+                "node_from_skel: unknown flex template %r — pass the "
+                "atom_specs dict covering every template on the wire"
+                % (skel[1],))
+        left = node_from_skel(skel[3], domain, atom_specs)
+        return make_flex_node(atom_specs[skel[1]], left, list(skel[2]), None)
     if tag != 'O':
         raise ValueError("node_from_skel: bad skeleton tag %r" % (tag,))
     left = node_from_skel(skel[2], domain, atom_specs)
     right = node_from_skel(skel[3], domain, atom_specs)
     return Node(None, left, right, <str> skel[1])
+
+# ---------------------------------------------------------------------------
+# Phase FX (transparent/flexible atoms v1, 2026-07-28) — module machinery.
+# A flex node is a UNARY scaffold: frozen shape (FlexAtomSpec) over ONE
+# mutable slot subtree in node.left (node.right is None). Identity is the
+# UNEXPANDED sympy Function head  name(theta..., slot_expr)  — injective
+# w.r.t. transparent expressions, no sympy substitution ever happens
+# (evaluation = numeric composition of the spec's compiled template over
+# the slot's output). v1 semantics: seeding-only entry, immortal in the
+# outer kernel, slots evolve both ways via gp_movesC.flex_slot_mutation.
+# Cross-module callers: POSITIONAL ARGS ONLY (cpdef rule).
+# ---------------------------------------------------------------------------
+
+cdef real_functionC.RealFunctionC _flex_function(object spec_obj, list names,
+                                                 Node slot):
+    """Compose spec's template numerically over the CURRENT slot function.
+
+    The returned RealFunctionC's expr keeps the unexpanded head; its
+    closure captures the slot's function OBJECT — every structural slot
+    change replaces function objects and re-runs update_func, so stale
+    closures cannot leak. Missing internal names in `params` fall back to
+    the 1.0 reference (theta0 convention: params-free probes like
+    is_valid stay well-defined). Any evaluation failure or complex output
+    yields an all-NaN vector -> zero-likelihood semantics upstream."""
+    cdef object spec = spec_obj
+    cdef object slot_rf = slot.function
+    cdef object compiled = (<real_functionC.FlexAtomSpec> spec_obj).compiled
+    cdef list nm_list = list(names)
+    cdef object expr = sp.Function(
+        (<real_functionC.FlexAtomSpec> spec_obj).name)(
+        *([sp.Symbol(nm) for nm in nm_list] + [slot_rf.get_expr()]))
+
+    def func(cnp.ndarray input_x, dict params=None):
+        if params is None:
+            params = {}
+        s_out = slot_rf.get_eval(input_x, params)
+        args = [s_out]
+        for nm in nm_list:
+            args.append(params.get(nm, 1.0))
+        try:
+            arr = np.asarray(compiled(*args), dtype=np.float64)
+            if arr.ndim == 0:
+                return np.full(input_x.shape[input_x.ndim - 1],
+                               float(arr), dtype=np.float64)
+            return np.ascontiguousarray(arr, dtype=np.float64).ravel()
+        except Exception:
+            return np.full(input_x.shape[input_x.ndim - 1], _NAN,
+                           dtype=np.float64)
+
+    return real_functionC.RealFunctionC(func, expr, slot_rf.get_domain(),
+                                        compute_grad=False)
+
+
+cdef list _collect_flex_nodes(Node node, list out):
+    """Pre-order collection of flex-scaffold nodes. Does NOT descend into
+    slots (nesting is forbidden at construction; the walk stays O(outer
+    nodes)). Empty on every legacy tree."""
+    if node is None:
+        return out
+    if node.flex_spec is not None:
+        out.append(node)
+        return out
+    if not node.is_leaf():
+        _collect_flex_nodes(node.left, out)
+        _collect_flex_nodes(node.right, out)
+    return out
+
+
+cpdef list collect_flex_nodes(Node node, list out=None):
+    """Python/cross-module wrapper around _collect_flex_nodes."""
+    if out is None:
+        out = []
+    return _collect_flex_nodes(node, out)
+
+
+cpdef bint tree_has_flex(Node node):
+    """Cheap presence test used by wire predicates and PR routing."""
+    return len(_collect_flex_nodes(node, [])) > 0
+
+
+cpdef Node make_flex_node(object spec_obj, Node slot, list fresh_names,
+                          object theta=None):
+    """Instantiate a transparent atom: scaffold `spec_obj`
+    (real_functionC.FlexAtomSpec) over the given `slot` subtree, internal
+    parameters named `fresh_names` (positionally matched to spec.slots,
+    len == spec.k, distinct, parameter-pattern, never variable names).
+    `theta` optionally pins internal values (default 1.0 reference).
+
+    v1 SEEDING entry point: flex atoms only enter trees here (and via the
+    'F' wire tag); the move kernel never births or destroys them. The
+    slot must be a legal flex-free subtree with a live function.
+    Cross-module callers: POSITIONAL ARGS ONLY.
+
+    IN-SUPPORT SEEDING (review 2026-07-29): the scaffold contributes
+    1 + depth(slot) to the OUTER tree's depth, and the kernel's bounded
+    support is depth <= gp_movesC.get_max_tree_depth(). Seed trees must
+    start inside that support -- the same convention as legacy node_list
+    seeding; nothing validates it here (gp_movesC is not importable from
+    this module without a cycle)."""
+    cdef object spec = spec_obj
+    cdef str nm
+    cdef dict th = {}
+    cdef Node out
+    if not isinstance(spec_obj, real_functionC.FlexAtomSpec):
+        raise TypeError(
+            "make_flex_node: spec must be a real_functionC.FlexAtomSpec, "
+            "got %r" % type(spec_obj))
+    if slot is None or slot.function is None:
+        raise ValueError("make_flex_node: slot must be a live Node")
+    if len(_collect_flex_nodes(slot, [])) > 0:
+        raise ValueError(
+            "make_flex_node: nested flex scaffolds are not supported (v1)")
+    if (fresh_names is None
+            or len(fresh_names) != (<real_functionC.FlexAtomSpec> spec_obj).k):
+        raise ValueError(
+            "make_flex_node(%r): expected %d fresh names, got %r"
+            % ((<real_functionC.FlexAtomSpec> spec_obj).name,
+               (<real_functionC.FlexAtomSpec> spec_obj).k, fresh_names))
+    if len(set(fresh_names)) != len(fresh_names):
+        raise ValueError(
+            "make_flex_node: fresh names must be distinct, got %r"
+            % (fresh_names,))
+    for nm in fresh_names:
+        if not re.fullmatch(r'[a-zA-Z]\d+', nm) \
+                or real_functionC.is_variable_name(nm):
+            raise ValueError(
+                "make_flex_node: %r is not a legal internal parameter "
+                "name" % (nm,))
+        th[nm] = 1.0 if theta is None else float(theta.get(nm, 1.0)) \
+            if isinstance(theta, dict) else 1.0
+    out = Node(_flex_function(spec_obj, list(fresh_names), slot),
+               slot, None, None)
+    out.flex_spec = spec_obj
+    out.flex_names = list(fresh_names)
+    out.theta = th
+    return out
+
 
 #cdef --> is cpdef for testing purposes only
 cpdef build_tree(int depth, list functions, cnp.ndarray x,
