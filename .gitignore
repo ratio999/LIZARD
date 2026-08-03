@@ -42,3 +42,15 @@ Untitled*.ipynb
 # Kept on disk, deliberately never committed.
 # ---------------------------------------------------------------------------
 PROMPT_*.md
+
+# ---------------------------------------------------------------------------
+# ALL markdown is local-only by user decision (2026-08-03) — planning,
+# theory and review notes stay on disk, never in the repo. PLAN.md (the
+# project logbook) and README.md are the tracked exceptions. NB
+# .gitignore does not untrack files already in the index: the one-time
+#   git rm --cached <files>
+# was left to the user (agent git-mutation ban).
+# ---------------------------------------------------------------------------
+*.md
+!PLAN.md
+!README.md

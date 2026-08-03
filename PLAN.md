@@ -2280,3 +2280,49 @@ question into the paper's formalism (its §10.3).**
 - ✅ Phase FD kernel (flexible multivariate domains, branch `flexible_domain`,
   2026-07-19) — registry + (d,n) domains + guards + test_phaseFD.py;
   compose-less (standing item). Details: flexible_domain_plan.md §9.
+
+
+### MR-SR1 FIELD NOTES (2026-08-02, experiment side; preprocessing instance
+### running the merger-ringdown SR campaign per MR_SR_REGIMES_PLAN.md)
+
+Two kernel-relevant observations from the SR-1 smoke phase, logged per the
+division of labor (observations only; nothing kernel-side was modified):
+
+1. **FX: hand-BUILT slots of depth >= 2 evaluate incorrectly through the
+   `make_flex_node` path.** Reproducer (scratchpad `sr1_flex_probe.sh`,
+   session 2026-08-02; dataset = mr_preprocessing export
+   SXS_BBH_2325__l2m2__amp, n=334, sigma-array):
+   - template "c0*tanh(s) + c1", slot expr_to_tree("a0*x") with a0=0.0864:
+     fits CORRECTLY (chi2/dof 8763 = the analytic optimum of that family;
+     internals + slot params co-optimize fine, k=2 internals fine).
+   - SAME template, slot expr_to_tree("a0*x + a1") (depth-2, op '+' inside
+     the slot): evaluation is WRONG -- at hand-set theta the prediction
+     collapses (pred[-1] = 0.0 where tanh+offset cannot be 0), and every
+     fit lands on the CONSTANT-solution optimum (post -7.59e8). Also
+     `Tree.get_params()` on such a tree lists ONLY the slot params, and the
+     internals c1 stays frozen at 1.0 through score_dataset.
+   Suspected surface: slot subtrees ripped from a donor Tree via
+   `slot.get_root()` (aliasing/registration), only for nested-op slots;
+   slots GROWN by flex_slot_mutation are the certified path and appear
+   unaffected (Phase FX 71/71, MD-g). Triage when convenient; SR-1 works
+   around it by seeding minimal depth-1 slots and letting the 9th move grow
+   the argument.
+
+2. **Legacy burn-in wire + sqrt(x): warning storms and out-of-vocabulary
+   rebuilds.** On a '**'-free vocabulary containing sqrt(x), the spawn
+   burn-in's legacy dual-format wire canonicalizes sqrt-bearing stage-2
+   forms into parametrized powers (x**a0 etc.), emitting one
+   "Reconstructed tree description does not match" warning per combo (the
+   4.4-incident canonicalization class; burn-in producers deliberately
+   stayed legacy). Cosmetically identical warnings appear (and pass) in
+   test_phase42; at MR scale (53k combos, n=334) the warning storm through
+   the 9p /mnt/c mount dominated wall time and the rebuilt x**a0 forms
+   pollute the candidate set's provenance. SR-1 excludes sqrt(x) from all
+   vocabularies (physics loses nothing; documented in
+   mr_preprocessing/REPORT.md SS16). A burn-in force_skel analog is the
+   clean long-term fix, but it is fingerprint-affecting -- kernel
+   instance's call.
+
+3. For calibration context: spawn health re-confirmed on this machine
+   2026-08-02 via `mpiexec -n 1 test_phase42.py` -> PASS, fingerprint
+   post -64.534224 / nrmse 0.009240 intact on the MD-era binaries.
