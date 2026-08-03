@@ -82,6 +82,13 @@ cdef class Grove:
     # bit-identical legacy (no 9th move, no stats key). Appended at the
     # END of the attribute block (struct-layout hygiene).
     cdef public object flex_atoms
+    # Phase MD (multi-dataset joint evidence, 2026-07-31): list of
+    # validated (x_j, y_j, sigma_j) tuples or None (=> bit-identical
+    # legacy); reduction config (PLAN MR.4 D4-D6). Appended at block end.
+    cdef public object datasets
+    cdef public str md_combine
+    cdef public double md_softmin_beta
+    cdef public object md_baselines
 
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
@@ -164,6 +171,12 @@ cdef class Grove:
 
     cpdef  acceptance_rate(self)
 
+    # Phase MD (2026-07-31) — appended at the END of the method list
+    # (vtab hygiene).
+    cdef double _score_cand_joint(self, function_treeC.Tree cand,
+                                  bint optimize=*)
+    cpdef object joint_thetas(self, function_treeC.Tree tree)
+
 cdef class Forest:
     cdef public list groves
     cdef public object temperatures
@@ -188,6 +201,9 @@ cdef class Forest:
     # every Grove; heads pre-registered in the shared Polya (registration
     # invariance). None => legacy. Appended at block end (layout hygiene).
     cdef public object flex_atoms
+    # Phase MD (2026-07-31): the shared datasets list (Groves hold the
+    # validated copies; Forest keeps the flag for the spawn refusal).
+    cdef public object datasets
     cpdef dict ladder_stats(self)
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove)
     cpdef compute_posteriors_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=*)
@@ -218,3 +234,12 @@ cpdef function_treeC.Tree _tree_from_wire(object expr, dict name_values,
                                           object atom_specs=?)
 
 cdef _bis2_parallel_helper(object x)
+
+# Phase MD (multi-dataset joint evidence, 2026-07-31) — module helpers,
+# appended at file end.
+cdef double _md_dataset_penalty(int k, int n, object sigma)
+cdef double _reduce_joint(list posts, list penalties, str combine,
+                          double softmin_beta, object baselines)
+cpdef double reduce_joint(list posts, list penalties, str combine,
+                          double softmin_beta=?, object baselines=?)
+cpdef double md_dataset_penalty(int k, int n, object sigma=?)

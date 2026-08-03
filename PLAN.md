@@ -1900,6 +1900,283 @@ parameter/constant leaves broadcast from the PASSED x, not from the
 construction-time `self.domain`; otherwise dataset 2 silently inherits
 dataset 1's length.
 
+**MR.4 IMPLEMENTATION LOG (2026-07-31, overnight run)**
+
+*Iter 1 — broadcasting probe: PASS (no kernel change needed).* Probe
+(scratchpad `md_probe.py`): a Tree built on X1 (n=60) evaluated/fitted
+against a foreign X2 (n=41, different range): (P1) expression trees
+compute the SAME function on the passed x, output sized (41,) — NB the
+first run "failed" only because expr_to_tree canonicalizes parameter
+ROLES (the SA-a lesson; probe made role-agnostic); (P2) parameter-leaf-
+only trees size np.full output from the PASSED x, not the domain; (P3)
+function leaves fine; (P4) `update_parameters(X2, y2)` fits on the
+passed data (rmse 0.011 at noise 0.01) — the explicit-x optimizer entry
+is joint-ready as-is; (P5) FX flex composition evaluates correctly on
+foreign x; (P6, documented) `log_marginal_bic(y_foreign)` returns −inf
+(reads self.domain; validity/shape gate) — confirms D3: the joint path
+requires a NEW explicit-argument scoring entry and must never route
+through the legacy y-only method. Files changed so far: NONE (probe is
+scratchpad-only). Backups of all *.pyx/*.pxd/PLAN.md taken to scratchpad
+`backup_md_20260731/` (22 files).
+
+*Iter 2 — explicit-argument scoring entry + reduction point (WRITTEN,
+build pending).* Files changed: `function_treeC.pyx` — new
+`Tree._log_marginal_bic_x(x, y, optimize, use_gradients, method_str)`,
+an exact mirror of `_log_marginal_bic` with the PASSED x substituted at
+every self.domain site (optimizer x via the already-argument-driven
+`_update_parameters*`, both is_valid gates, the three no-optimize scorer
+calls; n comes from y inside `_shortcut_bic`); new cpdef
+`Tree.score_dataset(x, y, sigma, optimize=True, use_gradients=False,
+method_str='Powell')` -> `(post, dict(name_values))` — swaps the ONE
+Tree-level `self.sigma` attribute around the call with try/finally
+restore (D3: never the node-recursive setter), leaves fitted theta_j
+installed for the caller to snapshot. `function_treeC.pxd` — both decls
+appended at the END of the Tree block. `groveC.pyx` — module-level
+`_md_dataset_penalty(k, n, sigma)` (mirrors _shortcut_bic's k vs k+1
+branches) and `_reduce_joint(posts, penalties, combine, softmin_beta,
+baselines)` implementing D4/D5/D6: 'sum' (default, joint evidence),
+'min' and 'softmin' on the baseline-shifted FIT parts with the
+complexity charge kept SUMMED; any non-finite S_j -> -inf; unknown mode
+raises. libc imports extended (log, isfinite). `groveC.pxd` — two decls
+appended at file end. Legacy scoring paths byte-untouched.
+
+*Iter 2b — entry smoke: PASS.* score_dataset matches the analytic
+per-point-sigma BIC to full precision on a foreign dataset, restores the
+configured sigma, fits each dataset independently, and reproduces the
+legacy log_marginal_bic EXACTLY at J=1 (same Powell trajectory) even
+with a deliberately wrong configured sigma (scratchpad
+`md_smoke_entry.py`).
+
+*Iter 3 — Grove/Forest joint plumbing (WRITTEN, build pending).* Files
+changed: `groveC.pyx` — (1) Grove ctor: `datasets=None, md_combine='sum',
+md_softmin_beta=8.0, md_baselines=None` kwargs; validation block after
+the pr_prob init (triples coerced to contiguous float64; per-dataset
+x/y/sigma length checks; positional (x, y) REQUIRED to equal the
+reference dataset datasets[0][:2]; self.sigma forced to datasets[0][2];
+combine-mode/beta/baselines validation; burn_in refused (D2); pr_prob
+forced 0.0 (D1)); (2) `_score_cand_joint(cand, optimize)` — strictest-
+wins validity over every dataset's x, description-keyed cache with the
+JOINT value shape (joint_post, [nv_0..nv_{J-1}]), independent per-
+dataset fits from the candidate's incoming theta (D7b: start_nv
+re-installed before each dataset), penalties via _md_dataset_penalty,
+reduction via _reduce_joint, REFERENCE theta (dataset 0) left installed,
+per-dataset penalty-exclusion on caching; (3) `_step` scoring block:
+one `if self.datasets is not None:` branch routing to the joint scorer
+with the legacy block wrapped in the else (behaviourally identical for
+legacy Groves; <= -1e290 joint returns hard-reject like the legacy
+validity gate); (4) `_score_post`: same route at the top (swaps/
+crossovers/lazy fills are automatically joint); (5) `compute_posteriors`:
+joint Groves score via _score_cand_joint regardless of `full`;
+(6) `_step_parameter_refresh`: raises under datasets (D1) — ctor already
+forces pr_prob=0; (7) `joint_thetas(tree)` cpdef introspection (cached
+per-dataset theta list for hall-of-fame consumers); (8) cpdef wrappers
+`reduce_joint` / `md_dataset_penalty` for tests and the post-hoc
+cross-check script; (9) Forest ctor: same four kwargs, pass-through to
+every Grove (rungs share one datasets list => one joint posterior),
+`self.datasets` stashed, run_mpi_spawn refuses datasets (D8).
+`groveC.pxd` — Grove attrs (datasets, md_combine, md_softmin_beta,
+md_baselines) + Forest attr (datasets) appended at block ends; method
+decls (_score_cand_joint, joint_thetas) appended at method-list end;
+module decls (reduce_joint, md_dataset_penalty) at file end.
+
+*Iter 3b — build note:* one Cython error fixed: an explicit `<str>` cast
+on method_str at the cross-module score_dataset call trips the
+unicode->str coercion rule (the documented atoms-registration trap);
+the uncast object converts at the call boundary like the legacy
+_log_marginal_bic call. Rebuild clean.
+
+*Iter 4 — test_phaseMD.py (NEW FILE) + first runs.* Suite: MD-a J=1
+exactness, MD-b duplicate-dataset identity, MD-c synthetic recovery +
+distractor + short joint EMC, MD-d strictest-wins validity + no-cache,
+MD-e cache shape/reference-theta install, MD-f sigma-array analytic pin
++ profiled k+1 pin, MD-g joint x FX scaffold (per-dataset internal
+thetas; immortality under the joint kernel), MD-h reduction unit
+(sum/min/softmin/baselines/beta limits/error paths + penalty helper),
+MD-i refusals (burn_in, PR hand-re-enable, spawn, reference-equality,
+bad mode/baselines/lengths) + Forest serial EMC smoke + min/softmin
+end-to-end. First pass: 34/36 — both failures were TEST issues, kernel
+clean: (1) the NORMALIZED softmin tends to min + log(J)/beta from above
+(the 1/J term that makes beta->0 the mean); pin corrected to include
+the exact offset. (2) DOCUMENTED policy divergence: joint
+compute_posteriors POPULATES the BIC cache (deliberate — a hit saves J
+fits) while legacy compute_posteriors bypasses it; exact J=1 trajectory
+equivalence therefore holds under SYMMETRIC cache states (both groves
+initial-scored through run()'s lazy fill, which caches on both paths) —
+test restructured accordingly. Second run: 36/36 PASS.
+
+*Iter 5 — adversarial review round 1 (lifecycle/aliasing lens) + fixes.*
+Reviewer verdict: design solid (theta snapshots genuine copies; the
+name-set invariant makes _install_cached_theta a complete value-only
+restore; the sigma swap exception-safe; the feared in-place zero-fix on
+shared dataset arrays does NOT exist on any scoring path; MD x FX clean
+end to end). Four fixes applied (all joint-only paths): (1) HIGH —
+`_init_trees` seeded RANDOM-INIT joint Groves with legacy single-dataset
+posts (incommensurable with joint candidate scores; masked by every
+node_list/compute_posteriors test) — joint branch added, scoring via
+_score_cand_joint; (2) `joint_thetas` now DEEP-copies the per-dataset
+dicts (a shallow copy handed callers live cache references — mutation
+would silently change what later hits install); (3) every dataset x is
+COPIED (never a view of the caller's array) and zero-SCRUBBED like the
+legacy domain at ctor validation (else datasets j>0 were never scrubbed
+— an exact zero, e.g. t=0 at the aligned peak, would make 1/x-bearing
+candidates invalid on that dataset only — and the legacy in-place scrub
+of the positional x could leak through a shared view into caller data);
+also: empty-dataset refusal; (4) reference-theta re-install moved BEFORE
+the reduction call (a raising reduction left the live tree on the last
+dataset's theta). Recorded as DOCUMENTED CONTRACTS (no code change):
+optimize=False lazy fills can cache unoptimized scores (legacy-parity
+hazard, now paper-facing via joint_thetas — experiment layer should
+compute_posteriors before swaps); `_md_dataset_penalty` ignores the
+Phase 4.3 no-BIC ablation switch, so md_combine='min'/'softmin' plus
+set_bic_penalty(False) mis-decomposes L_j (ablation is a diagnostic
+lane; combine only with 'sum'); positional sigma is NOT required to
+equal datasets[0][2] (self.sigma is force-overridden, by design). New
+regressions MD-j1/j2/j3 added (ctor-path duplicate-dataset identity;
+joint_thetas mutation immunity; zero-bearing dataset scrub + caller-
+array non-mutation). Sampler-math and bit-identity reviews still
+running. Also: the `_init_trees` joint scoring POPS its own cache entry
+(the legacy ctor never writes the cache; without the pop, ctor-cached
+topologies took cache-hit paths later while legacy re-fit, breaking
+exact J=1 equivalence in low-order bits — MD-a pins it). MD suite
+40/40. FX cross-check on the MD binary exposed a DETERMINISM FLAW in
+FX-e1 (my own FX test): it pinned only gp_movesC's RNG while slot
+rebuilds also draw from function_treeC's stream (the FX-e6 lesson), so
+the finite-proposal count varied across processes (observed 14 vs the
+>20 threshold on an identical kernel — gp_movesC/polya/real_functionC
+are untouched by MD). Fixed by pinning both streams in FX-e1; FX back
+to 71/71.
+
+*Iter 6 — adversarial review round 2 (sampler-math lens) + fixes.*
+Reviewer confirms the scoring core ("statistically sound where designed
+hardest": the reduction is a genuine per-tree energy in all modes, the
+L_j decomposition exact on both sigma branches, strictest-wins
+deterministic, warm-start/cache behavior the same documented
+approximation class as legacy — not a new detailed-balance defect) and
+independently re-derives the _init_trees finding (already fixed, iter
+5). NEW fixes applied: (1) MAJOR — size==0 flips self.burn_in on
+BEFORE the datasets block, bypassing the D2 refusal (the guard tested
+the ctor flag only); guard now tests `burn_in or self.burn_in`;
+(2) MAJOR — the PUBLIC burn-in wrappers (burn_in_combinations,
+burn_in_depth2) carried no datasets guard: one post-construction call
+silently scored everything on ONE dataset and REPLACED the joint
+population; both now raise; (3) MAJOR-conditional —
+`_md_dataset_penalty` now mirrors the Phase 4.3 ablation switch (new
+`function_treeC.get_bic_penalty()` cpdef getter + pxd): without it,
+set_bic_penalty(False) + min/softmin decomposed L_j with a phantom P_j
+and mis-weighted the argmin by dataset size; (4) unbaselined
+min/softmin now emits a ctor warnings.warn (raw fit terms — the
+largest/tightest dataset dominates the argmin) and the docstring pins
+B_j = the incumbent's FIT term L_j^inc = S_j^inc + P_j^inc, NOT its
+full BIC; (5) test defects fixed: MD-c2 was vacuous (`A and B or
+True`), now a real per-dataset-theta-difference pin; MD-i9 upgraded
+from finiteness to equality with a MANUAL reduce_joint over
+independent score_dataset fits; new MD-i10/i11/i12 pin the size==0 and
+wrapper refusals. PLAN CORRECTION (finding 7): the earlier
+"invalidate on the datasets object identity" cache note is NOT how v1
+shipped — datasets are CTOR-FROZEN and the joint cache is never
+invalidated (correct for immutable data); the md_* config attributes
+are public but MUST NOT be reassigned post-ctor (cache entries would
+mix configurations) — hardening deferred to v2. Remaining recorded
+non-blocking items (legacy-parity class): profiled-sigma junk landings
+can pass the -1e90 cache exclusion (S_j ~ -116*n, finite) — inherited
+from legacy, J multiplies exposure; optimize=False lazy-fill caching
+(documented iter 5); reference-dataset warm-start privilege (same
+first-fit-pinning class as legacy, documented). Re-run after fixes:
+test_phaseMD 43/43, test_phaseFX 71/71.
+
+**HANDOFF NOTE (experiment instance — how to run joint evidence).**
+Invocation (serial EMC only in v1):
+```python
+d1 = np.load(".../products/v1/export/SXS_BBH_2325__l2m2__amp.npz")
+# ... more products; each gives t/y/sigma float64 (n,)
+DS = [(d["t"], d["y"], d["sigma"]) for d in loaded_products]
+f = Forest(DS[0][0], DS[0][1], temps, size, depth, funcs,
+           sigma=DS[0][2], operations=ops, seed=...,
+           node_list=seeds_per_rung,        # incumbent + FX scaffolds
+           flex_atoms=[...],                # composes with Phase FX
+           datasets=DS)                     # <- activates joint scoring
+f.compute_posteriors_all(DS[0][1])          # populate caches + thetas
+f.run_all(y=DS[0][1], n) ; f.attempt_swaps(...) ; f.attempt_crossovers(...)
+g = f.groves[0]; best = g.best_tree()
+thetas_per_dataset = g.joint_thetas(best)   # [nv_0 .. nv_{J-1}] copies
+```
+Contract points: positional (x, y) MUST equal datasets[0][:2] (the
+REFERENCE dataset; is_valid and the single-theta convention live
+there); every dataset x is copied+zero-scrubbed at ctor (caller arrays
+never mutated); y in run/compute calls is a dead API carrier on joint
+Groves. Cost scales ~J x in optimizer time (the J fits dominate; a
+cache hit saves all J). md_combine='min'/'softmin' need md_baselines =
+the incumbent's FIT term L_j = S_j + P_j per dataset (compute via
+Tree.score_dataset on the incumbent + md_dataset_penalty). Do NOT
+reassign datasets/md_* attributes post-ctor (cache would mix configs).
+min/softmin under set_bic_penalty(False) is safe since iter 6 (the
+penalty helper mirrors the ablation switch), but 'sum' remains the
+scientific claim; treat min/softmin as robustness reporting. The post-hoc joint-scoring CROSS-CHECK stays
+mandatory: for hall-of-fame skeletons, refit externally per dataset
+and compare against kernel joint BIC + joint_thetas — groveC exposes
+`reduce_joint` / `md_dataset_penalty` / `Tree.score_dataset` so the
+external script can reproduce the kernel arithmetic exactly (MD-i9
+does precisely this in-suite). Expected smoke scale on tier-A (2,2)
+amp products: incumbent-shaped candidates at chi^2/dof ~ O(100) per
+dataset (REPORT §12 baseline) — an O(1) result for tanh-class forms
+means the sigma plumbing is wrong, not the physics.
+Spec deliverables explicitly DEFERRED (documented, not silent):
+exp_common additive kwargs (P2) — the experiment scripts consume the
+Forest API directly above; spawn wire (P3) — refused with
+NotImplementedError per D8; real-data smoke on 2-3 tier-A products —
+requires the preprocessing products at runtime, left for the
+experiment lane (the synthetic MD-c/f/g pins cover the mechanism).
+
+**CERTIFICATION (2026-07-31 08:44, final MD binary, vs /tmp/sa_post
+σ-fix baseline; logs /tmp/md_cert/ + run log /tmp/md_cert_run.log):**
+ALL 13 SUITES EXIT 0. test_phaseMD 43/43; test_phaseFX 71/71 (after
+the FX-e1 dual-RNG-pin determinism repair). Legacy byte-diff:
+RAW-IDENTICAL test_sigma_array/23/28; CLEAN after the established
+normalization (id() addresses, timings, async MPI print order)
+210/FD/FD--mpi/212_wire(27/27)/44(21/21); the two DOCUMENTED wobbles
+only: [2.9c] TV line (PASS both sides), [2.10q] 117→113 + companion
+wire-skip message (PASS). test_phase42: fingerprint EXACT
+(post −64.534224 / nrmse 0.009240 "matches reference", identical
+recovered expression); residual = addresses + 15 spawned-worker stderr
+warning lines present in baseline but absent this run — worker-stderr
+forwarding into the parent log is flush/disconnect-timing dependent
+(same async class as the [Sampler] disconnected reordering; all
+NUMERIC content exact). Adversarial review: 3 lenses; lifecycle +
+sampler-math verdicts in (fixes applied, iters 5-6); the bit-identity
+agent had not returned at certification time — the raw byte-diff above
+IS the empirical bit-identity check, and its verdict will be appended
+if/when it lands. Phase MD v1: COMPLETE (P2/P3 deferred as noted).
+
+**ADDENDUM (bit-identity verdict + final fix, 2026-07-31 ~09:00).**
+The bit-identity agent returned after certification: "by inspection,
+the legacy (datasets=None) path of the current working tree is
+bit-identical to the pre-MD baseline" — it audited the LIVE TREE (it
+correctly flagged that the review patch had gone stale during the fix
+iterations and regenerated its own diff, so the verdict attaches to
+the final state); `_step`/`_init_trees` wraps verified char-exact
+modulo indent, the log/isfinite cimport-shadowing risk cleared (zero
+bare uses pre-MD; all np.log/np.isfinite attribute access), all pxd
+appends at true block ends. Its remaining items: (a) PROCESS —
+test_phaseFX.py was edited this session (the FX-e1 dual-RNG pin, iter
+5b) and test files were not in the pre-MD backup set, so the agent
+could not diff it independently; the edit is exactly the 5 lines
+documented in iter 5b + PLAN MR.2's harness-lesson note — verify
+against the last commit during morning review (git is the user's
+lane). (b) PRE-EXISTING: samplerC .so dates to 2025 and lags the
+groveC struct growth (FX/σ/MD) — any samplerC import will warn;
+rebuild it if that module is ever used. (c) LOW, FIXED NOW: the FX-era
+burn-in refusal tested only the ctor flag, so flex_atoms + size==0
+could still reach single-dataset burn-in (the exact loophole class MD
+finding 2 closed) — guard extended to `burn_in or size <= 0` inside
+the flex-only block (unreachable with flex_atoms=None). Post-fix:
+rebuild + test_phaseMD 43/43 + test_phaseFX 71/71 re-run, plus a
+byte-diff sentinel: test_sigma_array BYTE-IDENTICAL to the baseline on
+the final binary (verified via plain diff after a shell-quoting
+artifact made the first automated verdict unreliable) — the full
+battery was NOT repeated for this one-line flex-block edit; rationale
+recorded here. FINAL STATE 09:12: all suites green on the shipped
+binary; working tree ready for morning review.
+
 **Penalty-scaling observations (carry into the handoff note):**
   1. Three factors raise the BIC penalty, not one: k (= `len(name_values)`,
      which counts opaque-atom and FX-scaffold internals, +1 in the

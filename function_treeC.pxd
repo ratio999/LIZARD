@@ -207,6 +207,23 @@ cdef class Tree:
     cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?,
                             int new_depth=?, bint ensure_valid=?)
 
+    # Phase MD (multi-dataset joint evidence, 2026-07-31) — appended at
+    # the END of the Tree block (vtab hygiene). Explicit-argument scoring:
+    # the legacy y-only methods above are untouched.
+    cdef double _log_marginal_bic_x(self,
+                                    cnp.ndarray x,
+                                    cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                    bint optimize=?,
+                                    bint use_gradients=?,
+                                    str method_str=?)
+    cpdef tuple score_dataset(self,
+                              cnp.ndarray x,
+                              cnp.ndarray[cnp.float64_t, ndim=1] y,
+                              object sigma,
+                              bint optimize=?,
+                              bint use_gradients=?,
+                              str method_str=?)
+
 cdef _post_order_update(Node node)
 
 # Phase 2.10 Stage 3b: structural (skeleton) serialization for the MPI wire.
@@ -240,3 +257,6 @@ cpdef list collect_flex_nodes(Node node, list out=?)
 cpdef bint tree_has_flex(Node node)
 cpdef Node make_flex_node(object spec_obj, Node slot, list fresh_names,
                           object theta=?)
+
+# Phase MD (2026-07-31): ablation-switch getter (module-level append).
+cpdef bint get_bic_penalty()

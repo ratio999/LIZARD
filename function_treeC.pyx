@@ -39,6 +39,13 @@ cpdef void set_bic_penalty(bint on):
     arms share identical seeding."""
     global _BIC_PENALTY_ON
     _BIC_PENALTY_ON = on
+
+cpdef bint get_bic_penalty():
+    """Phase MD (2026-07-31): read the ablation switch — the joint
+    reduction's penalty reconstruction (groveC._md_dataset_penalty) must
+    mirror _shortcut_bic's branch or min/softmin decomposes L_j wrongly
+    under ablation."""
+    return _BIC_PENALTY_ON
 cdef double _NAN = np.nan
 
 # Per-process RNG handles used by every randomized routine in this module
@@ -1114,6 +1121,81 @@ cdef class Tree:
         cnp.ndarray[cnp.float64_t, ndim=1] y_data,
         str method_str='L-BFGS-B', bint use_gradients=False):
         self._update_parameters(x_data, y_data, method_str, use_gradients)
+
+    # ------------------------------------------------------------------
+    # Phase MD (multi-dataset joint evidence, 2026-07-31) — explicit-
+    # argument scoring. ADDITIVE: the legacy _log_marginal_bic above is
+    # byte-untouched; this mirror substitutes the PASSED x at every site
+    # where the legacy method reads self.domain (optimizer x, both
+    # is_valid gates, and the three no-optimize scorer calls). n comes
+    # from y.shape inside _shortcut_bic, sigma routing comes from
+    # self.sigma exactly as in the legacy path — score_dataset below
+    # swaps that ONE Tree-level attribute around the call (O(1), never
+    # the node-recursive setter; decision D3, PLAN MR.4).
+    # ------------------------------------------------------------------
+    cdef double _log_marginal_bic_x(self,
+                                    cnp.ndarray x,
+                                    cnp.ndarray[cnp.float64_t, ndim=1] y,
+                                    bint optimize=True,
+                                    bint use_gradients=False,
+                                    str method_str='Powell'):
+        cdef double mse
+        self.bic_loss_is_param_loss = True
+        if self.bic_loss_is_param_loss and optimize and len(self.name_values) > 0:
+            mse = self._update_parameters_and_fitness(x, y,
+                                        method_str, use_gradients)
+            # Same contract as the legacy path: is_valid evaluates at the
+            # reference values ON THIS DATASET'S x (strictest-wins comes
+            # from the caller looping every dataset); the theta_hat
+            # pathology gate is the fitness() NaN-penalty semantics.
+            if not self.is_valid(x):
+                return -np.inf
+            if self.sigma is not None and (not hasattr(self.sigma, '__len__')):
+                mse /= (<double>self.sigma * <double>self.sigma)
+            return self._shortcut_bic(y, mse)
+
+        if optimize and len(self.name_values) > 0:
+            self._update_parameters(x, y, method_str, use_gradients)
+            if not self.is_valid(x):
+                return -np.inf
+        if self.sigma is None:
+            return self.root._log_marginal_bic(y, self.name_values, x)
+        elif hasattr(self.sigma, '__len__'):
+            return self.root._log_sigma_array_bic(
+                y, self.name_values, x,
+                np.ascontiguousarray(self.sigma, dtype=np.float64).ravel())
+        else:
+            return self.root._log_sigma_bic(y, self.name_values, x,
+                                            <double>(self.sigma))
+
+    cpdef tuple score_dataset(self,
+                              cnp.ndarray x,
+                              cnp.ndarray[cnp.float64_t, ndim=1] y,
+                              object sigma,
+                              bint optimize=True,
+                              bint use_gradients=False,
+                              str method_str='Powell'):
+        """Phase MD: score THIS tree against ONE explicit dataset
+        (x, y, sigma), independent of the construction-time domain and of
+        the tree's configured sigma.
+
+        Fits theta on the passed data (when optimize and the tree has
+        parameters), leaves the fitted theta installed in the tree, and
+        returns (post, dict(name_values) snapshot) — the caller owns the
+        snapshot (the per-dataset theta_j of PLAN MR.4). self.sigma is
+        saved and restored around the call, so the tree's configured
+        sigma routing is untouched on exit even on exceptions.
+
+        Cross-module callers: POSITIONAL ARGS ONLY."""
+        cdef object saved_sigma = self.sigma
+        cdef double post
+        try:
+            self.sigma = sigma
+            post = self._log_marginal_bic_x(x, y, optimize,
+                                            use_gradients, method_str)
+        finally:
+            self.sigma = saved_sigma
+        return (post, dict(self.name_values))
     cpdef bint is_valid(self, object x=None, double max_abs=1e12):
         """
         Strict validity: evaluation must succeed, be finite, and not explode.

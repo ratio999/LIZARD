@@ -15,7 +15,7 @@ import time
 import sys
 import os
 from copy import deepcopy
-from libc.math cimport exp, fmax
+from libc.math cimport exp, fmax, log, isfinite
 from mpi4py import MPI
 #from mpi4py cimport MPI as cMPI
 #from mpi4py.libmpi cimport *
@@ -44,6 +44,106 @@ cdef inline double _accept_prob(double dlogpost, double T) nogil:
     if T <= 0.0:
         return 1.0 if dlogpost >= 0.0 else 0.0
     return fmax(0.0, 1.0 if dlogpost >= 0.0 else _safe_exp(dlogpost / T))
+
+
+cdef double _md_dataset_penalty(int k, int n, object sigma):
+    """Phase MD: the BIC complexity term P_j >= 0 that _shortcut_bic
+    charges dataset j — 0.5*k*log(n_j) with a given sigma, k+1 when sigma
+    is profiled (sigma_j is None). Mirrors function_treeC._shortcut_bic's
+    branches INCLUDING the Phase 4.3 ablation switch (review 2026-07-31:
+    without the mirror, set_bic_penalty(False) + min/softmin decomposed
+    L_j = S_j + P_j with a phantom P_j and mis-weighted the argmin by
+    dataset size). Used by the min/softmin reductions to keep complexity
+    SUMMED while the fit term is min-reduced (PLAN MR.4 D6)."""
+    if n <= 0:
+        return 0.0
+    if not function_treeC.get_bic_penalty():
+        return 0.0
+    if sigma is None:
+        return 0.5 * (k + 1) * log(<double> n)
+    return 0.5 * k * log(<double> n)
+
+
+cdef double _reduce_joint(list posts, list penalties, str combine,
+                          double softmin_beta, object baselines):
+    """Phase MD: reduce the per-dataset BIC vector [S_1..S_J] into ONE
+    scalar energy (PLAN MR.4 D4/D5/D6).
+
+    posts[j]     = S_j: the FULL per-dataset BIC (fit term minus P_j);
+    penalties[j] = P_j >= 0 (from _md_dataset_penalty);
+    baselines    = per-dataset constants B_j (list) or None (all 0) —
+                   tau-independent, so subtracting them is a valid energy
+                   shift (D6: for 'min' they make datasets commensurable).
+                   NB B_j must be the incumbent's FIT term on dataset j,
+                   i.e. L_j^inc = S_j^inc + P_j^inc — NOT its full BIC —
+                   because the reduction shifts the fit part (review
+                   2026-07-31 finding 6: full-BIC baselines leave
+                   per-dataset +P_j^inc offsets inside the argmin).
+
+      'sum'     -> sum_j S_j                       (DEFAULT: joint evidence)
+      'min'     -> min_j (L_j - B_j) - sum_j P_j    with L_j = S_j + P_j
+      'softmin' -> -(1/beta) log( (1/J) sum_j exp(-beta (L_j - B_j)) )
+                   - sum_j P_j      (beta -> 0: mean; beta -> inf: min)
+
+    Every branch is a genuine function of the tree (never of a proposal
+    pair), so MH detailed balance holds for all modes; min-of-ALPHAS was
+    rejected as invalid (D5). Any non-finite S_j yields -inf."""
+    cdef int J = len(posts)
+    cdef int j
+    cdef double s, total, pen_sum, m, acc, b
+    if J == 0:
+        return -np.inf
+    for j in range(J):
+        s = <double> posts[j]
+        if not isfinite(s):
+            return -np.inf
+    if combine == 'sum':
+        total = 0.0
+        for j in range(J):
+            total += <double> posts[j]
+        return total
+    # min / softmin operate on the FIT part L_j = S_j + P_j, baseline-
+    # shifted; the summed complexity charge is re-applied at the end.
+    pen_sum = 0.0
+    for j in range(J):
+        pen_sum += <double> penalties[j]
+    cdef list fit = []
+    for j in range(J):
+        b = <double> baselines[j] if baselines is not None else 0.0
+        fit.append(<double> posts[j] + <double> penalties[j] - b)
+    if combine == 'min':
+        m = <double> fit[0]
+        for j in range(1, J):
+            if <double> fit[j] < m:
+                m = <double> fit[j]
+        return m - pen_sum
+    if combine == 'softmin':
+        # -(1/beta) * log( (1/J) * sum exp(-beta*fit_j) ), shifted by the
+        # min for numerical stability.
+        m = <double> fit[0]
+        for j in range(1, J):
+            if <double> fit[j] < m:
+                m = <double> fit[j]
+        acc = 0.0
+        for j in range(J):
+            acc += _safe_exp(-softmin_beta * (<double> fit[j] - m))
+        return m - (1.0 / softmin_beta) * (log(acc) - log(<double> J)) \
+               - pen_sum
+    raise ValueError("_reduce_joint: unknown combine mode %r "
+                     "(expected 'sum' | 'min' | 'softmin')" % (combine,))
+
+
+cpdef double reduce_joint(list posts, list penalties, str combine,
+                          double softmin_beta=8.0, object baselines=None):
+    """Phase MD: Python-callable wrapper over _reduce_joint (tests and
+    post-hoc joint-scoring scripts). POSITIONAL args across modules."""
+    return _reduce_joint(posts, penalties, combine, softmin_beta,
+                         baselines)
+
+
+cpdef double md_dataset_penalty(int k, int n, object sigma=None):
+    """Phase MD: Python-callable wrapper over _md_dataset_penalty."""
+    return _md_dataset_penalty(k, n, sigma)
 
 cdef bint _install_cached_theta(function_treeC.Tree cand, dict cached_nv):
     """Phase 2.7(f) cache hit: install the cached theta_hat into `cand`.
@@ -220,7 +320,11 @@ cdef class Grove:
                  bint structural_prior_cache=True,
                  object structural_prior_spec=None,
                  object variables=None,
-                 object flex_atoms=None):
+                 object flex_atoms=None,
+                 object datasets=None,
+                 str md_combine='sum',
+                 double md_softmin_beta=8.0,
+                 object md_baselines=None):
 
         # --- Flexible domain (flexible_domain_plan.md §3) -----------------
         # Resolve and install the variable registry BEFORE any leaf is
@@ -331,12 +435,17 @@ cdef class Grove:
                     "Grove: adapt_moves=True with flex_atoms is not "
                     "supported in v1 (the adaptive logit map covers the 8 "
                     "legacy moves only)")
-            if burn_in:
+            if burn_in or size <= 0:
+                # size <= 0 flips self.burn_in on later in this ctor (the
+                # legacy "let burn-in build the population" idiom) — the
+                # same loophole the MD review closed for datasets
+                # (2026-07-31 bit-identity review, LOW finding).
                 raise ValueError(
-                    "Grove: burn_in=True with flex_atoms is not supported "
-                    "in v1 (the burn-in enumeration is legacy/opaque-only "
-                    "and its constant folding is not flex-aware -- it "
-                    "would destroy or crash on scaffolds)")
+                    "Grove: burn-in (burn_in=True OR size==0) with "
+                    "flex_atoms is not supported in v1 (the burn-in "
+                    "enumeration is legacy/opaque-only and its constant "
+                    "folding is not flex-aware -- it would destroy or "
+                    "crash on scaffolds)")
             if self.atoms is not None:
                 for _f in flex_atoms:
                     for _a in self.atoms:
@@ -435,6 +544,120 @@ cdef class Grove:
         self._bic_cache = {}
         self._cache_y = None
         self.pr_prob = 0.02
+        # --- Phase MD (multi-dataset joint evidence, 2026-07-31) ----------
+        # datasets=None => bit-identical legacy (no extra branch taken on
+        # any scoring path). datasets=[(x_1, y_1, s_1), ...] activates
+        # JOINT scoring: every candidate is scored on EVERY dataset with
+        # its own independently optimized theta_j, and the per-dataset
+        # BIC vector is reduced by md_combine ('sum' DEFAULT = the joint
+        # evidence; 'min'/'softmin' opt-in over baseline-shifted fit
+        # terms with the complexity charge kept summed — PLAN MR.4
+        # D4/D5/D6; md_baselines: per-dataset constants B_j or None).
+        # CONTRACT: the positional (x, y) MUST equal the REFERENCE
+        # dataset (datasets[0][:2]) — one source of truth; is_valid(
+        # self.domain) keeps meaning "valid on the reference" and
+        # self.sigma is forced to datasets[0][2]. Refusals: burn_in (D2:
+        # five burn-in scoring paths are single-dataset, two inside MPI
+        # workers); parameter_refresh (D1: PR accepts on ONE dataset's
+        # raw likelihood — pr_prob is forced to 0.0 and the step itself
+        # raises if re-enabled by hand). The BIC cache is REUSED with a
+        # joint value shape: (joint_post, [nv_0 ... nv_{J-1}]).
+        if datasets is not None:
+            # Review 2026-07-31 (finding 2): test self.burn_in, not just
+            # the ctor flag — size == 0 flips self.burn_in on at line
+            # ~500 (the legacy "let burn-in build the population" idiom)
+            # and would silently run the single-dataset burn-in on a
+            # joint Grove.
+            if burn_in or self.burn_in:
+                raise ValueError(
+                    "Grove: burn-in (burn_in=True OR size==0) with "
+                    "datasets is not supported in v1 (every burn-in "
+                    "scoring path is single-dataset; seed via node_list "
+                    "or run single-dataset burn-in explicitly and pass "
+                    "its winners — PLAN MR.4 D2)")
+            if md_combine in ('min', 'softmin') and md_baselines is None:
+                warnings.warn(
+                    "Grove: md_combine=%r without md_baselines compares "
+                    "RAW per-dataset fit terms — the largest/tightest "
+                    "dataset dominates the argmin, not the worst FIT. "
+                    "Pass per-dataset baselines B_j (the incumbent's FIT "
+                    "term L_j = S_j + P_j on dataset j) to make datasets "
+                    "commensurable (PLAN MR.4 D6)." % (md_combine,))
+            if len(datasets) < 1:
+                raise ValueError("Grove: datasets must hold >= 1 "
+                                 "(x, y, sigma) triple")
+            _md_list = []
+            for _dj in datasets:
+                if len(_dj) != 3:
+                    raise ValueError(
+                        "Grove: each dataset must be an (x, y, sigma) "
+                        "triple, got length %d" % len(_dj))
+                # Review 2026-07-31 (finding 4): x is COPIED (never a view
+                # of the caller's array) and zero-scrubbed exactly like
+                # the legacy domain — otherwise (a) datasets j>0 would
+                # never be scrubbed, so an exact zero (e.g. t=0 at the
+                # aligned peak) makes every 1/x-bearing candidate invalid
+                # on that dataset only (support would depend on dataset
+                # position), and (b) the legacy in-place scrub of the
+                # positional x would leak through a shared view into the
+                # caller's dataset arrays.
+                _xj = np.array(_dj[0], dtype=np.float64, copy=True,
+                               order='C')
+                real_functionC._domain_fixer(_xj)
+                _yj = np.ascontiguousarray(np.asarray(_dj[1],
+                                                      dtype=np.float64))
+                if _yj.ndim != 1:
+                    raise ValueError("Grove: dataset y must be 1-D")
+                if _yj.shape[0] == 0:
+                    raise ValueError("Grove: dataset y must be non-empty")
+                if _xj.shape[_xj.ndim - 1] != _yj.shape[0]:
+                    raise ValueError(
+                        "Grove: dataset x/y length mismatch (%d vs %d)"
+                        % (_xj.shape[_xj.ndim - 1], _yj.shape[0]))
+                _sj = _dj[2]
+                if _sj is not None and hasattr(_sj, '__len__'):
+                    _sj = np.ascontiguousarray(
+                        np.asarray(_sj, dtype=np.float64)).ravel()
+                    if _sj.shape[0] != _yj.shape[0]:
+                        raise ValueError(
+                            "Grove: dataset sigma length %d != n %d"
+                            % (_sj.shape[0], _yj.shape[0]))
+                _md_list.append((_xj, _yj, _sj))
+            if not np.array_equal(np.asarray(x, dtype=np.float64),
+                                  _md_list[0][0]):
+                raise ValueError(
+                    "Grove: with datasets, the positional x must BE the "
+                    "reference dataset's x (datasets[0][0])")
+            if not np.array_equal(np.asarray(y, dtype=np.float64),
+                                  _md_list[0][1]):
+                raise ValueError(
+                    "Grove: with datasets, the positional y must BE the "
+                    "reference dataset's y (datasets[0][1])")
+            if md_combine not in ('sum', 'min', 'softmin'):
+                raise ValueError(
+                    "Grove: md_combine must be 'sum' | 'min' | "
+                    "'softmin', got %r" % (md_combine,))
+            if md_softmin_beta <= 0.0:
+                raise ValueError("Grove: md_softmin_beta must be > 0")
+            if md_baselines is not None:
+                if len(md_baselines) != len(_md_list):
+                    raise ValueError(
+                        "Grove: md_baselines must have one constant per "
+                        "dataset (%d != %d)"
+                        % (len(md_baselines), len(_md_list)))
+                md_baselines = [float(_b) for _b in md_baselines]
+            self.datasets = _md_list
+            self.md_combine = md_combine
+            self.md_softmin_beta = md_softmin_beta
+            self.md_baselines = md_baselines
+            self.sigma = _md_list[0][2] if _md_list[0][2] is not None \
+                else self.sigma
+            self.pr_prob = 0.0          # D1: PR refused under datasets
+        else:
+            self.datasets = None
+            self.md_combine = 'sum'
+            self.md_softmin_beta = 8.0
+            self.md_baselines = None
         # --- Phase 2.8: optional adaptive move-weight calibration ----------
         # OFF by default (adapt_moves=False) -> Grove behaves exactly as
         # before, using the fixed temperature-shaped weights in _choose_move.
@@ -565,11 +788,29 @@ cdef class Grove:
                                                operations=self.operations)
 
 
-                self.root_posteriors[i] = trees[i].log_marginal_bic(
-                    self.data, optimize=True,
-                    use_gradients=self.use_gradients,
-                    method_str=self.method_str,
-                        )
+                if self.datasets is not None:
+                    # Phase MD (review 2026-07-31, finding 1): random-init
+                    # joint Groves must seed root_posteriors at the JOINT
+                    # scale — the legacy single-dataset score below is
+                    # incommensurable with joint candidate scores (the
+                    # incumbent would be inflated by the missing (J-1)
+                    # dataset terms and freeze acceptance).
+                    self.root_posteriors[i] = self._score_cand_joint(
+                        trees[i], True)
+                    # Match the LEGACY ctor's cache discipline (it never
+                    # writes the BIC cache): drop the entry the joint
+                    # scorer just created, so J=1 trajectories remain
+                    # EXACTLY reproducible against legacy groves (MD-a
+                    # pins this; compute_posteriors repopulates on
+                    # demand).
+                    self._bic_cache.pop(
+                        trees[i].tree_get_description(), None)
+                else:
+                    self.root_posteriors[i] = trees[i].log_marginal_bic(
+                        self.data, optimize=True,
+                        use_gradients=self.use_gradients,
+                        method_str=self.method_str,
+                            )
         return trees
 
     cpdef set_trees(self, list new_trees):
@@ -585,8 +826,17 @@ cdef class Grove:
     cpdef compute_posteriors(self, cnp.ndarray[cnp.float64_t, ndim=1] y, bint full=False):
         """
         Update/compute root posteriors. If full, compute entire tree; else superficial (root only).
+
+        Phase MD: joint Groves score every tree with _score_cand_joint
+        regardless of `full` (the full=True per-node posterior walk is a
+        single-dataset legacy diagnostic with no joint meaning).
         """
         cdef int i
+        if self.datasets is not None:
+            for i in range(self.size):
+                self.root_posteriors[i] = self._score_cand_joint(
+                    self.trees[i], True)
+            return
         if full:
             for i in range(self.size):
                 self.trees[i].compute_posterior_tree(y) #controlla i metdi in functiontree
@@ -899,6 +1149,12 @@ cdef class Grove:
         Phase 2.1.PR. Self-accepting parameter refresh on a uniformly chosen
         tree of this grove.
 
+        Phase MD (D1): REFUSED under datasets — PR proposes theta and
+        accepts on ONE (y, sigma)'s raw likelihood, which would leave the
+        chain's accepted state inconsistent with the reported joint
+        score. The ctor forces pr_prob = 0.0; reaching this method with
+        datasets set means someone re-enabled it by hand.
+
         Flow
         ----
         1. Pick i uniformly in {0, ..., size-1}.
@@ -934,6 +1190,11 @@ cdef class Grove:
         The (0, 0) it returns is a convention, not a real proposal density
         for the outer MH. The accept/reject is already done.
         """
+        if self.datasets is not None:
+            raise ValueError(
+                "Grove: parameter_refresh is not supported with datasets "
+                "(PLAN MR.4 D1) — the ctor forces pr_prob = 0.0; do not "
+                "re-enable it on a joint Grove.")
         if self.size == 0:
             return False
         cdef int i = self._py_rng.randrange(self.size)
@@ -1093,45 +1354,55 @@ cdef class Grove:
         cdef str cand_key
         cdef object cached
         cdef dict cached_nv
-        if not cand.is_valid(self.domain):
-            self._adapt_move(move_name, False)
-            return False
-
-        # Phase 2.7(f): BIC topology cache.
-        # Reset cache when y reference changes between calls (different
-        # dataset => stored log_evidence and theta_hat are invalid).
-        if self._cache_y is not y:
-            self._bic_cache.clear()
-            self._cache_y = y
-
-        cand_key = cand.tree_get_description()
-        cached = self._bic_cache.get(cand_key)
-        if cached is not None:
-            # Hit: reuse stored log_evidence and install cached theta_hat
-            # so the candidate inherits the MLE on accept (warm-starts
-            # subsequent moves and keeps name_values consistent).
-            # Stage 3a: _install_cached_theta also restores opaque-leaf
-            # theta (plain-only before), and preserves the historical
-            # tree_update gate.
-            new_post  = <double> cached[0]
-            cached_nv = <dict>   cached[1]
-            if _install_cached_theta(cand, cached_nv):
-                cand.tree_update(cand.get_root())
+        if self.datasets is not None:
+            # Phase MD: JOINT scoring path — validity (strictest-wins),
+            # cache and reduction all live inside _score_cand_joint. A
+            # <= -1e290 return is the invalid/impossible convention:
+            # hard-reject exactly like the legacy validity gate.
+            new_post = self._score_cand_joint(cand, True)
+            if new_post <= -1.0e290:
+                self._adapt_move(move_name, False)
+                return False
         else:
-            new_post = cand._log_marginal_bic(
-                y, optimize=optim_need,
-                use_gradients=self.use_gradients if optim_need else False,
-                method_str=self.method_str,
-            )
-            # NaN-leak fix (2026-07-15): do NOT cache penalty-scale posts
-            # (< -1e90 needs mse/sigma^2 ~ 1e88 — no legitimate model).
-            # Pre-fix these landings scored NaN and were never cached, so
-            # the topology was RETRIED with a fresh warm start on the next
-            # proposal; caching the now-finite penalty (with its junk
-            # theta_hat) would permanently condemn a possibly-true
-            # topology to a single bad Powell landing.
-            if np.isfinite(new_post) and new_post > -1.0e90:
-                self._bic_cache[cand_key] = (new_post, dict(cand.name_values))
+            if not cand.is_valid(self.domain):
+                self._adapt_move(move_name, False)
+                return False
+
+            # Phase 2.7(f): BIC topology cache.
+            # Reset cache when y reference changes between calls (different
+            # dataset => stored log_evidence and theta_hat are invalid).
+            if self._cache_y is not y:
+                self._bic_cache.clear()
+                self._cache_y = y
+
+            cand_key = cand.tree_get_description()
+            cached = self._bic_cache.get(cand_key)
+            if cached is not None:
+                # Hit: reuse stored log_evidence and install cached theta_hat
+                # so the candidate inherits the MLE on accept (warm-starts
+                # subsequent moves and keeps name_values consistent).
+                # Stage 3a: _install_cached_theta also restores opaque-leaf
+                # theta (plain-only before), and preserves the historical
+                # tree_update gate.
+                new_post  = <double> cached[0]
+                cached_nv = <dict>   cached[1]
+                if _install_cached_theta(cand, cached_nv):
+                    cand.tree_update(cand.get_root())
+            else:
+                new_post = cand._log_marginal_bic(
+                    y, optimize=optim_need,
+                    use_gradients=self.use_gradients if optim_need else False,
+                    method_str=self.method_str,
+                )
+                # NaN-leak fix (2026-07-15): do NOT cache penalty-scale posts
+                # (< -1e90 needs mse/sigma^2 ~ 1e88 — no legitimate model).
+                # Pre-fix these landings scored NaN and were never cached, so
+                # the topology was RETRIED with a fresh warm start on the next
+                # proposal; caching the now-finite penalty (with its junk
+                # theta_hat) would permanently condemn a possibly-true
+                # topology to a single bad Powell landing.
+                if np.isfinite(new_post) and new_post > -1.0e90:
+                    self._bic_cache[cand_key] = (new_post, dict(cand.name_values))
 
         if not np.isfinite(new_post):
             self._adapt_move(move_name, False)
@@ -1328,11 +1599,111 @@ cdef class Grove:
         self._deferred_paths = []
         return out
 
+    cdef double _score_cand_joint(self, function_treeC.Tree cand,
+                                  bint optimize=True):
+        """Phase MD: score `cand` JOINTLY over self.datasets.
+
+        Flow (PLAN MR.4): strictest-wins validity at reference theta on
+        EVERY dataset's x; description-keyed cache with the joint value
+        shape (joint_post, [nv_0 .. nv_{J-1}]); on a miss, every dataset
+        is fitted INDEPENDENTLY from the same cold start (the candidate's
+        incoming theta — D7b: never the neighbouring dataset's fit) via
+        Tree.score_dataset (positional; explicit x/y/sigma), the
+        per-dataset penalties are recomputed by _md_dataset_penalty and
+        the vector is reduced by _reduce_joint. The REFERENCE theta
+        (dataset 0) is left installed on exit — the single-theta
+        convention every other consumer of the tree relies on. Cache
+        discipline: an entry is stored only when the joint AND every
+        per-dataset post are sane (finite, > -1e90) — the NaN-leak
+        contract applied PER DATASET.
+
+        Returns the joint post, or -1.0e300 when any dataset's validity
+        gate fails (the impossible-candidate convention of _score_post).
+        """
+        cdef int J = len(self.datasets)
+        cdef int j
+        cdef str cand_key
+        cdef object cached
+        cdef list posts, pens, nvs
+        cdef dict start_nv
+        cdef double post_j, joint
+        cdef bint optim_need, cacheable
+        cdef object xj, yj, sj
+        cdef tuple res
+        for j in range(J):
+            if not cand.is_valid(self.datasets[j][0]):
+                return -1.0e300
+        cand_key = cand.tree_get_description()
+        cached = self._bic_cache.get(cand_key)
+        if cached is not None:
+            if _install_cached_theta(cand, <dict> (<list> cached[1])[0]):
+                cand.tree_update(cand.get_root())
+            return <double> cached[0]
+        posts = []; pens = []; nvs = []
+        start_nv = dict(cand.name_values)
+        optim_need = optimize and len(cand.name_values) > 0
+        for j in range(J):
+            xj = self.datasets[j][0]
+            yj = self.datasets[j][1]
+            sj = self.datasets[j][2]
+            if j > 0 and _install_cached_theta(cand, start_nv):
+                cand.tree_update(cand.get_root())
+            # NB no <str> cast on method_str: groveC's language level
+            # trips Cython's unicode->str coercion rule on an explicit
+            # cast (the atoms-registration trap); the uncast object
+            # converts at the call boundary exactly like the legacy
+            # _log_marginal_bic call in _step.
+            res = cand.score_dataset(
+                xj, yj, sj, optim_need,
+                self.use_gradients if optim_need else False,
+                self.method_str)
+            post_j = <double> res[0]
+            posts.append(post_j)
+            nvs.append(res[1])
+            pens.append(_md_dataset_penalty(
+                len(<dict> res[1]), (<cnp.ndarray> yj).shape[0], sj))
+        # Reference theta FIRST, reduction second (review 2026-07-31,
+        # finding 5): if the reduction raises (hand-reassigned
+        # md_combine), the live tree is already back on the dataset-0
+        # convention instead of carrying the last dataset's fit.
+        if _install_cached_theta(cand, <dict> nvs[0]):
+            cand.tree_update(cand.get_root())
+        joint = _reduce_joint(posts, pens, self.md_combine,
+                              self.md_softmin_beta, self.md_baselines)
+        cacheable = np.isfinite(joint) and joint > -1.0e90
+        for j in range(J):
+            if not (np.isfinite(<double> posts[j])
+                    and <double> posts[j] > -1.0e90):
+                cacheable = False
+        if cacheable:
+            self._bic_cache[cand_key] = (joint, nvs)
+        return joint
+
+    cpdef object joint_thetas(self, function_treeC.Tree tree):
+        """Phase MD introspection: the cached per-dataset theta list
+        [nv_0 .. nv_{J-1}] for `tree`'s topology, or None when the
+        topology has not been jointly scored (or the Grove is legacy).
+        Hall-of-fame consumers use this to carry theta per dataset."""
+        if self.datasets is None:
+            return None
+        cdef object cached = self._bic_cache.get(tree.tree_get_description())
+        if cached is None:
+            return None
+        # Review 2026-07-31 (finding 2): DEEP-copy the per-dataset dicts —
+        # a shallow list copy would hand callers live references into the
+        # cache, and a consumer mutating one would silently change what
+        # every later cache hit installs while the cached joint float
+        # stayed stale (the Stage-3a installed-vs-reported bug class).
+        return [dict(nv) for nv in <list> cached[1]]
+
     cdef double _score_post(self, function_treeC.Tree cand,
                             cnp.ndarray[cnp.float64_t, ndim=1] y,
                             bint optimize=True):
         """Score a candidate's BIC log-evidence, mirroring the scoring block
         of `_step`: validity gate + Phase 2.7(f) topology cache + optimize.
+
+        Phase MD: joint Groves route through _score_cand_joint (same
+        -1.0e300 impossible-candidate convention).
 
         Returns -1e300 for invalid / non-finite models (so any MH ratio that
         consumes it rejects). On a cache hit the cached theta_hat is
@@ -1345,6 +1716,8 @@ cdef class Grove:
         cdef object cached
         cdef dict cached_nv
         cdef double new_post
+        if self.datasets is not None:
+            return self._score_cand_joint(cand, optimize)
         if not cand.is_valid(self.domain):
             return -1.0e300
         # Keep the per-topology cache coherent with the active y reference.
@@ -1495,9 +1868,16 @@ cdef class Grove:
         return self.acceptance_count / self.proposal_count
 
     
-    cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
+    cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                                 bint replace_all=True, bint optimize_params=True):
-        self._burn_in_combinations(y, replace_all=replace_all, 
+        # Phase MD (review 2026-07-31, finding 3): the ctor refusal only
+        # covers construction — this public wrapper would silently score
+        # every candidate on ONE dataset and REPLACE the joint population.
+        if self.datasets is not None:
+            raise ValueError(
+                "Grove: burn_in_combinations is not supported with "
+                "datasets (single-dataset scoring; PLAN MR.4 D2)")
+        self._burn_in_combinations(y, replace_all=replace_all,
                                 optimize_params=optimize_params)
 
     cdef _burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y, 
@@ -1629,6 +2009,10 @@ cdef class Grove:
         """
         Stage 2 burn-in: combine top depth-1 trees with primitives and each other.
         Call this AFTER burn_in_combinations to build depth-2 expressions.
+
+        Phase MD (review 2026-07-31, finding 3): refused with datasets —
+        single-dataset scoring would silently replace the joint
+        population.
         
         Parameters
         ----------
@@ -1637,6 +2021,10 @@ cdef class Grove:
         optimize_params : if True, optimize parameters for each candidate
         
         """
+        if self.datasets is not None:
+            raise ValueError(
+                "Grove: burn_in_depth2 is not supported with datasets "
+                "(single-dataset scoring; PLAN MR.4 D2)")
         cdef dict tree_cache = {}
         # First, run stage 1 to get depth-1 candidates
         depth1_candidates = self._get_depth1_candidates(y, tree_cache, optimize_params)
@@ -2693,7 +3081,11 @@ cdef class Forest:
                  bint structural_prior_cache=True,
                  object structural_prior_spec=None,
                  object variables=None,
-                 object flex_atoms=None):
+                 object flex_atoms=None,
+                 object datasets=None,
+                 str md_combine='sum',
+                 double md_softmin_beta=8.0,
+                 object md_baselines=None):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
@@ -2897,8 +3289,19 @@ cdef class Forest:
                       # re-derivation); flexible mode passes the resolved
                       # tuple explicitly.
                       variables=(_vars if _flex else None),
-                      flex_atoms=self.flex_atoms)
+                      flex_atoms=self.flex_atoms,
+                      # Phase MD: every Grove validates its own copy; the
+                      # rungs share one datasets list (read-only in the
+                      # kernel) so the tempered ladder scores ONE joint
+                      # posterior.
+                      datasets=datasets,
+                      md_combine=md_combine,
+                      md_softmin_beta=md_softmin_beta,
+                      md_baselines=md_baselines)
             )
+        # Phase MD: stash for the spawn refusal below (Groves hold the
+        # validated copies; Forest only needs the flag).
+        self.datasets = datasets
         # Phase 2.12 (MPI sampling): stash the Grove constructor arguments so
         # run_mpi_spawn can ship them to spawned workers, which rebuild
         # structurally identical Groves in their own processes. Purely
@@ -3225,6 +3628,15 @@ cdef class Forest:
                 "flex_atoms is not supported under run_mpi_spawn in v1: "
                 "use the serial EMC loop (run_all / attempt_swaps / "
                 "attempt_crossovers).")
+        # Phase MD v1 (D8): joint datasets do not cross the spawn boundary
+        # (workers would need all J datasets in the startup payload and a
+        # joint-aware in-round scorer). The serial EMC loop fully
+        # supports them. Refusing beats silently scoring one dataset.
+        if self.datasets is not None:
+            raise NotImplementedError(
+                "datasets (multi-dataset joint evidence) is not supported "
+                "under run_mpi_spawn in v1: use the serial EMC loop "
+                "(run_all / attempt_swaps / attempt_crossovers).")
         # Phase 2.10 Stage 3b: opaque primitives cross the wire as
         # ('skel3b', ...) payloads (see _tree_to_wire). The master-side
         # rebuilds below need the template registry; workers receive the
