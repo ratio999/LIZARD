@@ -102,8 +102,14 @@ cdef void _worker_main():
     if _atom_wire:
         atoms = []
         atom_specs = {}
-        for _nm, _tp in _atom_wire:
-            _spec_obj = real_functionC.AtomSpec(_nm, _tp)
+        # Phase PP: pinned specs arrive as (base_name, template, pinned)
+        # TRIPLES; unpinned as the historical pairs (byte-identical wire).
+        for _entry in _atom_wire:
+            if len(_entry) > 2:
+                _spec_obj = real_functionC.AtomSpec(_entry[0], _entry[1],
+                                                    _entry[2])
+            else:
+                _spec_obj = real_functionC.AtomSpec(_entry[0], _entry[1])
             atoms.append(_spec_obj)
             atom_specs[_spec_obj.name] = _spec_obj
 
@@ -450,8 +456,14 @@ cdef void _sampler_main():
     if _atom_wire:
         atoms = []
         atom_specs = {}
-        for _nm, _tp in _atom_wire:
-            _spec_obj = real_functionC.AtomSpec(_nm, _tp)
+        # Phase PP: pinned specs arrive as (base_name, template, pinned)
+        # TRIPLES; unpinned as the historical pairs (byte-identical wire).
+        for _entry in _atom_wire:
+            if len(_entry) > 2:
+                _spec_obj = real_functionC.AtomSpec(_entry[0], _entry[1],
+                                                    _entry[2])
+            else:
+                _spec_obj = real_functionC.AtomSpec(_entry[0], _entry[1])
             atoms.append(_spec_obj)
             atom_specs[_spec_obj.name] = _spec_obj
 

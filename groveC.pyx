@@ -413,7 +413,10 @@ cdef class Grove:
                 # under the current registry (deterministic; a template
                 # whose symbols no longer classify raises here, at
                 # construction, instead of misbinding slots mid-chain).
-                atoms = [real_functionC.AtomSpec(_a.name, _a.template)
+                # Phase PP: re-derive from BASE name + pinned (the
+                # extended self.name would double its pin suffix).
+                atoms = [real_functionC.AtomSpec(_a.base_name, _a.template,
+                                                 _a.pinned)
                          for _a in atoms]
             self.atoms = list(atoms)
         else:
@@ -449,10 +452,16 @@ cdef class Grove:
             if self.atoms is not None:
                 for _f in flex_atoms:
                     for _a in self.atoms:
-                        if _a.name == _f.name:
+                        # Phase PP (review 2026-08-06): also reject the
+                        # BASE name of a pinned atom — "Abeat" (flex) vs
+                        # "Abeat[c1=...]" (pinned) share no registry key,
+                        # but the near-collision is a config-confusion
+                        # trap with no legitimate use.
+                        if _a.name == _f.name or _a.base_name == _f.name:
                             raise ValueError(
                                 "Grove: flex template %r collides with an "
-                                "opaque atom name" % _f.name)
+                                "opaque atom name (or its pin-suffixed "
+                                "base)" % _f.name)
             # Re-validate under the CURRENT variable registry (mirrors the
             # AtomSpec re-derivation above; deterministic).
             flex_atoms = [real_functionC.FlexAtomSpec(
@@ -752,6 +761,28 @@ cdef class Grove:
                 self.root_posteriors = np.full((self.size,), np.nan, dtype=np.float64)
         else:
             self.trees = self._init_trees(node_list, Npars, init_value)
+
+        # Phase PP (review 2026-08-06 F4): pin_numbers CONSTANT leaves are
+        # SCORING-ONLY in v1 — they sit outside the move vocabulary, so a
+        # destructive move on one claims a nonzero reverse density the
+        # kernel cannot realize (detailed-balance violation), and the 'L'
+        # skel tag cannot carry the flag across the wire. Refuse them at
+        # seeding, the FX-refusal pattern. Pure attribute reads on a
+        # False-everywhere-legacy flag; runs once at construction.
+        if node_list is not None and self.trees is not None:
+            for _tt in self.trees:
+                if _tt is None:
+                    continue
+                for _lf in _tt.get_leaves():
+                    if _lf.get_fun() is not None \
+                            and _lf.get_fun().pinned_const:
+                        raise ValueError(
+                            "Grove: node_list seeds contain a "
+                            "pin_numbers CONSTANT leaf — such trees are "
+                            "SCORING-ONLY in v1 (score them via "
+                            "log_marginal_bic / score_dataset, or use a "
+                            "pinned AtomSpec for evolvable pinned "
+                            "structure; PLAN MR.5 D6)")
 
         # Optional Pólya tree prior. When None, _step behaves exactly as
         # before (no prior term, no adaptation).
@@ -2652,10 +2683,14 @@ cdef class Grove:
             # registry-dependent. The worker rebuilds AtomSpec AFTER
             # set_variables; for legacy ('x',) registries the rebuilt
             # objects are identical to what unpickling produced.
-            'atoms': ([(_a.name, _a.template) for _a in self.atoms]
+            # Phase PP: pinned specs ship (base_name, template, pinned)
+            # TRIPLES; unpinned keep the historical pair byte-identically.
+            'atoms': ([((_a.base_name, _a.template, dict(_a.pinned))
+                        if _a.pinned else (_a.name, _a.template))
+                       for _a in self.atoms]
                       if self.atoms else None),
         }
-        
+
         intercomm.bcast(config, root=MPI.ROOT)
         
         # =========================================================
@@ -3214,8 +3249,10 @@ cdef class Forest:
                 # Flexible domain: re-derive each template under the
                 # registry installed above (AtomSpec classification is
                 # registry-dependent; specs may pre-date this Forest).
-                atoms = [real_functionC.AtomSpec(_spec_obj.name,
-                                                 _spec_obj.template)
+                # Phase PP: from BASE name + pinned (suffix would double).
+                atoms = [real_functionC.AtomSpec(_spec_obj.base_name,
+                                                 _spec_obj.template,
+                                                 _spec_obj.pinned)
                          for _spec_obj in atoms]
             _polya_any = self.polya
             for _spec_obj in atoms:
@@ -3712,7 +3749,11 @@ cdef class Forest:
             # Flexible-domain fix (adversarial review): (name, template)
             # STRING PAIRS on the wire — see the burn-in config note; the
             # worker rebuilds AtomSpec AFTER installing the registry.
-            'atoms': ([(_a.name, _a.template) for _a in self.atoms]
+            # Phase PP: pinned specs ship (base_name, template, pinned)
+            # TRIPLES; unpinned keep the historical pair byte-identically.
+            'atoms': ([((_a.base_name, _a.template, dict(_a.pinned))
+                        if _a.pinned else (_a.name, _a.template))
+                       for _a in self.atoms]
                       if self.atoms else None),
         }
         intercomm.bcast(config, root=MPI.ROOT)
