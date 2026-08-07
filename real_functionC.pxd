@@ -22,6 +22,13 @@ cdef class AtomSpec:
     cdef public object expr
     cdef public list slots
     cdef public int k
+    # Phase PP (pinned parameters, 2026-08-06) — appended at block END.
+    # base_name: the caller's name WITHOUT the "[c1=...]" pin suffix
+    # (self.name carries the suffix and is the vocabulary/registry key);
+    # pinned: {placeholder: float} or None. Values are substituted into
+    # self.expr at construction — they exist nowhere else downstream.
+    cdef public str base_name
+    cdef public object pinned
 
 
 cdef class RealFunctionC:
@@ -46,6 +53,11 @@ cdef class RealFunctionC:
     # (mirrors the parameter-leaf constant_value convention).
     cdef public str atom_symbol
     cdef public dict theta0
+    # Phase PP (2026-08-06): True marks a PINNED CONSTANT leaf function
+    # (expr_to_tree pin_numbers=True) — a numeric literal that must NOT
+    # classify as a parameter leaf (Node.is_param checks this flag).
+    # Zero-init False everywhere legacy. Appended at field-block end.
+    cdef public bint pinned_const
     
     cdef _update_symbols(self)
     cdef evaluate(self, cnp.ndarray x, dict params = ?)

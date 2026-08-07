@@ -188,6 +188,14 @@ cdef class RealFunctionC:
         # Phase 2.10 Stage 2: opaque-leaf identity travels with the function.
         copy_rf.atom_symbol = self.atom_symbol
         copy_rf.theta0 = None if self.theta0 is None else dict(self.theta0)
+        # Phase PP (review 2026-08-06): forward the pinned-constant marker
+        # and the literal's value — the ctor call above reset
+        # constant_value to its 1.0 default, so a copied pin-constant
+        # would re-classify as a parameter leaf (k inflation) and
+        # evaluate as 1.0. Legacy-safe: unpinned functions carry the
+        # default, so forwarding is the identity for them.
+        copy_rf.pinned_const = self.pinned_const
+        copy_rf.constant_value = self.constant_value
         return copy_rf
 
     def __deepcopy__(self, memo2):
@@ -207,6 +215,12 @@ cdef class RealFunctionC:
         # alias another's state).
         copy_rf.atom_symbol = self.atom_symbol
         copy_rf.theta0 = None if self.theta0 is None else dict(self.theta0)
+        # Phase PP (review 2026-08-06): same forward as __copy__ — see
+        # the note there (deepcopy runs on EVERY MCMC proposal, so a
+        # dropped flag would corrupt any pin_numbers tree on its first
+        # step). Legacy identity: defaults forwarded unchanged.
+        copy_rf.pinned_const = self.pinned_const
+        copy_rf.constant_value = self.constant_value
         # classify_symbols iterates a sympy SET; re-impose the original
         # deterministic parameter order on the copy (instantiate_atom fixed
         # it on the source; plain functions get their order re-sorted by
@@ -1085,9 +1099,18 @@ cdef class AtomSpec:
         vocabulary); k = 0 templates belong in the plain `functions` list.
     """
 
-    def __init__(self, str name, str template):
+    def __init__(self, str name, str template, object pinned=None):
         if name is None or len(name) == 0:
             raise ValueError("AtomSpec: name must be a non-empty string")
+        if "[" in name or "]" in name:
+            # Phase PP (review 2026-08-06 F6): brackets are reserved for
+            # the pin suffix — a base name like "A[c1=0.5]" would spoof
+            # the extended symbol of AtomSpec("A", ..., {"c1": 0.5}) in
+            # every registry.
+            raise ValueError(
+                "AtomSpec: name %r must not contain '[' or ']' (reserved "
+                "for the pinned-parameter suffix)" % (name,))
+        cdef str base_name = name
         cdef object expr = sp.sympify(template)
         cdef list slots = []
         cdef bint has_x = False
@@ -1121,7 +1144,103 @@ cdef class AtomSpec:
                 "Register it in the plain `functions` vocabulary instead."
                 % name)
         slots.sort(key=_slot_sort_key)
+        # ------------------------------------------------------------------
+        # Phase PP (pinned parameters, 2026-08-06; PROMPT_DEV_PINNED_PARAMS):
+        # `pinned` maps a strict SUBSET of the template's placeholders to
+        # fixed float values. Pinned placeholders are SUBSTITUTED into the
+        # template expression here, at spec construction — downstream they
+        # are numeric literals inside the compiled function, so they are
+        # structurally incapable of appearing in get_params/name_values,
+        # the optimizer vector, k, theta dicts, or rename maps. Identity:
+        # the canonical vocabulary symbol self.name is EXTENDED with a
+        # deterministic "[c1=v1,c2=v2]" suffix (sorted names, shortest
+        # round-trip float repr), so different pin values are different
+        # Polya cells / registry keys / burn-in tokens / wire symbols, and
+        # the atom's complexity is charged through the PRIOR (its cell),
+        # not through the BIC k — a pinned atom is a basic function.
+        # self.base_name keeps the caller's name for __reduce__ / spec
+        # re-derivation (re-deriving from the extended name would double
+        # the suffix).
+        # ------------------------------------------------------------------
+        cdef dict pinned_f = None
+        cdef list pin_keys
+        cdef str pk
+        cdef double pv
+        cdef dict sub_map
+        if pinned:
+            pinned_f = {}
+            for pk_obj in pinned:
+                pk = <str> pk_obj
+                if not re.fullmatch(r'[a-zA-Z]\d+', pk):
+                    raise ValueError(
+                        "AtomSpec %r: pinned key %r does not match the "
+                        "placeholder pattern [a-zA-Z]<digits>"
+                        % (base_name, pk))
+                if pk not in slots:
+                    raise ValueError(
+                        "AtomSpec %r: pinned key %r is not a placeholder "
+                        "of template %r (placeholders: %r)"
+                        % (base_name, pk, template, slots))
+                pv = float(pinned[pk_obj])
+                if not (pv == pv and pv != float('inf')
+                        and pv != float('-inf')):
+                    raise ValueError(
+                        "AtomSpec %r: pinned value for %r must be a "
+                        "finite float, got %r"
+                        % (base_name, pk, pinned[pk_obj]))
+                pinned_f[pk] = pv
+            pin_keys = sorted(pinned_f.keys(), key=_slot_sort_key)
+            slots = [s_str for s_str in slots if s_str not in pinned_f]
+            if len(slots) == 0:
+                raise ValueError(
+                    "AtomSpec %r: pinning EVERY placeholder leaves k = 0 "
+                    "— register the fully-fixed shape as a plain function "
+                    "string in `functions` instead (from_string compiles "
+                    "numeric constants directly)" % (base_name,))
+            sub_map = {}
+            for pk in pin_keys:
+                # 17 significant digits (review 2026-08-06 F5): the
+                # default 15-digit Float print truncates tier-1-style
+                # pins (attachment values need the full double) through
+                # the from_string(str(expr)) rebuilds; 17 digits is the
+                # shortest-round-trip guarantee for a 53-bit double.
+                sub_map[sp.Symbol(pk)] = sp.Float(pinned_f[pk], 17)
+            expr = expr.subs(sub_map, simultaneous=True)
+            # A pin can annihilate the variable (e.g. c1=0 in sin(c1*x)):
+            # the result would be a constant map wearing an atom symbol.
+            has_x = False
+            for s in expr.free_symbols:
+                if str(s) in _VAR_SET:
+                    has_x = True
+            if not has_x:
+                raise ValueError(
+                    "AtomSpec %r: substituting pinned values %r folded "
+                    "every registered variable out of the template — the "
+                    "pinned atom would be a constant map"
+                    % (base_name, pinned_f))
+            # Review 2026-08-06 F3: a pin can also annihilate a FREE slot
+            # (e.g. c2=0 in "c0*sin(x) + c1*c2" kills c1). spec.k would
+            # then overcount the expression's parameters, and the skel
+            # wire ships the ACTUAL names while instantiate_atom demands
+            # spec.k of them — every MPI exchange of such trees would
+            # silently self-loop (the wire-fidelity starvation class).
+            _free_after = set()
+            for s in expr.free_symbols:
+                _free_after.add(str(s))
+            for s_str in slots:
+                if s_str not in _free_after:
+                    raise ValueError(
+                        "AtomSpec %r: pinned values %r annihilated the "
+                        "FREE placeholder %r from the template (e.g. a "
+                        "zero pin multiplying it) — pin it explicitly or "
+                        "rewrite the template"
+                        % (base_name, pinned_f, s_str))
+            name = base_name + "[" + ",".join(
+                ["%s=%s" % (pk, repr(pinned_f[pk])) for pk in pin_keys]
+            ) + "]"
         self.name = name
+        self.base_name = base_name
+        self.pinned = pinned_f
         self.template = template
         self.expr = expr
         self.slots = slots
@@ -1130,8 +1249,14 @@ cdef class AtomSpec:
     def __reduce__(self):
         # Phase 2.10 Stage 3b: AtomSpec crosses the MPI wire (worker startup
         # config ships the Forest's atoms). A template is fully determined
-        # by (name, template); rebuilding through __init__ re-validates and
-        # re-derives expr/slots/k deterministically.
+        # by (name, template[, pinned]); rebuilding through __init__
+        # re-validates and re-derives expr/slots/k/name deterministically.
+        # Phase PP: rebuild from BASE name (+ pinned) — the extended name
+        # would double its suffix; unpinned specs keep the historical
+        # 2-tuple payload byte-identically.
+        if self.pinned:
+            return (AtomSpec, (self.base_name, self.template,
+                               dict(self.pinned)))
         return (AtomSpec, (self.name, self.template))
 
 
