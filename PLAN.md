@@ -2127,6 +2127,142 @@ NotImplementedError per D8; real-data smoke on 2-3 tier-A products —
 requires the preprocessing products at runtime, left for the
 experiment lane (the synthetic MD-c/f/g pins cover the mechanism).
 
+### MR.5 PINNED PARAMETERS IN OPAQUE ATOMS — Phase PP (2026-08-06)
+Spec: `PROMPT_DEV_PINNED_PARAMS.md` (MR-SR science instance). Goal:
+`AtomSpec(name, template, pinned={placeholder: float})` — pins are
+physics constants the fit must not touch and the BIC must not charge;
+a pinned atom is a BASIC FUNCTION whose complexity flows through the
+Polya prior (its vocabulary cell), not through k.
+
+**Assessment / design decisions (2026-08-06):**
+
+* **D1 — SUBSTITUTION AT SPEC CONSTRUCTION (the load-bearing choice).**
+  Pinned values are substituted into the template's sympy expression in
+  `AtomSpec.__init__`; `slots`/`k` become the FREE placeholders only.
+  Downstream, pins are numeric literals inside the compiled leaf
+  function — structurally incapable of appearing in get_params /
+  name_values, the optimizer flat vector, theta dicts, theta0, rename
+  maps, PR coordinates, or `_install_cached_theta`. The alternative (a
+  mask threaded through the optimizer and every theta consumer) was
+  rejected: it would touch the hot path and every theta-handling site,
+  each a bit-identity risk; substitution touches ONE constructor.
+  Corollary: `instantiate_atom`, `rename_leaf_params`, `_make_atom_leaf`,
+  skel 'A' wire, burn-in tokens, and the whole move set needed ZERO
+  changes — they operate on the free-slot machinery, which no longer
+  contains the pins.
+* **D2 — IDENTITY = EXTENDED VOCABULARY SYMBOL.** `self.name` becomes
+  `base[c1=v1,c2=v2]` (keys sorted by the natural slot order, values in
+  shortest round-trip float repr — deterministic across processes).
+  Since every registry in the kernel keys on `spec.name` (Polya cells,
+  burn-in '@atom:' tokens, wire atom_specs maps, skel 'A' tags), pin
+  identity propagates everywhere with no further code: different pin
+  values = different Polya cells (the "basic function through the
+  prior" requirement), different cache/fingerprint keys, and a wire
+  rebuild against a wrong-pin registry REJECTS instead of silently
+  substituting (the REPORT §16.2/16.4 lessons). `base_name` (new field)
+  keeps the caller's name; `__reduce__` and every spec RE-DERIVATION
+  site rebuilds from (base_name, template, pinned) — rebuilding from
+  the extended name would double the suffix.
+* **D3 — descriptions are faithful for free:** the instantiated leaf
+  description is str(expr with instance names), which now renders pins
+  as numeric literals (e.g. `a3*exp(-0.1731*x)*sin(0.0806*x + a4)`).
+* **D4 — validation:** pinned keys must match the placeholder pattern
+  AND be placeholders of THIS template; values finite floats; pinning
+  EVERY placeholder is refused (k=0 — a fully-fixed shape is already
+  expressible as a plain function STRING in `funcs`, zero new
+  machinery); a pin that annihilates every registered variable (e.g.
+  c1=0 in sin(c1*x)) is refused (the atom would be a constant map).
+* **D5 — wire config compatibility:** spawn configs ship pinned specs
+  as (base_name, template, pinned) TRIPLES; unpinned specs keep the
+  historical (name, template) pairs BYTE-IDENTICALLY; mpi_worker
+  accepts both lengths. `__reduce__` likewise keeps the legacy 2-tuple
+  when unpinned.
+* **D6 — `expr_to_tree(..., pin_numbers=False)`:** opt-in flag; True
+  renders numeric literals as CONSTANT leaves (never fitted, k
+  untouched) via a module-scope flag set/restored by the public wrapper
+  (the ~15 recursive call sites stay untouched; same single-threaded
+  module-global convention as the RNG handles). Intended for
+  scoring/reference trees (tier-1 constrained scoring): constant leaves
+  are OUTSIDE the move vocabulary — the standing seeds-in-support
+  convention applies if such trees are evolved. Default False =
+  bit-identical legacy.
+* **D7 — MD interaction (spec v1 rule) holds BY CONSTRUCTION:** pins
+  live in the one compiled map shared by all datasets; per-dataset
+  theta_j covers free internals only. No refusal needed — per-dataset
+  pinning is not expressible.
+
+Files changed: `real_functionC.pyx` (AtomSpec ctor + __reduce__ +
+__copy__/__deepcopy__), `real_functionC.pxd` (base_name/pinned +
+RealFunctionC.pinned_const appended at block ends), `groveC.pyx`
+(2 spec re-derivation sites -> base_name+pinned; 2 spawn config sites
+-> conditional triples; flex/pinned base-name collision guard;
+pin_numbers seed refusal), `mpi_worker.pyx` (2 config resolution sites
+accept pairs and triples), `function_treeC.pyx` (`_PIN_NUMBERS` flag +
+literal-branch constant path + expr_to_tree kwarg + Node.is_param
+pinned_const check). NEW: `test_phasePP.py` (PP-a..PP-i covering the
+brief's T-P1..T-P6 + interactions; the spawn check runs under `--mpi`
+with the env mpiexec — the certification battery MUST include that leg).
+
+**Adversarial review (2026-08-06, 2 inline agents: soundness+bit-identity
+/ test-adequacy) — verdict + fixes.** Soundness verdict: "a pinned atom
+really is indistinguishable from a basic function to the proposal
+kernel, the BIC, and the Polya prior" — M+1+A cardinalities count it as
+1 in both directions, spec.k never enters any proposal density
+(topology-marginal chain), all four scorer k-paths draw from
+name_values (pins structurally absent), Polya/burn-in/wire treat the
+extended symbol as an opaque string, unpinned paths bit-identical by
+inspection at every touched site. FIXES from the round: (1) CRITICAL —
+`RealFunctionC.__copy__/__deepcopy__` did not forward the new
+pinned_const flag (nor constant_value, which the ctor re-defaults to
+1.0): a deepcopied pin_numbers constant re-classified as a fitted
+parameter and evaluated as 1.0 — i.e. silent corruption on the FIRST
+MCMC proposal; both fields now forwarded (provably identity on legacy:
+the ctor is the only legacy assignment site). (2) MAJOR — a ZERO pin
+could annihilate a FREE slot ("c0*sin(x)+c1*c2", c2=0 kills c1),
+leaving spec.k overcounting: the skel wire ships the actual names while
+instantiate_atom demands spec.k -> every MPI exchange of such trees
+silently self-loops (the wire-starvation class); ctor now verifies
+every free slot survives substitution. (3) MAJOR — the pin_numbers
+scoring-only contract is now ENFORCED: Grove refuses node_list seeds
+containing pinned constants (outside the move vocabulary => a
+destructive move on one claims an unrealizable reverse density).
+(4) pins substituted at 17 significant digits (tier-1 attachment values
+survive the from_string round trip bit-exactly; was 15). (5) '['/']'
+rejected in base names (extended-symbol spoofing). (6) _PIN_NUMBERS
+set/restored on both wrapper branches. Test-adequacy fixes: PP-e2
+non-vacuity guard (the ONLY mpi_worker coverage could pass with zero
+atoms returned); PP-b5 reworked to assert desc + fixed-theta bitwise
+equality ON THE FITTED TREE (was a near-tautology on fresh spec
+instantiations); PP-d1 oracle upgraded from substring to exact
+abs-literal set + atom_symbol identity (substring accepted sub-5th-digit
+drift; NB sympy folds sign into literals — magnitudes are the pin
+invariant); PP-d2b move-mix counters + PP-d3 direct rename_leaf_params
+unit; PP-c6 same-key/wrong-spec registry rejected by the desc-fidelity
+gate; PP-f4 analytic joint pin (k=2 per dataset under MD); PP-g4..g7
+(free-param eval, deepcopy survival, Integer literals, Grove seed
+refusal); PP-i flex x pinned (collision guard + combined-chain smoke).
+Recorded caveats (documented, not fixed): pinned-atom identity prints
+pins at repr precision in the SYMBOL but 17-digit Float in the EXPR
+(consistent doubles, different strings); pin_numbers trees remain
+scoring-only (set_trees/set_single_tree bypass the seed refusal — same
+seeding-convention class as always); the stale samplerC .so is now
+three struct-growths behind (rebuild before any samplerC use).
+test_phasePP: 46/46 serial, 47/47 under --mpi.
+
+**CERTIFICATION (2026-08-06 19:35, final PP binary, vs /tmp/sa_post
+baseline; logs /tmp/pp_cert/ + run log /tmp/pp_cert_run2.log): ALL 15
+RUNS EXIT 0.** test_phasePP 46/46 serial + 47/47 under `mpiexec -n 1
+--mpi` (the spawn leg — config triple wire, worker spec rebuild, skel
+round trips, pins intact in every returned tree); test_phaseMD 43/43;
+test_phaseFX 71/71. Legacy byte-diff: RAW-IDENTICAL
+test_sigma_array/23/28; CLEAN after the established normalization
+210/FD/FD--mpi/212_wire(27/27)/44(21/21); residuals: the documented
+[2.9c] TV line (PASS both sides) and ONE async worker-stderr line
+("About to gather") shifted by one position in 2mpi and 42 (the
+established flush-timing class; [2.10q] landed on 117 = baseline this
+run). Both features' interaction suites green on the same binary.
+Phase PP v1: COMPLETE.
+
 **CERTIFICATION (2026-07-31 08:44, final MD binary, vs /tmp/sa_post
 σ-fix baseline; logs /tmp/md_cert/ + run log /tmp/md_cert_run.log):**
 ALL 13 SUITES EXIT 0. test_phaseMD 43/43; test_phaseFX 71/71 (after

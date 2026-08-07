@@ -46,6 +46,13 @@ cpdef bint get_bic_penalty():
     mirror _shortcut_bic's branch or min/softmin decomposes L_j wrongly
     under ablation."""
     return _BIC_PENALTY_ON
+
+# Phase PP (pinned parameters, 2026-08-06): module-scope flag consumed by
+# _expr_to_tree's numeric-literal branch. Set ONLY by the public
+# expr_to_tree wrapper (try/finally restored), so the ~15 recursive call
+# sites stay untouched — same single-threaded module-global convention as
+# the RNG handles. False = bit-identical legacy (literals -> free params).
+cdef bint _PIN_NUMBERS = False
 cdef double _NAN = np.nan
 
 # Per-process RNG handles used by every randomized routine in this module
@@ -160,10 +167,14 @@ cdef class Node:
     # def?
     cpdef is_param(self):
         '''Is Node a constant function?'''
-        if self.is_leaf() and len(self.function.variables)==0:
+        # Phase PP: a PINNED numeric literal (expr_to_tree
+        # pin_numbers=True) is a constant map that must NOT be a
+        # parameter — flag read is False on every legacy function.
+        if self.is_leaf() and len(self.function.variables)==0 \
+                and not self.function.pinned_const:
             return True
         #elif self.is_leaf() and len(self.function.variables)>0:
-        
+
         return False
     
     cpdef is_constant(self):
@@ -1815,13 +1826,36 @@ cdef _expr_to_tree(object expr, cnp.ndarray domain, list function_list, dict par
     #print(params_used.values()) 
     
     if expr.is_Number:
+        if _PIN_NUMBERS:
+            # Phase PP: the literal becomes a CONSTANT leaf — never a
+            # fitted parameter (absent from get_params/name_values, so k
+            # and the optimizer vector are untouched). The pinned_const
+            # flag keeps Node.is_param() False for it (in this kernel's
+            # ontology an unmarked constant map IS the parameter leaf).
+            # Intended for SCORING/reference trees (tier-1 constrained
+            # scoring, pinned rebuilds): constant leaves are OUTSIDE the
+            # move vocabulary, so the standing seeds-in-support
+            # convention applies if such a tree is ever evolved; note
+            # burn-in constant folding would refold them (burn-in never
+            # sees pin_numbers trees).
+            _pc = real_functionC.RealFunctionC.from_string(
+                str(expr), domain)
+            (<real_functionC.RealFunctionC> _pc).pinned_const = True
+            # Zero-variable functions evaluate as params.get(desc,
+            # constant_value) and constant_value DEFAULTS to 1.0 — the
+            # literal's value must live there (nothing else feeds a
+            # non-parameter constant at eval time).
+            (<real_functionC.RealFunctionC> _pc).constant_value = \
+                float(expr)
+            root_node = Node(_pc)
+            return Tree(0, function_list, domain, root_node)
         param_name = new_par(list(params_used.values()))
         #print(param_name)
-        if str(expr) not in params_used: 
+        if str(expr) not in params_used:
             params_used[str(expr)] = [param_name]
         else:
             params_used[str(expr)].append(param_name)
- 
+
         root_node = Node(real_functionC.RealFunctionC.from_string(param_name, domain))
         root_node.set_value(np.float64(expr))
         return Tree(0, function_list, domain, root_node)
@@ -1978,8 +2012,22 @@ cdef _expr_to_tree(object expr, cnp.ndarray domain, list function_list, dict par
 
     raise NotImplementedError(f" Expression{type(expr)} not supported.")
 
-def expr_to_tree(expr, domain, function_list):
-    return _expr_to_tree(expr, domain, function_list)
+def expr_to_tree(expr, domain, function_list, pin_numbers=False):
+    """Convert a sympy expression to a Tree.
+
+    Phase PP (2026-08-06): pin_numbers=True renders numeric literals as
+    CONSTANT leaves instead of free parameters (default False =
+    bit-identical legacy behaviour). Flag is module-scoped for the
+    recursion and always restored."""
+    global _PIN_NUMBERS
+    # Review 2026-08-06 F7: set the flag on BOTH branches and always
+    # restore False — a nested legacy call during a pin_numbers
+    # conversion must not inherit the raised flag.
+    _PIN_NUMBERS = bool(pin_numbers)
+    try:
+        return _expr_to_tree(expr, domain, function_list)
+    finally:
+        _PIN_NUMBERS = False
 
 
 cdef list _symbol_values(dict names_values):
