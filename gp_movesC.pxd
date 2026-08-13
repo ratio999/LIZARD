@@ -4,7 +4,7 @@ cimport function_treeC
 
 
 
-# Phase 2.5(c): per-Grove RNG handles
+# Per-Grove RNG handles.
 cpdef void set_rng(object py_rng, object np_rng) except *
 cpdef tuple get_rng()
 
@@ -118,10 +118,10 @@ cdef class AMState:
     
 cpdef list pr_coord_names(function_treeC.Tree tree)
 
-# sigma-array fix (2026-07-28): sigma is object-typed -- scalar keeps the
-# historical bit-identical path, a per-point float64 array routes through
-# Tree._log_likelihood_at_sigma_arr (previously an array raised TypeError
-# at the `double` coercion).
+'''sigma is object-typed here: a scalar keeps the historical path, while
+a per-point float64 array routes through
+Tree._log_likelihood_at_sigma_arr. When this was a `double` an array
+raised TypeError at the coercion.'''
 cdef tuple _parameter_refresh(function_treeC.Tree tree,
                               cnp.ndarray[cnp.float64_t, ndim=1] y,
                               object sigma,
@@ -133,7 +133,7 @@ cpdef tuple parameter_refresh(function_treeC.Tree tree,
                               object sigma,
                               AMState am_state,
                               double T)
-# Phase FX (transparent atoms v1, 2026-07-28) — appended additively.
+# Transparent-atom helpers.
 cdef bint _contains_flex(function_treeC.Node node)
 cdef _rename_flex_internals(function_treeC.Node fnode, dict amap)
 cdef tuple _flex_slot_mutation(function_treeC.Tree tree, list functions,

@@ -12,13 +12,6 @@ import random
 import re
 import warnings
 
-# NumPy emits RuntimeWarnings whenever evaluate() walks parameters through
-# bad regions (negative base for fractional power, log of non-positive,
-# divide-by-zero, overflow in exp, etc.). Every such case is caught
-# downstream by is_valid / by the try/except in _log_likelihood_at, which
-# turn the resulting NaN/Inf into a hard rejection. The warnings carry no
-# diagnostic value during MCMC; filter the exact patterns so unrelated
-# RuntimeWarnings still surface.
 warnings.filterwarnings('ignore', message=r'invalid value encountered.*', category=RuntimeWarning)
 warnings.filterwarnings('ignore', message=r'divide by zero encountered.*', category=RuntimeWarning)
 warnings.filterwarnings('ignore', message=r'overflow encountered.*', category=RuntimeWarning)
@@ -26,10 +19,11 @@ warnings.filterwarnings('ignore', message=r'underflow encountered.*', category=R
 
 cdef object _LOG = np.log
 cdef double _PI = np.pi
-
-# Phase 4.3 (no-BIC ablation, 2026-07-17): module-level kill switch for
-# the BIC complexity penalty in Tree._shortcut_bic. Default True =
-# bit-identical legacy behaviour; toggled ONLY by the ablation harness.
+'''
+ module-level kill switch for
+the BIC complexity penalty in Tree._shortcut_bic. Default True =
+bit-identical legacy behaviour; toggled ONLY by the ablation harness.
+'''
 cdef bint _BIC_PENALTY_ON = True
 
 cpdef void set_bic_penalty(bint on):
@@ -41,17 +35,20 @@ cpdef void set_bic_penalty(bint on):
     _BIC_PENALTY_ON = on
 
 cpdef bint get_bic_penalty():
-    """Phase MD (2026-07-31): read the ablation switch — the joint
+    """ 
+    read the ablation switch — the joint
     reduction's penalty reconstruction (groveC._md_dataset_penalty) must
     mirror _shortcut_bic's branch or min/softmin decomposes L_j wrongly
-    under ablation."""
+    under ablation.
+    """
     return _BIC_PENALTY_ON
-
-# Phase PP (pinned parameters, 2026-08-06): module-scope flag consumed by
-# _expr_to_tree's numeric-literal branch. Set ONLY by the public
-# expr_to_tree wrapper (try/finally restored), so the ~15 recursive call
-# sites stay untouched — same single-threaded module-global convention as
-# the RNG handles. False = bit-identical legacy (literals -> free params).
+'''
+module-scope flag consumed by
+_expr_to_tree's numeric-literal branch. Set ONLY by the public
+expr_to_tree wrapper (try/finally restored), so the ~15 recursive call
+sites stay untouched — same single-threaded module-global convention as
+ the RNG handles. False = bit-identical legacy (literals -> free params).
+'''
 cdef bint _PIN_NUMBERS = False
 cdef double _NAN = np.nan
 
@@ -96,11 +93,13 @@ cdef class Node:
             self.value = value
         else:
             self.value = np.nan
-        # Phase 2.10 Stage 2: internal-parameter values of an opaque atomic
-        # leaf live on the Node (deepcopy-safe, like parameter-leaf .value
-        # above). Auto-init from the function's reference theta0 so
-        # hand-built Nodes are immediately consistent; move code overwrites
-        # with its warm-start draws.
+        '''
+        internal-parameter values of an opaque atomic
+        leaf live on the Node (deepcopy-safe, like parameter-leaf .value
+        above). Auto-init from the function's reference theta0 so
+        hand-built Nodes are immediately consistent; move code overwrites
+        with its warm-start draws.
+        '''
         if theta is not None:
             self.theta = dict(theta)
         elif (self.function is not None
@@ -119,8 +118,7 @@ cdef class Node:
         cdef Node shallow = Node(copy(self.function), copy(self.left), copy(self.right),
             self.op_symbol, alpha=self.alpha, sigma=self.sigma,
             theta=(None if self.theta is None else dict(self.theta)))
-        # Phase FX: transparent-atom identity travels with the node (spec
-        # is immutable and shared; names copied). None for legacy nodes.
+        
         shallow.flex_spec = self.flex_spec
         shallow.flex_names = (None if self.flex_names is None
                               else list(self.flex_names))
@@ -133,12 +131,14 @@ cdef class Node:
                 value=self.value,
                 theta=(None if self.theta is None else dict(self.theta))
                 )
-        # Phase FX: forward the scaffold identity. The copied function's
-        # closure still references the ORIGINAL slot function object --
-        # values are identical at copy time (closures are state-free wrt
-        # theta), and any structural slot change on the copy goes through
-        # update_func, which rebuilds the composition over the COPIED
-        # slot, so stale closures cannot leak.
+        '''
+        forward the scaffold identity. The copied function's
+        closure still references the ORIGINAL slot function object --
+        values are identical at copy time (closures are state-free wrt
+        theta), and any structural slot change on the copy goes through
+        update_func, which rebuilds the composition over the COPIED
+        slot, so stale closures cannot leak.
+        '''
         node_copy.flex_spec = self.flex_spec
         node_copy.flex_names = (None if self.flex_names is None
                                 else list(self.flex_names))
@@ -167,9 +167,9 @@ cdef class Node:
     # def?
     cpdef is_param(self):
         '''Is Node a constant function?'''
-        # Phase PP: a PINNED numeric literal (expr_to_tree
-        # pin_numbers=True) is a constant map that must NOT be a
-        # parameter — flag read is False on every legacy function.
+        '''A pinned numeric literal (expr_to_tree pin_numbers=True) is a
+        constant map that must NOT count as a parameter. The flag reads
+        False on every ordinary function.'''
         if self.is_leaf() and len(self.function.variables)==0 \
                 and not self.function.pinned_const:
             return True
@@ -178,20 +178,23 @@ cdef class Node:
         return False
     
     cpdef is_constant(self):
-        # Phase FX: a flex scaffold is NEVER foldable-as-constant, even if
-        # its slot is momentarily variable-free -- folding would evaluate
-        # np.float64(Psi(...)) on an undefined Function head (crash) and
-        # destroy the immortal scaffold.
+        '''A flex scaffold is NEVER foldable as a constant, even when
+        its slot is momentarily variable-free: folding would evaluate
+        np.float64(Psi(...)) on an undefined Function head, crashing,
+        and would destroy the immortal scaffold.'''
         return ((len(self.function.variables)==0) and not self.is_leaf()
                 and self.flex_spec is None)
 
     # ------------------------------------------------------------------
-    # Phase 2.10 Stage 2 — the atomic-leaf taxonomy (DESIGN §1, §9 item 2).
-    # ONE object class: an atomic leaf carrying k >= 0 internal parameters.
-    #   function leaf   : k = 0                  (is_param False, is_atomic False)
-    #   parameter leaf  : k = 1, expr == symbol  (is_param True,  is_atomic False)
-    #   opaque leaf     : k = k_psi >= 1, from an AtomSpec template
-    #                                            (is_param False, is_atomic True)
+    '''The atomic-leaf taxonomy (DESIGN §1, §9 item 2). One object
+    class covers all three kinds of leaf, distinguished only by how many
+    internal parameters they carry:
+
+      function leaf   : k = 0                  (is_param False, is_atomic False)
+      parameter leaf  : k = 1, expr == symbol  (is_param True,  is_atomic False)
+      opaque leaf     : k = k_psi >= 1, from an AtomSpec template
+                                               (is_param False, is_atomic True)
+    '''
     # ------------------------------------------------------------------
     cpdef is_atomic(self):
         '''Is this leaf an opaque atomic primitive (instantiated from an
@@ -201,12 +204,12 @@ cdef class Node:
                 and self.function.atom_symbol is not None)
 
     cpdef bint is_flex(self):
-        '''Phase FX: is this node a TRANSPARENT (flexible) atom -- a frozen
-        scaffold (real_functionC.FlexAtomSpec) whose mutable slot subtree
-        lives in self.left (self.right is None)? Not a leaf, not opaque-
-        atomic; the outer move kernel treats it as an indivisible,
-        immortal unit and only gp_movesC.flex_slot_mutation edits the
-        slot. False on every legacy node.'''
+        '''Is this node a TRANSPARENT (flexible) atom: a frozen scaffold
+        (real_functionC.FlexAtomSpec) whose mutable slot subtree lives
+        in self.left, with self.right None? It is neither a leaf nor
+        opaque-atomic. The outer move kernel treats it as an
+        indivisible, immortal unit; only gp_movesC.flex_slot_mutation
+        edits the slot. False on every ordinary node.'''
         return self.flex_spec is not None
 
     cpdef int leaf_k(self):
@@ -277,8 +280,8 @@ cdef class Node:
         self.set_sigma(new_sigma)
         if not self.is_leaf():
             self.left.set_sigma_recursive(new_sigma)
-            # Phase FX: flex scaffolds are unary (right is None); no-op
-            # guard for every legacy node (non-leaf => both children).
+            # Flex scaffolds are unary (right is None). For an ordinary
+            # node this guard is a no-op: non-leaf means both children.
             if self.right is not None:
                 self.right.set_sigma_recursive(new_sigma)
     
@@ -422,9 +425,9 @@ cdef class Node:
         if self.is_leaf():
             return self
         else:
-            # Phase FX: unary flex scaffold descends into its slot WITHOUT
-            # consuming RNG; checked before the draw so legacy trees keep
-            # their historical RNG stream bit-identically.
+            '''A unary flex scaffold descends into its slot WITHOUT
+            consuming RNG. The check sits before the draw so ordinary
+            trees keep their historical RNG stream bit for bit.'''
             if self.right is None:
                 return self.left.select_random_leaf()
             if _PY_RNG.choice([True, False]):
@@ -445,9 +448,9 @@ cdef class Node:
         if self.is_leaf():
             return self
 
-        # Phase FX: unary flex scaffold (right is None) descends left
-        # without consuming RNG (guard precedes the draw: legacy stream
-        # bit-identical).
+        '''Same as in select_random_leaf: a unary flex scaffold descends
+        left without consuming RNG, and the guard precedes the draw so
+        the ordinary stream is unchanged.'''
         if self.right is None:
             return self.left.select_random_node(threshold)
         if _PY_RNG.random() < 0.5:
@@ -470,11 +473,12 @@ cdef class Node:
     cpdef update_func(self, list params_list=[], str user_prefix=None):
         """Update function after attribute changes"""
         if self.flex_spec is not None:
-            # Phase FX: rebuild the numeric composition over the CURRENT
-            # slot child. Structural slot changes always REPLACE function
-            # objects, so this is the single point keeping the scaffold's
-            # closure/expr in sync (op-symbol chain below would otherwise
-            # silently leave the function stale: op_symbol is None here).
+            '''Rebuild the numeric composition over the CURRENT slot
+            child. Structural slot changes always replace function
+            objects, so this is the single point that keeps the
+            scaffold's closure and expr in sync. The op-symbol chain
+            below would leave the function stale, since op_symbol is
+            None here.'''
             self.function = _flex_function(self.flex_spec, self.flex_names,
                                            self.left)
             return
@@ -514,10 +518,11 @@ cdef class Node:
         else:
 
             self.left.get_leaves(leaves_list = leaves_list)
-            # Phase FX: a flex scaffold is unary (right is None); its SLOT
-            # leaves (under left) ARE tree leaves, so slot parameters flow
-            # into params/name_values unchanged. The None-guard is a no-op
-            # for every legacy node (non-leaf => both children present).
+            '''A flex scaffold is unary (right is None), and its SLOT
+            leaves — the ones under left — ARE tree leaves, so slot
+            parameters flow into params/name_values unchanged. The
+            None-guard is a no-op for an ordinary node, where non-leaf
+            means both children are present.'''
             if self.right is not None:
                 self.right.get_leaves(leaves_list = leaves_list)
 
@@ -651,11 +656,12 @@ cdef class Tree:
             double g_tau=1.0, list operations=None):
         '''Tree class initialization.
 
-        Phase 2.13(f): `operations` (op symbols) is forwarded to build_tree
-        when the root is built from scratch, so a kernel with a restricted
-        op vocabulary starts INSIDE its own support (out-of-vocabulary ops
-        in the initial tree could never be legally removed: every reverse
-        density for them is zero). Default None = historical 6-op set.'''
+        `operations` (op symbols) is forwarded to build_tree when the
+        root is built from scratch, so a kernel with a restricted op
+        vocabulary starts INSIDE its own support. An out-of-vocabulary
+        op in the initial tree could never be legally removed, since
+        every reverse density for it is zero. Default None gives the
+        historical 6-op set.'''
         self.T = T
         self.domain = real_functionC._domain_fixer(x)
         self.depth = depth
@@ -678,16 +684,16 @@ cdef class Tree:
         self.param_values, self.name_values, self.penalty = self.get_param_values()
         self.fitness_tree = None
     def __copy__(self):
-        # Phase 2.13(m): forward g_tau (was dropped -> copies silently
-        # re-defaulted to 1.0). Positional slot 10, after sigma.
+        # Forward g_tau: it used to be dropped here, so copies silently
+        # re-defaulted to 1.0. Positional slot 10, after sigma.
         return Tree(self.depth, self.functions, self.domain, self.root,
             self.Npars, self.value, self.T, self.alpha, self.sigma,
             self.g_tau)
 
     def __deepcopy__(self, memo):
-        # Phase 2.13(m): forward g_tau. Grove._propose deepcopies before
-        # every move, so without this the birth warm-start draw N(0,g_tau^2)
-        # used the wrong scale (1.0 instead of the configured std(y)).
+        '''Forward g_tau. Grove._propose deepcopies before every move,
+        so without this the birth warm-start draw N(0, g_tau^2) used the
+        wrong scale: 1.0 instead of the configured std(y).'''
         cdef Tree copy_tree = Tree(
                 self.depth,
                 deepcopy(self.functions, memo),
@@ -724,21 +730,22 @@ cdef class Tree:
             params_values[par] = par_value
             names_values[par.function.get_description()] = par_value
             penalty += 1 #np.abs(par_value)
-        # Phase 2.10 Stage 2: merge the opaque leaves' internal parameters,
-        # AFTER the plain ones (matching the order get_params imposed on the
-        # root function). Each internal parameter counts 1 toward the
-        # penalty, exactly like a plain parameter leaf — this is what makes
-        # _shortcut_bic's k = len(name_values) the DESIGN §5 effective
-        # dimension k(T) + sum_j k_psi_j with no further changes.
+        '''Merge the opaque leaves' internal parameters AFTER the plain
+        ones, matching the order get_params imposed on the root
+        function. Each internal parameter counts 1 toward the penalty,
+        exactly like a plain parameter leaf, and that is what makes
+        _shortcut_bic's k = len(name_values) the DESIGN §5 effective
+        dimension k(T) + sum_j k_psi_j with no further changes.'''
         for leaf in self.leaves:
             if leaf.is_atomic():
                 for nm in leaf.leaf_param_names():
                     names_values[nm] = leaf.theta[nm]
                     penalty += 1
-        # Phase FX: flex-scaffold internal parameters, pre-order flex-node
-        # order, AFTER plain + opaque names (mirrors get_params). Each
-        # counts 1 toward the penalty -> _shortcut_bic's k stays the true
-        # effective dimension. Empty walk (and zero cost) on legacy trees.
+        '''Flex-scaffold internal parameters, in pre-order flex-node
+        order, after the plain and opaque names — mirroring get_params.
+        Each counts 1 toward the penalty, so _shortcut_bic's k stays the
+        true effective dimension. On a tree without scaffolds the walk
+        is empty and costs nothing.'''
         cdef Node fx_node
         cdef str fx_nm
         for fx_node in _collect_flex_nodes(self.root, []):
@@ -788,19 +795,19 @@ cdef class Tree:
 
                 params_list.append(leaf)
                 order_names.append(leaf.function.get_description())
-        # Phase 2.10 Stage 2: opaque atomic leaves carry internal parameters
-        # with no dedicated parameter Node. Append their names AFTER the
-        # plain ones, in leaf (pre-order) order — the identical order
-        # get_param_values inserts them into name_values, so the root
-        # function's parameter order, name_values, and the optimizer's flat
-        # vector stay aligned. With no atomic leaves this reduces exactly to
-        # the historical sort_params(params_list) call.
+        '''Opaque atomic leaves carry internal parameters with no
+        dedicated parameter Node. Append their names AFTER the plain
+        ones, in leaf (pre-order) order — the identical order in which
+        get_param_values inserts them into name_values — so the root
+        function's parameter order, name_values and the optimizer's flat
+        vector stay aligned. With no atomic leaves this reduces exactly
+        to the historical sort_params(params_list) call.'''
         for leaf in self.leaves:
             if leaf.is_atomic():
                 order_names.extend(leaf.leaf_param_names())
-        # Phase FX: flex internal names continue the same order (mirrors
+        # Flex internal names continue that same order, mirroring
         # get_param_values so root-function order, name_values and the
-        # optimizer's flat vector stay aligned).
+        # optimizer's flat vector stay aligned.
         cdef Node fx_node
         for fx_node in _collect_flex_nodes(self.root, []):
             order_names.extend(fx_node.flex_names)
@@ -849,8 +856,8 @@ cdef class Tree:
             return f"{prefix}{'└── ' if is_left else '├── '}{str(node.function.get_description())}\n"
 
         if node.is_flex():
-            # Phase FX: unary scaffold -- print the head + internal names,
-            # then the slot subtree (right is None).
+            # Unary scaffold: print the head plus internal names, then
+            # the slot subtree (right is None).
             result = f"{prefix}{'└── ' if is_left else '├── '}{node.flex_spec.name}[{', '.join(node.flex_names)}]\n"
             prefix += '    ' if is_left else '│   '
             result += self.tree_to_string(node.left, prefix, True)
@@ -959,20 +966,20 @@ cdef class Tree:
 			double mse):
         cdef int N = y.shape[0]
         cdef int k = len(self.name_values)
-        # Phase 4.3 (no-BIC ablation, 2026-07-17): opt-in kill switch for
-        # the complexity penalty — pure-likelihood scoring. Default ON =
-        # bit-identical legacy. One C bool branch; toggled only by the
-        # ablation harness via set_bic_penalty().
+        '''Opt-in kill switch for the complexity penalty, giving
+        pure-likelihood scoring. Default ON is the ordinary behaviour.
+        One C bool branch, toggled only by the ablation harness via
+        set_bic_penalty().'''
         if not _BIC_PENALTY_ON:
             if self.sigma is None:
                 return -0.5 * N * (_LOG(2.0 * _PI * mse) + 1.0)
             return -0.5 * N * mse
         if self.sigma is None:
-            # Phase 2.13(i): sigma is PROFILED here (sigma_hat^2 = SSR/N),
-            # so it counts as an estimated parameter -> penalty on k+1
-            # (Phase 2.7(a) contract). Constant +0.5*log(N) shift across
-            # all models, so MH ratios are unchanged; reported evidences
-            # and fixed-vs-profiled comparisons become honest.
+            '''sigma is PROFILED here (sigma_hat^2 = SSR/N), so it
+            counts as an estimated parameter and the penalty is on k+1.
+            This is a constant +0.5*log(N) shift across all models, so
+            MH ratios are unchanged, but reported evidences and
+            fixed-versus-profiled comparisons become honest.'''
             return -0.5 * N * (_LOG(2.0 * _PI * mse) + 1.0) - 0.5 * (k + 1) * _LOG(N)
         else:
 
@@ -984,23 +991,23 @@ cdef class Tree:
                                   str method_str='L-BFGS-B'):
         cdef double mse
         self.bic_loss_is_param_loss = True #placeholder to remove when using custom defined loss functions
-        # Phase 2.10 Stage 2: gate on name_values, not self.params — an
-        # opaque-leaf tree can carry continuous parameters (k_psi >= 1) with
-        # ZERO plain parameter Nodes, and its theta must still be optimized.
-        # For atom-free trees the two gates are equivalent (every parameter
-        # Node inserts a name), so legacy behaviour is unchanged.
+        '''Gate on name_values, not self.params: an opaque-leaf tree can
+        carry continuous parameters (k_psi >= 1) with ZERO plain
+        parameter Nodes, and its theta must still be optimized. For
+        atom-free trees the two gates are equivalent, since every
+        parameter Node inserts a name.'''
         if self.bic_loss_is_param_loss and optimize and len(self.name_values)>0:
             mse = self._update_parameters_and_fitness(self.domain, y,
                                         method_str, use_gradients)
-            # Phase 2.13(h) NOTE, corrected 2026-07-15: this gate does NOT
-            # re-validate at theta_hat — is_valid takes no params and
-            # evaluates at the construction-time reference values (the
-            # CBC forensics proved it, PLAN §4.2b). The actual theta_hat
-            # pathology gate is now the fitness() semantics themselves
-            # (real_functionC, NaN-leak fix: any non-finite prediction
-            # -> _MSE_PENALTY -> effectively -inf posterior). This call
-            # is kept for its original structural checks (zoo, reference
-            # evaluation, magnitude cap) and for trajectory continuity.
+            '''Careful: this gate does NOT re-validate at theta_hat.
+            is_valid takes no params and evaluates at the
+            construction-time reference values — the CBC forensics
+            proved it, PLAN §4.2b. The actual theta_hat pathology gate
+            is the fitness() semantics themselves: in real_functionC any
+            non-finite prediction yields _MSE_PENALTY, hence an
+            effectively -inf posterior. This call is kept for its
+            original structural checks (zoo, reference evaluation,
+            magnitude cap) and for trajectory continuity.'''
             if not self.is_valid(self.domain):
                 return -np.inf
             if self.sigma is not None and (not hasattr(self.sigma, '__len__')):
@@ -1011,17 +1018,17 @@ cdef class Tree:
 
             self._update_parameters(self.domain, y,
                                     method_str, use_gradients)
-            # Phase 2.13(h): same theta_hat re-validation on the slow path.
+            # Same theta_hat caveat as above, on the slow path.
             if not self.is_valid(self.domain):
                 return -np.inf
         if self.sigma is None:
             return self.root._log_marginal_bic(y, self.name_values, self.domain)
         elif hasattr(self.sigma, '__len__'):
-                # sigma-array fix (2026-07-28): coerce at the typed boundary
-                # (no-op view when the caller already holds a contiguous
-                # float64 vector) so list/float32 sigmas cannot TypeError
-                # deep inside the scorer. Behaviour for ndarray callers is
-                # unchanged.
+                '''Coerce at the typed boundary — a no-op view when the
+                caller already holds a contiguous float64 vector — so a
+                list or float32 sigma cannot raise TypeError deep inside
+                the scorer. Behaviour for ndarray callers is
+                unchanged.'''
                 return self.root._log_sigma_array_bic(
                     y, self.name_values, self.domain,
                     np.ascontiguousarray(self.sigma, dtype=np.float64).ravel())
@@ -1045,15 +1052,15 @@ cdef class Tree:
         if not hasattr(self.sigma, '__len__'):
             result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         else:
-            # sigma-array fix (2026-07-28): the historical call passed
-            # (input_pars, method_str, use_gradients, self.sigma) into
-            # Node.optimize_sigma(..., input_pars, SIGMA, method_str,
-            # use_gradients) -- the str method_str landed in the typed
-            # sigma slot and raised TypeError, so the per-point-sigma
-            # optimize path was unreachable (flagged at FD review,
-            # flexible_domain_plan section 9). Arguments now follow the
-            # declaration order; sigma coerced to a contiguous float64
-            # vector at this boundary (no-op for ndarray callers).
+            '''Argument order matters here. This call used to pass
+            (input_pars, method_str, use_gradients, self.sigma) into
+            Node.optimize_sigma(..., input_pars, SIGMA, method_str,
+            use_gradients), so the str method_str landed in the typed
+            sigma slot and raised TypeError — which made the
+            per-point-sigma optimize path unreachable. Arguments now
+            follow the declaration order, and sigma is coerced to a
+            contiguous float64 vector at this boundary (a no-op for
+            ndarray callers).'''
             result = self.root.optimize_sigma(
                 x_data, y_data, input_pars,
                 np.ascontiguousarray(self.sigma, dtype=np.float64).ravel(),
@@ -1062,15 +1069,14 @@ cdef class Tree:
         #print(self.tree_get_description(), result)
         for par in self.params:
             par.set_value(optimized_params[par.function.get_description()])
-        # Phase 2.10 Stage 2: write the optimizer's values back into the
-        # opaque leaves (their names are keys of name_values, hence of
-        # optimized_params).
+        # Write the optimizer's values back into the opaque leaves;
+        # their names are keys of name_values, hence of optimized_params.
         for leaf in self.leaves:
             if leaf.is_atomic():
                 for nm in leaf.leaf_param_names():
                     if nm in optimized_params:
                         leaf.theta[nm] = optimized_params[nm]
-        # Phase FX: same write-back for flex-scaffold internal theta.
+        # Same write-back for flex-scaffold internal theta.
         cdef Node fx_node
         for fx_node in _collect_flex_nodes(self.root, []):
             for nm in fx_node.flex_names:
@@ -1099,9 +1105,9 @@ cdef class Tree:
         if not hasattr(self.sigma, '__len__'):
             result = self.root.optimize(x_data, y_data, input_pars, method_str, use_gradients)
         else:
-            # sigma-array fix (2026-07-28): same positional repair as in
-            # _update_parameters above (arguments were shifted one slot,
-            # method_str landing in the typed sigma buffer -> TypeError).
+            # Same argument-order care as in _update_parameters above:
+            # shifting them by one slot puts method_str in the typed
+            # sigma buffer and raises TypeError.
             result = self.root.optimize_sigma(
                 x_data, y_data, input_pars,
                 np.ascontiguousarray(self.sigma, dtype=np.float64).ravel(),
@@ -1111,13 +1117,13 @@ cdef class Tree:
         cdef double mse=result.fun
         for par in self.params:
             par.set_value(optimized_params[par.function.get_description()])
-        # Phase 2.10 Stage 2: same opaque-leaf write-back as _update_parameters.
+        # Same opaque-leaf write-back as _update_parameters.
         for leaf in self.leaves:
             if leaf.is_atomic():
                 for nm in leaf.leaf_param_names():
                     if nm in optimized_params:
                         leaf.theta[nm] = optimized_params[nm]
-        # Phase FX: same write-back for flex-scaffold internal theta.
+        # And the same for flex-scaffold internal theta.
         cdef Node fx_node
         for fx_node in _collect_flex_nodes(self.root, []):
             for nm in fx_node.flex_names:
@@ -1134,15 +1140,14 @@ cdef class Tree:
         self._update_parameters(x_data, y_data, method_str, use_gradients)
 
     # ------------------------------------------------------------------
-    # Phase MD (multi-dataset joint evidence, 2026-07-31) — explicit-
-    # argument scoring. ADDITIVE: the legacy _log_marginal_bic above is
-    # byte-untouched; this mirror substitutes the PASSED x at every site
-    # where the legacy method reads self.domain (optimizer x, both
-    # is_valid gates, and the three no-optimize scorer calls). n comes
-    # from y.shape inside _shortcut_bic, sigma routing comes from
-    # self.sigma exactly as in the legacy path — score_dataset below
-    # swaps that ONE Tree-level attribute around the call (O(1), never
-    # the node-recursive setter; decision D3, PLAN MR.4).
+    '''Explicit-argument scoring, for joint evidence over several
+    datasets. _log_marginal_bic above is left untouched; this mirror
+    substitutes the PASSED x at every site where that method reads
+    self.domain: the optimizer x, both is_valid gates, and the three
+    no-optimize scorer calls. n still comes from y.shape inside
+    _shortcut_bic, and sigma routing still comes from self.sigma, which
+    score_dataset below swaps around the call — one O(1) attribute
+    assignment, never the node-recursive setter.'''
     # ------------------------------------------------------------------
     cdef double _log_marginal_bic_x(self,
                                     cnp.ndarray x,
@@ -1186,16 +1191,16 @@ cdef class Tree:
                               bint optimize=True,
                               bint use_gradients=False,
                               str method_str='Powell'):
-        """Phase MD: score THIS tree against ONE explicit dataset
-        (x, y, sigma), independent of the construction-time domain and of
-        the tree's configured sigma.
+        """Score THIS tree against ONE explicit dataset (x, y, sigma),
+        independent of the construction-time domain and of the tree's
+        configured sigma.
 
-        Fits theta on the passed data (when optimize and the tree has
-        parameters), leaves the fitted theta installed in the tree, and
-        returns (post, dict(name_values) snapshot) — the caller owns the
-        snapshot (the per-dataset theta_j of PLAN MR.4). self.sigma is
+        Fits theta on the passed data (when optimize is set and the tree
+        has parameters), leaves the fitted theta installed in the tree,
+        and returns (post, dict(name_values) snapshot). The caller owns
+        the snapshot, which is that dataset's theta_j. self.sigma is
         saved and restored around the call, so the tree's configured
-        sigma routing is untouched on exit even on exceptions.
+        sigma routing is untouched on exit even if something raises.
 
         Cross-module callers: POSITIONAL ARGS ONLY."""
         cdef object saved_sigma = self.sigma
@@ -1219,8 +1224,8 @@ cdef class Tree:
                                double sigma):
         """
         Raw Gaussian log-likelihood at a *candidate* parameter assignment, WITHOUT
-        mutating any tree state. Used by Phase 2.1.PR (parameter_refresh): the
-        PR move scores on un-profiled likelihood, so structural-move scoring
+        mutating any tree state. Used by parameter_refresh: the PR move
+        scores on un-profiled likelihood, so structural-move scoring
         (BIC, Polya prior) is intentionally bypassed here.
 
         Returns -inf on any non-finite evaluation, shape mismatch, or sigma<=0.
@@ -1237,11 +1242,11 @@ cdef class Tree:
         if y_pred.shape[0] != y.shape[0]:
             return -np.inf
         cdef cnp.ndarray[cnp.float64_t, ndim=1] resid = y - y_pred
-        # NaN-leak fix (2026-07-15): plain sum, NOT nansum — an all-NaN
-        # residual previously gave ssr = 0 (finite!) and slipped past
-        # this guard; now any non-finite prediction propagates to NaN
-        # and is rejected below (zero likelihood, consistent with the
-        # fitness() semantics in real_functionC).
+        '''Plain sum, NOT nansum. With nansum an all-NaN residual gave
+        ssr = 0, which is finite, and slipped straight past the guard
+        below. Now any non-finite prediction propagates to NaN and is
+        rejected: zero likelihood, consistent with the fitness()
+        semantics in real_functionC.'''
         cdef double ssr = float(np.sum(resid * resid))
         if not np.isfinite(ssr):
             return -np.inf
@@ -1254,8 +1259,8 @@ cdef class Tree:
                                dict cand_name_values,
                                cnp.ndarray[cnp.float64_t, ndim=1] sigma):
         """
-        Per-point-sigma companion of _log_likelihood_at (sigma-array fix,
-        2026-07-28; ADDITIVE -- the scalar method above is byte-untouched).
+        Per-point-sigma companion of _log_likelihood_at; the scalar
+        method above is untouched.
         Raw heteroscedastic Gaussian log-likelihood at a *candidate*
         parameter assignment, WITHOUT mutating any tree state. Used by
         parameter_refresh when the run's sigma is a per-point array:
@@ -1304,15 +1309,14 @@ cdef class Tree:
             name = par.function.get_description()
             if name in new_name_values:
                 par.set_value(float(new_name_values[name]))
-        # Phase 2.10 Stage 2: opaque leaves' internal parameters are ordinary
-        # coordinates of the refresh vector (DESIGN §5) — install them too.
+        # Opaque leaves' internal parameters are ordinary coordinates of
+        # the refresh vector (DESIGN §5), so install them too.
         for leaf in self.leaves:
             if leaf.is_atomic():
                 for name in leaf.leaf_param_names():
                     if name in new_name_values:
                         leaf.theta[name] = float(new_name_values[name])
-        # Phase FX: flex-scaffold internal theta are ordinary refresh
-        # coordinates too.
+        # Flex-scaffold internal theta are refresh coordinates as well.
         cdef Node fx_node
         for fx_node in _collect_flex_nodes(self.root, []):
             for name in fx_node.flex_names:
@@ -1370,29 +1374,33 @@ cdef _post_order_update(Node node):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2.10 Stage 3b — structural (skeleton) tree serialization.
-#
-# The MPI wire cannot ship a raw sympy expression for an atom-bearing tree:
-# _expr_to_tree rebuilds from the EXPRESSION structure, and an opaque leaf's
-# contribution (e.g. a0*sin(a1*x)) is indistinguishable from a Mul subtree —
-# atomicity, the Polya vocabulary key, and the description round-trip would
-# all break. The skeleton is a picklable recursive tuple that preserves the
-# EXACT tree shape and the opaque leaves' identity:
-#     ('L', description)                      plain leaf (function/parameter)
-#     ('A', atom_symbol, (name1, name2, ...)) opaque atomic leaf
-#     ('O', op_symbol, left_skel, right_skel) internal node
-# Parameter VALUES travel separately (name_values), exactly like the legacy
-# wire. Both cpdef so groveC / mpi_worker call them across the cimport
-# boundary — POSITIONAL ARGS ONLY at those call sites.
+'''Structural (skeleton) tree serialization.
+
+The MPI wire cannot ship a raw sympy expression for an atom-bearing
+tree: _expr_to_tree rebuilds from the EXPRESSION structure, and an
+opaque leaf's contribution (a0*sin(a1*x), say) is indistinguishable from
+an ordinary Mul subtree, so atomicity, the Polya vocabulary key and the
+description round-trip would all break.
+
+The skeleton is a picklable recursive tuple preserving the exact tree
+shape and the opaque leaves' identity:
+
+    ('L', description)                      plain leaf (function/parameter)
+    ('A', atom_symbol, (name1, name2, ...)) opaque atomic leaf
+    ('O', op_symbol, left_skel, right_skel) internal node
+
+Parameter VALUES travel separately in name_values, exactly as on the
+older wire. Both functions are cpdef so groveC and mpi_worker can call
+them across the cimport boundary — POSITIONAL ARGS ONLY there.'''
 # ---------------------------------------------------------------------------
 
 cpdef object tree_to_skel(Node node):
     """Serialize the (sub)tree rooted at `node` to a skeleton tuple.
 
-    Phase FX adds the transparent-atom tag:
+    Transparent atoms add one more tag:
         ('F', head_name, (theta_names...), slot_skel)
-    -- exact-shape, sympy-free, mirrors the 'A' contract (values travel in
-    name_values; the caller installs them and runs tree_update)."""
+    Exact-shape and sympy-free, mirroring the 'A' contract: values travel
+    in name_values, and the caller installs them and runs tree_update."""
     if node.is_leaf():
         if node.is_atomic():
             return ('A', node.function.atom_symbol,
@@ -1433,7 +1441,7 @@ cpdef Node node_from_skel(object skel,
             list(skel[2]))
         return Node(rf)
     if tag == 'F':
-        # Phase FX: rebuild the slot first, then the scaffold over it.
+        # Rebuild the slot first, then the scaffold over it.
         # Registry shares the atom_specs dict (FlexAtomSpec entries);
         # a missing template keeps the KeyError->reject convention.
         if atom_specs is None or skel[1] not in atom_specs:
@@ -1450,15 +1458,18 @@ cpdef Node node_from_skel(object skel,
     return Node(None, left, right, <str> skel[1])
 
 # ---------------------------------------------------------------------------
-# Phase FX (transparent/flexible atoms v1, 2026-07-28) — module machinery.
-# A flex node is a UNARY scaffold: frozen shape (FlexAtomSpec) over ONE
-# mutable slot subtree in node.left (node.right is None). Identity is the
-# UNEXPANDED sympy Function head  name(theta..., slot_expr)  — injective
-# w.r.t. transparent expressions, no sympy substitution ever happens
-# (evaluation = numeric composition of the spec's compiled template over
-# the slot's output). v1 semantics: seeding-only entry, immortal in the
-# outer kernel, slots evolve both ways via gp_movesC.flex_slot_mutation.
-# Cross-module callers: POSITIONAL ARGS ONLY (cpdef rule).
+'''Transparent-atom machinery.
+
+A flex node is a UNARY scaffold: a frozen shape (FlexAtomSpec) over ONE
+mutable slot subtree in node.left, with node.right None. Its identity is
+the UNEXPANDED sympy Function head name(theta..., slot_expr), which is
+injective with respect to transparent expressions, and no sympy
+substitution ever happens — evaluation is numeric composition of the
+spec's compiled template over the slot's output.
+
+Scaffolds enter by seeding only and are immortal in the outer kernel;
+slots evolve both ways through gp_movesC.flex_slot_mutation.
+Cross-module callers: POSITIONAL ARGS ONLY.'''
 # ---------------------------------------------------------------------------
 
 cdef real_functionC.RealFunctionC _flex_function(object spec_obj, list names,
@@ -1536,17 +1547,17 @@ cpdef Node make_flex_node(object spec_obj, Node slot, list fresh_names,
     len == spec.k, distinct, parameter-pattern, never variable names).
     `theta` optionally pins internal values (default 1.0 reference).
 
-    v1 SEEDING entry point: flex atoms only enter trees here (and via the
-    'F' wire tag); the move kernel never births or destroys them. The
-    slot must be a legal flex-free subtree with a live function.
-    Cross-module callers: POSITIONAL ARGS ONLY.
+    This is the SEEDING entry point: flex atoms only enter trees here
+    and via the 'F' wire tag, and the move kernel never births or
+    destroys them. The slot must be a legal flex-free subtree with a
+    live function. Cross-module callers: POSITIONAL ARGS ONLY.
 
-    IN-SUPPORT SEEDING (review 2026-07-29): the scaffold contributes
-    1 + depth(slot) to the OUTER tree's depth, and the kernel's bounded
-    support is depth <= gp_movesC.get_max_tree_depth(). Seed trees must
-    start inside that support -- the same convention as legacy node_list
-    seeding; nothing validates it here (gp_movesC is not importable from
-    this module without a cycle)."""
+    Seeds must start IN SUPPORT. The scaffold contributes 1 + depth(slot)
+    to the OUTER tree's depth, and the kernel's bounded support is
+    depth <= gp_movesC.get_max_tree_depth(). Nothing validates that here,
+    since gp_movesC is not importable from this module without a cycle,
+    so it is the caller's responsibility — the same convention as
+    node_list seeding."""
     cdef object spec = spec_obj
     cdef str nm
     cdef dict th = {}
@@ -1593,14 +1604,15 @@ cpdef build_tree(int depth, list functions, cnp.ndarray x,
              double g_tau = 1.0, list operations=None):
         '''Builds a Tree from scratch.
 
-        Phase 2.13(f): internal ops are drawn uniformly from `operations`
-        (symbols: '+', '-', '*', '/', '**', 'o'). Default None keeps the
-        historical 6-op set — IN THE SAME ORDER as the old internal
-        ['add','sub','mul','div','pow','compose'] list, so default-ops RNG
-        streams (and every determinism test) are bit-identical. Callers with
-        a restricted kernel vocabulary (e.g. safe-ops fixtures) MUST pass
-        their list, otherwise the proposal build-densities computed with
-        O = len(operations) do not match the true sampling law.'''
+        Internal ops are drawn uniformly from `operations` (the symbols
+        '+', '-', '*', '/', '**', 'o'). Default None keeps the historical
+        6-op set IN THE SAME ORDER as the old internal
+        ['add','sub','mul','div','pow','compose'] list, so default-ops
+        RNG streams — and every determinism test — stay bit-identical.
+        Callers with a restricted kernel vocabulary (safe-ops fixtures,
+        for instance) MUST pass their own list, otherwise the proposal
+        build-densities computed with O = len(operations) do not match
+        the true sampling law.'''
         if operations is None:
             operations = ['+', '-', '*', '/', '**', 'o']
         if isinstance(value, (float, int)):
@@ -1684,8 +1696,8 @@ cpdef build_tree(int depth, list functions, cnp.ndarray x,
                 alpha = alpha, sigma = sigma, g_tau = g_tau, operations = operations)
 
 
-        # Phase 2.13(f): draw the op SYMBOL uniformly from the caller's
-        # vocabulary (default list above preserves the historical stream).
+        # Draw the op SYMBOL uniformly from the caller's vocabulary; the
+        # default list above preserves the historical stream.
         cdef str op_symbol = _PY_RNG.choice(operations)
         cdef real_functionC.RealFunctionC func
 
@@ -1827,24 +1839,25 @@ cdef _expr_to_tree(object expr, cnp.ndarray domain, list function_list, dict par
     
     if expr.is_Number:
         if _PIN_NUMBERS:
-            # Phase PP: the literal becomes a CONSTANT leaf — never a
-            # fitted parameter (absent from get_params/name_values, so k
-            # and the optimizer vector are untouched). The pinned_const
-            # flag keeps Node.is_param() False for it (in this kernel's
-            # ontology an unmarked constant map IS the parameter leaf).
-            # Intended for SCORING/reference trees (tier-1 constrained
-            # scoring, pinned rebuilds): constant leaves are OUTSIDE the
-            # move vocabulary, so the standing seeds-in-support
-            # convention applies if such a tree is ever evolved; note
-            # burn-in constant folding would refold them (burn-in never
-            # sees pin_numbers trees).
+            '''The literal becomes a CONSTANT leaf, never a fitted
+            parameter: it stays out of get_params/name_values, so k and
+            the optimizer vector are untouched. The pinned_const flag is
+            what keeps Node.is_param() False for it, because in this
+            kernel's ontology an unmarked constant map IS the parameter
+            leaf.
+
+            These trees are meant for SCORING and reference use. Constant
+            leaves sit OUTSIDE the move vocabulary, so the usual
+            seeds-in-support convention applies if such a tree is ever
+            evolved, and burn-in constant folding would refold them —
+            though burn-in never sees them.'''
             _pc = real_functionC.RealFunctionC.from_string(
                 str(expr), domain)
             (<real_functionC.RealFunctionC> _pc).pinned_const = True
             # Zero-variable functions evaluate as params.get(desc,
-            # constant_value) and constant_value DEFAULTS to 1.0 — the
-            # literal's value must live there (nothing else feeds a
-            # non-parameter constant at eval time).
+            # constant_value), and constant_value defaults to 1.0, so
+            # the literal's value has to live there: nothing else feeds
+            # a non-parameter constant at eval time.
             (<real_functionC.RealFunctionC> _pc).constant_value = \
                 float(expr)
             root_node = Node(_pc)
@@ -2015,14 +2028,14 @@ cdef _expr_to_tree(object expr, cnp.ndarray domain, list function_list, dict par
 def expr_to_tree(expr, domain, function_list, pin_numbers=False):
     """Convert a sympy expression to a Tree.
 
-    Phase PP (2026-08-06): pin_numbers=True renders numeric literals as
-    CONSTANT leaves instead of free parameters (default False =
-    bit-identical legacy behaviour). Flag is module-scoped for the
-    recursion and always restored."""
+    pin_numbers=True renders numeric literals as CONSTANT leaves instead
+    of free parameters; the default False is the ordinary behaviour. The
+    flag is module-scoped so the recursion can see it, and it is always
+    restored."""
     global _PIN_NUMBERS
-    # Review 2026-08-06 F7: set the flag on BOTH branches and always
-    # restore False — a nested legacy call during a pin_numbers
-    # conversion must not inherit the raised flag.
+    # Set the flag on BOTH branches and always restore False, so that a
+    # nested ordinary call made during a pin_numbers conversion cannot
+    # inherit the raised flag.
     _PIN_NUMBERS = bool(pin_numbers)
     try:
         return _expr_to_tree(expr, domain, function_list)

@@ -9,8 +9,9 @@ from utils.pointer_utils cimport python_object_to_void_ptr, void_ptr_to_python_o
 from scipy.optimize import minimize, OptimizeResult
 from libc.math cimport isfinite as _c_isfinite
 
-# NaN-leak fix (2026-07-15): finite MSE penalty for models with any
-# non-finite prediction — see the comment block above posterior_fitness.
+# Finite stand-in for the MSE of a model that predicts anything
+# non-finite. See the block above posterior_fitness for why it must be
+# finite rather than inf.
 cdef double _MSE_PENALTY = 1.0e100
 import re
 #from libc.stdlib cimport malloc, free  # Not needed so far 
@@ -159,9 +160,9 @@ cdef class RealFunctionC:
         else:
             self.constant_value = None
         self.grad_funcs = self._build_gradient_functions() if compute_grad else None
-        # Phase 2.10 Stage 2: opaque-leaf metadata. Plain constructions carry
-        # None; ONLY instantiate_atom (and rename_leaf_params on its output)
-        # sets these after construction.
+        '''Opaque-leaf metadata. Plain constructions carry None; only
+        instantiate_atom (and rename_leaf_params on its output) sets
+        these after construction.'''
         self.atom_symbol = None
         self.theta0 = None
         #self.fit = self.fitness()
@@ -185,15 +186,15 @@ cdef class RealFunctionC:
     def __copy__(self):
         cdef object copy_func = lambda input_x, params: self.func(input_x, params)
         cdef RealFunctionC copy_rf = RealFunctionC(copy_func, self.expr, copy(self.domain), copy(self.params))
-        # Phase 2.10 Stage 2: opaque-leaf identity travels with the function.
+        # Opaque-leaf identity travels with the function.
         copy_rf.atom_symbol = self.atom_symbol
         copy_rf.theta0 = None if self.theta0 is None else dict(self.theta0)
-        # Phase PP (review 2026-08-06): forward the pinned-constant marker
-        # and the literal's value — the ctor call above reset
-        # constant_value to its 1.0 default, so a copied pin-constant
-        # would re-classify as a parameter leaf (k inflation) and
-        # evaluate as 1.0. Legacy-safe: unpinned functions carry the
-        # default, so forwarding is the identity for them.
+        '''Forward the pinned-constant marker AND the literal's value.
+        The constructor call above reset constant_value to its 1.0
+        default, so without this a copied pinned constant would
+        re-classify as a parameter leaf (inflating k) and evaluate as
+        1.0. For ordinary functions these are the defaults, so
+        forwarding them is the identity.'''
         copy_rf.pinned_const = self.pinned_const
         copy_rf.constant_value = self.constant_value
         return copy_rf
@@ -210,15 +211,14 @@ cdef class RealFunctionC:
         cdef RealFunctionC copy_rf = RealFunctionC(
                 copy_func, self.expr, deepcopy(self.domain, memo2))
                 #,deepcopy(self.params, memo2)
-        # Phase 2.10 Stage 2: forward the opaque-leaf metadata (theta0 is a
-        # fixed reference dict, but copy it anyway so no tree copy can ever
-        # alias another's state).
+        '''Forward the opaque-leaf metadata. theta0 is a fixed reference
+        dict, but copy it anyway so no tree copy can ever alias
+        another's state.'''
         copy_rf.atom_symbol = self.atom_symbol
         copy_rf.theta0 = None if self.theta0 is None else dict(self.theta0)
-        # Phase PP (review 2026-08-06): same forward as __copy__ — see
-        # the note there (deepcopy runs on EVERY MCMC proposal, so a
-        # dropped flag would corrupt any pin_numbers tree on its first
-        # step). Legacy identity: defaults forwarded unchanged.
+        '''Same forward as __copy__, and it matters more here: deepcopy
+        runs on every MCMC proposal, so a dropped flag would corrupt a
+        pinned-constant tree on its very first step.'''
         copy_rf.pinned_const = self.pinned_const
         copy_rf.constant_value = self.constant_value
         # classify_symbols iterates a sympy SET; re-impose the original
@@ -343,12 +343,13 @@ cdef class RealFunctionC:
         if params is None:
             #print('params is NONE')
             params = {}
-        # Phase 2.10 Stage 2: opaque atomic leaf. theta0 (set only by
-        # instantiate_atom) supplies reference values for any internal
-        # parameter missing from `params`, so params-free probes (is_valid,
-        # bare evaluate) are well-defined on opaque leaves — the exact
-        # analogue of the parameter-leaf constant_value fallback below.
-        # A fresh merged dict is built so the caller's dict is never mutated.
+        '''Opaque atomic leaf. theta0 (set only by instantiate_atom)
+        supplies reference values for any internal parameter missing
+        from `params`, so params-free probes such as is_valid or a bare
+        evaluate stay well-defined on opaque leaves. This is the exact
+        analogue of the parameter-leaf constant_value fallback below.
+        The merged dict is fresh so the caller's dict is never
+        mutated.'''
         cdef str _nm
         cdef dict _merged
         if self.theta0 is not None:
@@ -385,8 +386,9 @@ cdef class RealFunctionC:
             params = {}
         cdef double fitness = self.fitness(y, params, x)
         cdef int N = y.shape[0]
-        # Phase 2.13(i): sigma profiled -> counts as a parameter, penalty on
-        # len(params)+1 (matches Tree._shortcut_bic's sigma=None branch).
+        # A profiled sigma is itself an estimated parameter, so the
+        # penalty is on len(params)+1. Matches Tree._shortcut_bic's
+        # sigma=None branch.
         return -0.5 * N * (_LOG(2.0 * _PI * fitness) + 1.0) - 0.5*(len(params) + 1)*_LOG(N) #-0.5 * N * fitness /s2
 
     cdef double _log_sigma_bic(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -432,22 +434,25 @@ cdef class RealFunctionC:
             return -np.inf
 
     # ------------------------------------------------------------------
-    # NaN-leak fix (2026-07-15, PLAN §4.2b forensics): the MSE was
-    # np.nanmean(resid**2), which silently DROPS NaN predictions — the
-    # optimizer then actively drives parameters into NaN territory
-    # (e.g. x**8.6e14: NaN on 99.6% of the grid) because that shrinks
-    # the mean over the surviving points, and such "NaN monsters" out-
-    # scored the exact truth by ~75 nats. Correct semantics: a model
-    # with ANY non-finite prediction at an observed point has zero
-    # likelihood. Implemented as plain np.sum (NaN/inf PROPAGATE) + one
-    # scalar C isfinite + a LARGE FINITE penalty (optimizer-stable: no
-    # NaN plateaus, so scipy's bracket() cannot blow up there).
-    # PERFORMANCE: on all-finite vectors np.sum is bit-identical to
-    # what nanmean computed (same pairwise reduction) and strictly
-    # cheaper (no isnan mask / count / Python dispatch). 1e100
-    # dominates any is_valid-surviving legitimate mse (<= ~1e24) while
-    # -0.5*N*(1e100/sigma^2) stays ~200 orders below double overflow
-    # and ~190 orders above the -1e299 hard-reject sentinel.
+    '''A model with ANY non-finite prediction at an observed point has
+    zero likelihood. Getting this wrong was expensive: the MSE used to
+    be np.nanmean(resid**2), which silently DROPS NaN predictions, and
+    the optimizer learned to exploit it — it drove parameters into NaN
+    territory (x**8.6e14 is NaN on 99.6% of the grid) because that
+    shrinks the mean over the surviving points, and those "NaN
+    monsters" out-scored the exact truth by ~75 nats.
+
+    So: plain np.sum, letting NaN/inf PROPAGATE, one scalar C isfinite
+    check, and a large FINITE penalty. Finite rather than inf keeps the
+    optimizer stable — no NaN plateaus for scipy's bracket() to blow up
+    on.
+
+    On speed: for all-finite vectors np.sum is bit-identical to what
+    nanmean computed (same pairwise reduction) and strictly cheaper (no
+    isnan mask, no count, no Python dispatch). The 1e100 value dominates
+    any legitimate mse that survives is_valid (<= ~1e24), while
+    -0.5*N*(1e100/sigma^2) stays ~200 orders below double overflow and
+    ~190 orders above the -1e299 hard-reject sentinel.'''
     # ------------------------------------------------------------------
     cdef posterior_fitness(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict params=None, object x = None, double penalty=0.0):
         if x is None:
@@ -728,13 +733,13 @@ cdef class RealFunctionC:
             )
         except (RuntimeError, ValueError, FloatingPointError,
                 OverflowError) as _e:
-            # Guarded optimizer failure (2026-07-15): scipy's bracket()
-            # raises RuntimeError("Too many iterations.") when a 1-D
-            # line-search slice is non-finite (e.g. exp overflow) — not
-            # preventable via maxiter options. Keep the warm-start
-            # parameters and report +inf, so the NaN-fill scoring path
-            # rejects the candidate instead of killing the process.
-            # Fires ONLY where the unguarded call would have died.
+            '''scipy's bracket() raises RuntimeError("Too many
+            iterations.") when a 1-D line-search slice is non-finite,
+            e.g. after an exp overflow, and no maxiter option prevents
+            it. Keep the warm-start parameters and report +inf so the
+            scoring path rejects the candidate instead of the exception
+            killing the process. This only fires where the unguarded
+            call would have died anyway.'''
             result = OptimizeResult(x=initial_params, fun=np.inf,
                                     success=False, status=-1, nit=0,
                                     nfev=0, message="guarded: %r" % (_e,))
@@ -1069,10 +1074,11 @@ cdef class RealFunctionC:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2.10 Stage 2 — opaque atomic primitives (DESIGN_2_10_PRIMITIVES.md §1,
-# §5, §9 item 2). A user primitive is an atom of Psi_k: ONE leaf symbol
-# carrying k >= 1 internal parameters. The parameter leaf is the k = 1
-# constant special case; function leaves are k = 0 — one object class.
+'''Opaque atomic primitives (DESIGN_2_10_PRIMITIVES.md §1, §5, §9
+item 2). A user primitive is an atom of Psi_k: one leaf symbol carrying
+k >= 1 internal parameters. The parameter leaf is just the k = 1
+constant special case and function leaves are k = 0, so all three are
+one object class.'''
 # ---------------------------------------------------------------------------
 
 cdef _slot_sort_key(str s):
@@ -1103,10 +1109,9 @@ cdef class AtomSpec:
         if name is None or len(name) == 0:
             raise ValueError("AtomSpec: name must be a non-empty string")
         if "[" in name or "]" in name:
-            # Phase PP (review 2026-08-06 F6): brackets are reserved for
-            # the pin suffix — a base name like "A[c1=0.5]" would spoof
-            # the extended symbol of AtomSpec("A", ..., {"c1": 0.5}) in
-            # every registry.
+            '''Brackets are reserved for the pin suffix. A base name
+            like "A[c1=0.5]" would spoof the extended symbol of
+            AtomSpec("A", ..., {"c1": 0.5}) in every registry.'''
             raise ValueError(
                 "AtomSpec: name %r must not contain '[' or ']' (reserved "
                 "for the pinned-parameter suffix)" % (name,))
@@ -1145,22 +1150,24 @@ cdef class AtomSpec:
                 % name)
         slots.sort(key=_slot_sort_key)
         # ------------------------------------------------------------------
-        # Phase PP (pinned parameters, 2026-08-06; PROMPT_DEV_PINNED_PARAMS):
-        # `pinned` maps a strict SUBSET of the template's placeholders to
-        # fixed float values. Pinned placeholders are SUBSTITUTED into the
-        # template expression here, at spec construction — downstream they
-        # are numeric literals inside the compiled function, so they are
-        # structurally incapable of appearing in get_params/name_values,
-        # the optimizer vector, k, theta dicts, or rename maps. Identity:
-        # the canonical vocabulary symbol self.name is EXTENDED with a
-        # deterministic "[c1=v1,c2=v2]" suffix (sorted names, shortest
-        # round-trip float repr), so different pin values are different
-        # Polya cells / registry keys / burn-in tokens / wire symbols, and
-        # the atom's complexity is charged through the PRIOR (its cell),
-        # not through the BIC k — a pinned atom is a basic function.
-        # self.base_name keeps the caller's name for __reduce__ / spec
-        # re-derivation (re-deriving from the extended name would double
-        # the suffix).
+        '''`pinned` maps a strict SUBSET of the template's placeholders
+        to fixed float values. They are substituted into the template
+        expression right here, at spec construction, so from this point
+        on they are numeric literals inside the compiled function:
+        structurally incapable of turning up in get_params/name_values,
+        the optimizer vector, k, theta dicts, or rename maps.
+
+        Identity: the canonical vocabulary symbol self.name is extended
+        with a deterministic "[c1=v1,c2=v2]" suffix (sorted names,
+        shortest round-trip float repr). Different pin values therefore
+        mean different Polya cells, registry keys, burn-in tokens and
+        wire symbols, and the atom's complexity is charged through the
+        PRIOR (its own cell) rather than the BIC k. In other words a
+        pinned atom is a basic function, not a parameterized one.
+
+        self.base_name keeps the caller's name for __reduce__ and for
+        spec re-derivation; re-deriving from the extended name would
+        double the suffix.'''
         # ------------------------------------------------------------------
         cdef dict pinned_f = None
         cdef list pin_keys
@@ -1199,11 +1206,11 @@ cdef class AtomSpec:
                     "numeric constants directly)" % (base_name,))
             sub_map = {}
             for pk in pin_keys:
-                # 17 significant digits (review 2026-08-06 F5): the
-                # default 15-digit Float print truncates tier-1-style
-                # pins (attachment values need the full double) through
-                # the from_string(str(expr)) rebuilds; 17 digits is the
-                # shortest-round-trip guarantee for a 53-bit double.
+                '''17 significant digits, not sympy's default 15: the
+                shorter print truncates pins that need the full double
+                (attachment values, for instance) as they pass through
+                the from_string(str(expr)) rebuilds. 17 digits is the
+                shortest-round-trip guarantee for a 53-bit double.'''
                 sub_map[sp.Symbol(pk)] = sp.Float(pinned_f[pk], 17)
             expr = expr.subs(sub_map, simultaneous=True)
             # A pin can annihilate the variable (e.g. c1=0 in sin(c1*x)):
@@ -1218,12 +1225,12 @@ cdef class AtomSpec:
                     "every registered variable out of the template — the "
                     "pinned atom would be a constant map"
                     % (base_name, pinned_f))
-            # Review 2026-08-06 F3: a pin can also annihilate a FREE slot
-            # (e.g. c2=0 in "c0*sin(x) + c1*c2" kills c1). spec.k would
-            # then overcount the expression's parameters, and the skel
-            # wire ships the ACTUAL names while instantiate_atom demands
-            # spec.k of them — every MPI exchange of such trees would
-            # silently self-loop (the wire-fidelity starvation class).
+            '''A pin can also annihilate a FREE slot: c2=0 in
+            "c0*sin(x) + c1*c2" kills c1. spec.k would then overcount
+            the expression's parameters, and since the skeleton wire
+            ships the ACTUAL names while instantiate_atom demands
+            spec.k of them, every MPI exchange of such a tree would
+            silently self-loop.'''
             _free_after = set()
             for s in expr.free_symbols:
                 _free_after.add(str(s))
@@ -1247,13 +1254,14 @@ cdef class AtomSpec:
         self.k = len(slots)
 
     def __reduce__(self):
-        # Phase 2.10 Stage 3b: AtomSpec crosses the MPI wire (worker startup
-        # config ships the Forest's atoms). A template is fully determined
-        # by (name, template[, pinned]); rebuilding through __init__
-        # re-validates and re-derives expr/slots/k/name deterministically.
-        # Phase PP: rebuild from BASE name (+ pinned) — the extended name
-        # would double its suffix; unpinned specs keep the historical
-        # 2-tuple payload byte-identically.
+        '''AtomSpec crosses the MPI wire: the worker startup config
+        ships the Forest's atoms. A template is fully determined by
+        (name, template[, pinned]), and rebuilding through __init__
+        re-validates and re-derives expr/slots/k/name deterministically.
+
+        Rebuild from the BASE name plus pinned, never the extended name,
+        which would double its suffix. Unpinned specs keep the
+        historical 2-tuple payload byte for byte.'''
         if self.pinned:
             return (AtomSpec, (self.base_name, self.template,
                                dict(self.pinned)))
@@ -1345,14 +1353,17 @@ cpdef RealFunctionC rename_leaf_params(RealFunctionC rf, dict name_map):
 
 
 # ---------------------------------------------------------------------------
-# Phase FX (transparent/flexible atoms v1, 2026-07-28; PLAN Phase MR.2).
-# A FlexAtomSpec is a user-registered SCAFFOLD Psi(theta; s): a frozen
-# functional shape with k >= 0 internal parameters and ONE slot `s` that a
-# GP subtree fills at sampling time. Unlike the opaque AtomSpec above, the
-# slot content is mutable (gp_movesC.flex_slot_mutation); the shape and its
-# theta names are frozen. v1 semantics: flex atoms enter trees by SEEDING
-# only and are immortal (destructive outer moves force-reject); see
-# function_treeC.make_flex_node and gp_movesC for the kernel side.
+'''Transparent (flexible) atoms.
+
+A FlexAtomSpec is a user-registered SCAFFOLD Psi(theta; s): a frozen
+functional shape with k >= 0 internal parameters and ONE slot `s` that a
+GP subtree fills at sampling time. Unlike the opaque AtomSpec above the
+slot content is mutable (gp_movesC.flex_slot_mutation), while the shape
+and its theta names stay frozen.
+
+Scaffolds enter trees by SEEDING only and are immortal: destructive
+outer moves force-reject them. See function_treeC.make_flex_node and
+gp_movesC for the kernel side.'''
 # ---------------------------------------------------------------------------
 
 cdef class FlexAtomSpec:

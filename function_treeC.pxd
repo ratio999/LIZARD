@@ -18,9 +18,9 @@ cdef class Node:
     cdef _rebuild_ancestor_functions(self, Node node)
     cpdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
-    # Phase 2.10 Stage 2: internal-parameter values of an opaque atomic leaf
-    # (dict name -> float), None on every other node. Lives on the Node so
-    # tree deepcopies isolate it, exactly like parameter-leaf .value.
+    '''Internal-parameter values of an opaque atomic leaf (name ->
+    float), None on every other node. It lives on the Node so that tree
+    deepcopies isolate it, exactly like a parameter leaf's .value.'''
     cdef public object theta
     cpdef is_atomic(self)
     cpdef int leaf_k(self)
@@ -94,10 +94,11 @@ cdef class Node:
     cpdef update_func(self, list params_list=?, str user_prefix=?)
     cpdef flag_constants(self, list constants=?)
     cdef replace_constants_with_pars(self, dict name_values=?)
-    # Phase FX (transparent atoms v1, 2026-07-28) — appended at the END of
-    # the Node block (vtab hygiene). flex_spec: real_functionC.FlexAtomSpec
-    # or None; flex_names: ordered internal-parameter names; the mutable
-    # slot subtree lives in self.left, self.right is None.
+    '''Transparent-atom fields, declared at the END of the Node block to
+    keep the vtab layout stable. flex_spec is a
+    real_functionC.FlexAtomSpec or None; flex_names the ordered
+    internal-parameter names; the mutable slot subtree lives in
+    self.left, and self.right is None.'''
     cdef public object flex_spec
     cdef public object flex_names
     cpdef bint is_flex(self)
@@ -194,9 +195,9 @@ cdef class Tree:
                                dict cand_name_values,
                                double sigma)
 
-    # sigma-array fix (2026-07-28): ADDITIVE per-point-sigma companion of
-    # _log_likelihood_at, consumed by gp_movesC.parameter_refresh when the
-    # run's sigma is an array. The scalar method above is untouched.
+    '''Per-point-sigma companion of _log_likelihood_at, consumed by
+    gp_movesC.parameter_refresh when the run's sigma is an array. The
+    scalar method above is untouched.'''
     cdef double _log_likelihood_at_sigma_arr(self,
                                cnp.ndarray[cnp.float64_t, ndim=1] y,
                                dict cand_name_values,
@@ -207,9 +208,9 @@ cdef class Tree:
     cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?,
                             int new_depth=?, bint ensure_valid=?)
 
-    # Phase MD (multi-dataset joint evidence, 2026-07-31) — appended at
-    # the END of the Tree block (vtab hygiene). Explicit-argument scoring:
-    # the legacy y-only methods above are untouched.
+    '''Explicit-argument scoring for multi-dataset joint evidence,
+    declared at the END of the Tree block to keep the vtab layout
+    stable. The y-only methods above are untouched.'''
     cdef double _log_marginal_bic_x(self,
                                     cnp.ndarray x,
                                     cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -226,7 +227,7 @@ cdef class Tree:
 
 cdef _post_order_update(Node node)
 
-# Phase 2.10 Stage 3b: structural (skeleton) serialization for the MPI wire.
+# Structural (skeleton) serialization for the MPI wire.
 cpdef object tree_to_skel(Node node)
 cpdef Node node_from_skel(object skel,
                           cnp.ndarray domain,
@@ -248,8 +249,8 @@ cdef list _symbol_values(dict name_values)
 
 cdef _parameter_simplifier(object expr, list used_params)
 
-# Phase FX (transparent atoms v1, 2026-07-28) — module machinery. See
-# function_treeC.pyx for contracts; cross-module calls POSITIONAL ONLY.
+# Transparent-atom machinery. See function_treeC.pyx for the contracts;
+# cross-module calls POSITIONAL ONLY.
 cdef real_functionC.RealFunctionC _flex_function(object spec_obj, list names,
                                                  Node slot)
 cdef list _collect_flex_nodes(Node node, list out)
@@ -258,5 +259,5 @@ cpdef bint tree_has_flex(Node node)
 cpdef Node make_flex_node(object spec_obj, Node slot, list fresh_names,
                           object theta=?)
 
-# Phase MD (2026-07-31): ablation-switch getter (module-level append).
+# Reader for the BIC-penalty ablation switch.
 cpdef bint get_bic_penalty()

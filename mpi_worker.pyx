@@ -37,8 +37,8 @@ cdef function_treeC.Tree _helper(object expr, cnp.ndarray domain,
             # names ('sqrt(x)**a0' -> 'x**(a0/2)') that names_params
             # never carried. Missing names keep the default value —
             # harmless, stage-2 re-optimizes and shipped values are
-            # warm starts only. (Was an uncaught KeyError: first hit
-            # by the '**'+sqrt vocabulary of the CBC suite, 2026-07-15.)
+            # warm starts only. This used to be an uncaught KeyError,
+            # first hit by the '**'+sqrt vocabulary of the CBC suite.
             if (not param.function.expr.is_Number
                     and param.get_description() in names_params):
                 param.set_value(names_params[param.get_description()])
@@ -85,16 +85,16 @@ cdef void _worker_main():
     cdef list all_primitives = config['all_primitives']
     cdef double T = config['T']
     cdef dict local_cache = config['tree_cache']
-    # Phase 2.10 (final): opaque templates — resolve '@atom:' tokens in
-    # all_primitives and rebuild 'skel3b' depth-1 payloads. None/absent for
-    # atom-free burn-ins (legacy configs included).
-    # Flexible-domain fix (adversarial review): the wire carries
-    # (name, template) STRING PAIRS; AtomSpec construction is
-    # registry-dependent and must happen HERE, after the set_variables
-    # call above — an AtomSpec object in the config would have been
-    # unpickled during the bcast, under this fresh process's DEFAULT
-    # registry, and its template validation would have crashed the worker
-    # (deadlocking the master's next collective).
+    '''Opaque templates: resolve the '@atom:' tokens in all_primitives
+    and rebuild the 'skel3b' depth-1 payloads. Absent for atom-free
+    burn-ins.
+
+    The wire carries (name, template) STRING PAIRS rather than AtomSpec
+    objects, because AtomSpec construction is registry-dependent and has
+    to happen HERE, after the set_variables call above. An AtomSpec in
+    the config would be unpickled during the bcast, under this fresh
+    process's DEFAULT registry, and its template validation would crash
+    the worker — deadlocking the master's next collective.'''
     cdef list _atom_wire = config.get('atoms')
     cdef list atoms = None
     cdef dict atom_specs = None
@@ -102,8 +102,8 @@ cdef void _worker_main():
     if _atom_wire:
         atoms = []
         atom_specs = {}
-        # Phase PP: pinned specs arrive as (base_name, template, pinned)
-        # TRIPLES; unpinned as the historical pairs (byte-identical wire).
+        # Pinned specs arrive as (base_name, template, pinned) TRIPLES;
+        # unpinned ones as the historical pairs.
         for _entry in _atom_wire:
             if len(_entry) > 2:
                 _spec_obj = real_functionC.AtomSpec(_entry[0], _entry[1],
@@ -131,11 +131,11 @@ cdef void _worker_main():
 
     for expr, names_params, post in depth1_data:
         #print(i, expr, names_params)
-        # Phase 2.10 (final): atom-bearing depth-1 trees arrive as
-        # ('skel3b', skeleton, description) payloads — rebuild through the
-        # Stage 3b wire (sigma/g_tau 1.0/1.0: the same Tree defaults the
-        # legacy _helper path produces). A failed rebuild leaves None in
-        # the slot, which the work loop below already skips.
+        '''Atom-bearing depth-1 trees arrive as
+        ('skel3b', skeleton, description) payloads, so rebuild them
+        through the skeleton wire. sigma/g_tau of 1.0/1.0 are the same
+        Tree defaults the plain _helper path produces. A failed rebuild
+        leaves None in the slot, which the work loop below skips.'''
         if isinstance(expr, tuple) and len(expr) == 3 and expr[0] == 'skel3b':
             tree = groveC._tree_from_wire(expr, names_params, domain, funcs,
                                           1.0, 1.0, atom_specs)
@@ -178,10 +178,10 @@ cdef void _worker_main():
             if item_type == 'd1_prim':
                 _, i, prim_str, op = item
 
-                # Create primitive node. Phase 2.10 (final): via the token
-                # resolver; the 'c' name band because _combine_nodes below
-                # renames nothing by default, and 'c' collides with neither
-                # the all-'a' depth-1 names nor the 'b' rename buffer.
+                '''Create the primitive node via the token resolver. The
+                'c' name band is deliberate: _combine_nodes below renames
+                nothing by default, and 'c' collides with neither the
+                all-'a' depth-1 names nor the 'b' rename buffer.'''
                 prim_node = groveC._burn_in_primitive_node(
                     prim_str, domain, atom_specs, 'c', 1)
 
@@ -266,14 +266,15 @@ cdef function_treeC.Tree _combine_nodes(function_treeC.Node left_node, function_
 
     #gp_movesC.rename_prefix(preliminary_tree)
 
-    # Phase 2.10 (final): this combiner historically renames NOTHING (the
-    # rename_prefix above was disabled), which lets same-named PLAIN
-    # parameters couple across sides — a tolerated legacy quirk kept
-    # bit-identical here. Opaque internals must NOT couple (two atoms
-    # sharing theta names would tie their fitted values), so when the
-    # right side carries atomic leaves it is renamed wholesale into the
-    # 'b' namespace (plain + atomic; refresh_params below re-canonicalises
-    # the plains to 'a'). Atom-free behaviour is unchanged.
+    '''This combiner renames NOTHING, since the rename_prefix above is
+    disabled, which lets same-named PLAIN parameters couple across
+    sides. That is a tolerated quirk, kept as-is.
+
+    Opaque internals must NOT couple, though: two atoms sharing theta
+    names would tie their fitted values together. So when the right side
+    carries atomic leaves it is renamed wholesale into the 'b' namespace
+    (plain and atomic alike), and refresh_params below re-canonicalises
+    the plain ones back to 'a'. Atom-free behaviour is unchanged.'''
     cdef function_treeC.Tree _pre
     if gp_movesC._contains_atomic(right_copy):
         _pre = function_treeC.Tree(
@@ -315,12 +316,11 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
     if not tree.is_valid(domain):
         return None
     
-    # Optimize parameters if needed. Phase 2.10 (final): gate on
-    # name_values, not tree.params — opaque internals are continuous
-    # parameters with no plain parameter Node, and skipping the fit would
-    # score the reference theta as if it were the MLE (same generalization
-    # as the Stage 3a optim_need gate; identical truthiness for atom-free
-    # trees).
+    '''Optimize parameters if needed, gating on name_values rather than
+    tree.params: opaque internals are continuous parameters with no
+    plain parameter Node, and skipping the fit would score the reference
+    theta as if it were the MLE. Same generalization as the optim_need
+    gate in the kernel, and identical truthiness for atom-free trees.'''
     if len(tree.name_values) > 0:
         tree.update_parameters(domain, y, method_str, use_gradients)
     
@@ -335,13 +335,13 @@ cdef tuple _evaluate_tree(function_treeC.Tree tree, cnp.ndarray[cnp.float64_t, n
 
     if not np.isfinite(post):
         return None
-    # Phase 2.10 (final): atom-bearing candidates must return as skeleton
-    # wires — sympify(description) below would decompose the opaque leaves
-    # into ordinary subtrees on the master's rebuild. _tree_to_wire yields
-    # the same (payload, name_values, post) 3-tuple shape.
-    # Flexible domain (plan §0 D8): multivariate candidates ALWAYS return
-    # as skeleton wires too — the master's raw-expr rebuild path
-    # (_expr_to_tree) is d=1-only.
+    '''Atom-bearing candidates must return as skeleton wires, because
+    the sympify(description) below would decompose the opaque leaves
+    into ordinary subtrees on the master's rebuild. _tree_to_wire yields
+    the same (payload, name_values, post) 3-tuple shape.
+
+    Multivariate candidates always return as skeleton wires too: the
+    master's raw-expr rebuild path (_expr_to_tree) is d=1 only.'''
     if (gp_movesC._contains_atomic(tree.root)
             or real_functionC.n_variables() > 1):
         return groveC._tree_to_wire(tree, post)
@@ -361,32 +361,32 @@ def worker_main():
 
 
 # ===========================================================================
-# Phase 2.12: MPI-parallel EMC sampling worker (spawned by
-# groveC.Forest.run_mpi_spawn; one worker per temperature rung).
-#
-# The worker builds and PERSISTENTLY OWNS one Grove for the whole run:
-#   * mutation steps run locally (grove.run) with polya_defer=True so the
-#     accepted Polya paths are collected, gathered by the master each round
-#     and replayed identically on every replica (deterministic replay);
-#   * exchange / crossover decisions happen on the master; this worker only
-#     serves 'get_tree' (serialize a slot) and 'set_tree' (install a slot)
-#     commands, using the ('skel3b', skeleton, description) structural
-#     wire for EVERY tree (wire-fidelity fix 2026-07-24, force_skel=True:
-#     the historical raw-sympy payload canonicalized out of '**'-free
-#     vocabularies and the master discarded the rebuilds, starving its
-#     population; burn-in keeps the legacy dual format).
-# The command loop is bcast-driven: EVERY worker receives every command and
-# only the addressed rank acts on the point-to-point parts, so no
-# interleaving can deadlock. `worker_main` (burn-in) is untouched.
+'''MPI-parallel EMC sampling worker, spawned by
+groveC.Forest.run_mpi_spawn, one worker per temperature rung.
+
+The worker builds and PERSISTENTLY OWNS one Grove for the whole run:
+
+  * mutation steps run locally (grove.run) with polya_defer=True, so the
+    accepted Polya paths are collected, gathered by the master each
+    round and replayed identically on every replica;
+  * exchange and crossover decisions happen on the master. This worker
+    only serves 'get_tree' (serialize a slot) and 'set_tree' (install a
+    slot) commands, using the ('skel3b', skeleton, description)
+    structural wire for EVERY tree.
+
+The command loop is bcast-driven: every worker receives every command
+and only the addressed rank acts on the point-to-point parts, so no
+interleaving can deadlock. worker_main (burn-in) is untouched.'''
 # ===========================================================================
-# Phase 2.10 Stage 3b: the wire has ONE implementation — groveC's cpdef
-# pair. Wire-fidelity fix (2026-07-24): the SAMPLING wire ships EVERY
-# tree as the 'skel3b' structural skeleton (force_skel=True) — the
-# legacy raw-sympy payload canonicalized (x*x*x -> x**3) out of
-# '**'-free vocabularies and the master rejected the rebuilds, keeping
-# stale slots. Burn-in keeps the legacy dual payload (default False).
-# These wrappers only keep the historical local names; calls are
-# POSITIONAL (cpdef across cimport).
+'''The wire has ONE implementation, groveC's cpdef pair. The SAMPLING
+wire ships EVERY tree as the 'skel3b' structural skeleton
+(force_skel=True): the older raw-sympy payload canonicalized
+(x*x*x -> x**3) out of '**'-free vocabularies, so the master rejected
+the rebuilds and kept stale slots, starving its population. Burn-in
+keeps the dual payload (force_skel default False).
+
+These wrappers exist only to keep the historical local names; the calls
+are POSITIONAL, as cpdef across a cimport requires.'''
 cdef tuple _sampler_tree_to_wire(function_treeC.Tree tree, double post):
     return groveC._tree_to_wire(tree, post, True)
 
@@ -437,18 +437,19 @@ cdef void _sampler_main():
             alpha_0=float(pstate['alpha_0']))
         polya.set_state(pstate)
 
-    # ---- Phase 2.10 Stage 3b: opaque-primitive templates --------------------
-    # Shipped in the config as (name, template) STRING PAIRS (flexible-
-    # domain fix, adversarial review: AtomSpec construction is registry-
-    # dependent, so it must happen AFTER the set_variables call above —
-    # a pickled AtomSpec would have re-validated during the bcast under
-    # this fresh process's default registry and crashed the worker).
-    # Rebuilt specs go to (a) the Grove, so this worker's kernel moves
-    # propose/retire opaque leaves with the same M+1+A densities as the
-    # master's, and (b) every wire rebuild, so 'skel3b' payloads
-    # reconstruct atoms as units. The atom SYMBOLS are already in
-    # polya_state's vocabulary, so the ('kind', idx) path mapping is
-    # identical on every replica.
+    # ---- opaque-primitive templates -----------------------------------------
+    '''Shipped in the config as (name, template) STRING PAIRS: AtomSpec
+    construction is registry-dependent, so it must happen AFTER the
+    set_variables call above. A pickled AtomSpec would re-validate during
+    the bcast under this fresh process's default registry and crash the
+    worker.
+
+    The rebuilt specs go to two places: the Grove, so this worker's
+    kernel moves propose and retire opaque leaves with the same M+1+A
+    densities as the master's; and every wire rebuild, so 'skel3b'
+    payloads reconstruct atoms as units. The atom SYMBOLS are already in
+    polya_state's vocabulary, so the ('kind', idx) path mapping is
+    identical on every replica.'''
     cdef list _atom_wire = config.get('atoms')
     cdef list atoms = None
     cdef dict atom_specs = None
@@ -456,8 +457,8 @@ cdef void _sampler_main():
     if _atom_wire:
         atoms = []
         atom_specs = {}
-        # Phase PP: pinned specs arrive as (base_name, template, pinned)
-        # TRIPLES; unpinned as the historical pairs (byte-identical wire).
+        # Pinned specs arrive as (base_name, template, pinned) TRIPLES;
+        # unpinned ones as the historical pairs.
         for _entry in _atom_wire:
             if len(_entry) > 2:
                 _spec_obj = real_functionC.AtomSpec(_entry[0], _entry[1],
@@ -480,16 +481,16 @@ cdef void _sampler_main():
         polya=polya, seed=my_seed, g_tau=ctor['g_tau'],
         adapt_moves=bool(ctor['adapt_moves']),
         atoms=atoms,
-        # Phase 4.4 v2: rebuild the structural-prior tilt LOCALLY from
-        # the declarative spec (None -> feature off, legacy path). The
-        # .get defaults keep older configs (no such keys) working. Spec
-        # resolution happens inside the Grove ctor — safely AFTER the
-        # set_variables install above (a builder may reference variables).
+        # Rebuild the structural-prior tilt LOCALLY from the declarative
+        # spec; None means the feature is off. The .get defaults keep
+        # older configs without these keys working. Spec resolution
+        # happens inside the Grove ctor, safely after the set_variables
+        # install above, since a builder may reference variables.
         structural_prior_spec=ctor.get('structural_prior_spec'),
         structural_prior_cache=bool(ctor.get('structural_prior_cache',
                                              True)),
-        # Legacy ('x',) stays on the variables=None ctor path
-        # (bit-identical); custom/multivariate registries are explicit.
+        # A plain ('x',) registry stays on the variables=None ctor path;
+        # custom or multivariate registries are passed explicitly.
         variables=(None if tuple(ctor.get('variables', ('x',))) == ('x',)
                    else tuple(ctor['variables'])))
     grove.polya_defer = True

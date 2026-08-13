@@ -11,22 +11,24 @@ cpdef bint is_variable_name(object name)
 
 
 cdef class AtomSpec:
-    # Phase 2.10 Stage 2: a user-registered opaque primitive TEMPLATE
-    # (DESIGN_2_10_PRIMITIVES.md par.1): an atom of Psi_k, k >= 1. `name` is
-    # the canonical Polya-vocabulary symbol (ONE cell per template, however
-    # many instantiations exist); `template` the expression string in x and
-    # k placeholder parameters; `slots` the placeholder names in a fixed
-    # deterministic (natural) order used positionally by instantiate_atom.
+    '''A user-registered opaque primitive TEMPLATE
+    (DESIGN_2_10_PRIMITIVES.md par.1): an atom of Psi_k, k >= 1.
+
+    `name` is the canonical Polya-vocabulary symbol, one cell per
+    template however many instantiations exist; `template` the
+    expression string in x and k placeholder parameters; `slots` the
+    placeholder names in a fixed deterministic (natural) order, used
+    positionally by instantiate_atom.'''
     cdef public str name
     cdef public str template
     cdef public object expr
     cdef public list slots
     cdef public int k
-    # Phase PP (pinned parameters, 2026-08-06) — appended at block END.
-    # base_name: the caller's name WITHOUT the "[c1=...]" pin suffix
-    # (self.name carries the suffix and is the vocabulary/registry key);
-    # pinned: {placeholder: float} or None. Values are substituted into
-    # self.expr at construction — they exist nowhere else downstream.
+    '''Pinned parameters. base_name is the caller's name WITHOUT the
+    "[c1=...]" suffix (self.name carries it and is the vocabulary key);
+    pinned is {placeholder: float} or None. The values are substituted
+    into self.expr at construction, so they exist nowhere else
+    downstream. Declared last to keep the field layout stable.'''
     cdef public str base_name
     cdef public object pinned
 
@@ -46,17 +48,21 @@ cdef class RealFunctionC:
     cdef object cfit_expr
     cdef dict grad_funcs
     cdef object constant_value
-    # Phase 2.10 Stage 2 (opaque atomic leaves): non-None ONLY on functions
-    # built by instantiate_atom. atom_symbol = the template's canonical
-    # vocabulary name; theta0 = {internal name: reference value} fallback
-    # used by evaluate() when a params dict omits the internal names
-    # (mirrors the parameter-leaf constant_value convention).
+    ''' non-None ONLY on functions
+    built by instantiate_atom. atom_symbol = the template's canonical
+    vocabulary name; theta0 = {internal name: reference value} fallback
+    used by evaluate() when a params dict omits the internal names
+    (mirrors the parameter-leaf constant_value convention).
+    '''
     cdef public str atom_symbol
     cdef public dict theta0
-    # Phase PP (2026-08-06): True marks a PINNED CONSTANT leaf function
-    # (expr_to_tree pin_numbers=True) — a numeric literal that must NOT
-    # classify as a parameter leaf (Node.is_param checks this flag).
-    # Zero-init False everywhere legacy. Appended at field-block end.
+    
+    ''' True marks a PINNED CONSTANT leaf function
+    (expr_to_tree pin_numbers=True) — a numeric literal that must NOT
+    classify as a parameter leaf (Node.is_param checks this flag).
+    Zero-init False everywhere legacy. Appended at field-block end.
+    '''
+    
     cdef public bint pinned_const
     
     cdef _update_symbols(self)
@@ -139,19 +145,19 @@ cdef double _wrapper(void *self_ptr, double *x, double w, int ndim) noexcept
 cpdef cnp.ndarray _domain_fixer(
                     cnp.ndarray domain)
 
-# Phase 2.10 Stage 2: opaque-leaf factory + rename helper. Both cpdef so
-# gp_movesC / function_treeC call them across the cimport boundary --
-# POSITIONAL ARGS ONLY at cross-module call sites (kwargs on cpdef across
-# cimport raise NameError at runtime; see gp_movesC build_tree note).
+''' opaque-leaf factory + rename helper. Both cpdef so
+gp_movesC / function_treeC call them across the cimport boundary --
+POSITIONAL ARGS ONLY at cross-module call sites (kwargs on cpdef across
+cimport raise NameError at runtime; see gp_movesC build_tree note).
+'''
 cpdef RealFunctionC instantiate_atom(AtomSpec spec,
                     cnp.ndarray domain,
                     list fresh_names)
 
 cpdef RealFunctionC rename_leaf_params(RealFunctionC rf, dict name_map)
 
-# Phase FX (transparent/flexible atoms v1, 2026-07-28): scaffold template
-# with one mutable slot. New class APPENDED at file end (no vtab shift of
-# existing types). See real_functionC.pyx for the contract.
+''' scaffold template with one mutable slot. New class APPENDED at file end (no vtab shift of
+existing types). See real_functionC.pyx for the contract.'''
 cdef class FlexAtomSpec:
     cdef public str name
     cdef public str template

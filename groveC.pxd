@@ -5,10 +5,10 @@ cimport polya_treeC
 
 cdef class Grove:
     cdef list operations
-    # Phase 2.10 Stage 3a: opaque-primitive templates (list of
-    # real_functionC.AtomSpec, or None). Passed UNIFORMLY to every
-    # atom-aware kernel move in _propose — mixed wiring would break the
-    # birth/death density pairing exactly like an operations mismatch.
+    '''Opaque-primitive templates (a list of real_functionC.AtomSpec, or
+    None). Passed UNIFORMLY to every atom-aware kernel move in _propose;
+    mixed wiring would break the birth/death density pairing exactly the
+    way an operations mismatch does.'''
     cdef public list atoms
     cdef object data
     cdef public int size
@@ -42,30 +42,29 @@ cdef class Grove:
     cdef public dict move_accepts
     cdef public dict _am_states
     # Noise scale for raw-likelihood scoring inside parameter_refresh.
-    # Placeholder until Phase 2.7(a) wires sigma=None -> profiled sigma.
     #cdef public double sigma
-    # PR mixture weight (Phase 2.1.PR D3, default 0.02).
+    # PR mixture weight (default 0.02).
     cdef public double pr_prob
-    # Phase 2.7(f): per-topology BIC cache.
-    # Maps tree_get_description() -> (log_evidence, dict(name_values)).
-    # Invalidated whenever the y reference changes between _step calls.
+    '''Per-topology BIC cache: tree_get_description() ->
+    (log_evidence, dict(name_values)). Invalidated whenever the y
+    reference changes between _step calls.'''
     cdef public dict _bic_cache
     cdef public object _cache_y
-    # Phase 4.4 (structural-constraint prior tilt, 2026-07-19): opt-in
-    # user callable tree -> log-prior increment (e.g. -lambda*C(tree)
-    # for an asymptotic-behaviour constraint). A PRIOR term: enters the
-    # acceptance sums next to the Polya log-prior, never mse/BIC/
-    # root_posteriors. None (default) = bit-identical legacy.
+    '''Structural-constraint prior tilt: an opt-in user callable mapping
+    a tree to a log-prior increment, e.g. -lambda*C(tree) for an
+    asymptotic-behaviour constraint. It is a PRIOR term, so it enters
+    the acceptance sums next to the Polya log-prior and never touches
+    mse, BIC or root_posteriors. None is the default.'''
     cdef public object structural_prior
     cdef public dict _sp_cache          # description -> tilt (y-independent)
     cdef public bint structural_prior_cache
-    # v2 (2026-07-22): the declarative ('module', 'builder', kwargs)
-    # spec the callable was resolved from, or None. Picklable — it is
-    # what run_mpi_spawn ships so workers rebuild the tilt locally.
+    '''The declarative ('module', 'builder', kwargs) spec the callable
+    was resolved from, or None. Being picklable, this is what
+    run_mpi_spawn ships so workers can rebuild the tilt locally.'''
     cdef public object structural_prior_spec
-    # Phase 2.8: optional adaptive move-weight calibration (OFF by default).
-    # _move_logits holds the 6 logical-group logits; _adapt_t counts
-    # adaptive updates for the diminishing step size gamma_t.
+    '''Optional adaptive move-weight calibration, off by default.
+    _move_logits holds the 6 logical-group logits and _adapt_t counts
+    adaptive updates for the diminishing step size gamma_t.'''
     cdef public bint adapt_moves
     cdef public double adapt_gamma0
     cdef public double adapt_t0
@@ -74,17 +73,17 @@ cdef class Grove:
     cdef public double adapt_target
     cdef public cnp.ndarray _move_logits
     cdef public long _adapt_t
-    # Phase 2.12 (MPI sampling): defer Polya reinforcement for replay-sync.
+    # Defer Polya reinforcement so MPI replicas can replay in sync.
     cdef public bint polya_defer
     cdef public list _deferred_paths
-    # Phase FX (transparent atoms v1, 2026-07-28): flexible scaffold
-    # templates (list of real_functionC.FlexAtomSpec, or None). None =>
-    # bit-identical legacy (no 9th move, no stats key). Appended at the
-    # END of the attribute block (struct-layout hygiene).
+    '''Flexible scaffold templates (a list of
+    real_functionC.FlexAtomSpec, or None). None means no 9th move and no
+    extra stats key. Declared at the END of the attribute block to keep
+    the struct layout stable.'''
     cdef public object flex_atoms
-    # Phase MD (multi-dataset joint evidence, 2026-07-31): list of
-    # validated (x_j, y_j, sigma_j) tuples or None (=> bit-identical
-    # legacy); reduction config (PLAN MR.4 D4-D6). Appended at block end.
+    '''Multi-dataset joint evidence: a list of validated
+    (x_j, y_j, sigma_j) tuples, or None, plus the reduction config.
+    Also declared at block end for layout stability.'''
     cdef public object datasets
     cdef public str md_combine
     cdef public double md_softmin_beta
@@ -116,7 +115,7 @@ cdef class Grove:
 
     cdef  legacy_step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
     cdef _step(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
-    # Phase 2.13(b1): joint accept/install for the within-grove crossover pair.
+    # Joint accept/install for the within-grove crossover pair.
     cdef bint _step_pair_crossover(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                                    int i, int j,
                                    function_treeC.Tree candA,
@@ -125,14 +124,14 @@ cdef class Grove:
     cdef double _score_post(self, function_treeC.Tree cand,
                             cnp.ndarray[cnp.float64_t, ndim=1] y,
                             bint optimize=*)
-    # Phase 4.4: structural-prior tilt evaluator (0.0 when feature off).
+    # Structural-prior tilt evaluator; returns 0.0 when the feature is off.
     cdef double _sp(self, function_treeC.Tree tree)
     cpdef run(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps)
     cpdef dict move_stats(self)
     cpdef list drain_deferred_paths(self)
     cdef _step_parameter_refresh(self, cnp.ndarray[cnp.float64_t, ndim=1] y)
 
-    # Phase 2.10 (final): burn-in token list + AtomSpec registry.
+    # Burn-in token list + AtomSpec registry.
     cdef tuple _burn_in_primitives(self)
 
     cpdef burn_in_combinations(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -171,8 +170,8 @@ cdef class Grove:
 
     cpdef  acceptance_rate(self)
 
-    # Phase MD (2026-07-31) — appended at the END of the method list
-    # (vtab hygiene).
+    # Joint scoring, declared at the END of the method list to keep the
+    # vtab layout stable.
     cdef double _score_cand_joint(self, function_treeC.Tree cand,
                                   bint optimize=*)
     cpdef object joint_thetas(self, function_treeC.Tree tree)
@@ -182,27 +181,27 @@ cdef class Forest:
     cdef public object temperatures
     cdef int n_procs
     cdef bint use_mpi
-    # Phase 2.10 Stage 3a: shared opaque-primitive templates, forwarded to
-    # every Grove; their symbols are pre-registered in the shared Polya at
-    # construction (registration invariance, THEORY 5.3).
+    '''Shared opaque-primitive templates, forwarded to every Grove.
+    Their symbols are pre-registered in the shared Polya at construction
+    (registration invariance, THEORY 5.3).'''
     cdef public list atoms
     cdef public polya_treeC.PolyaTree polya
     cdef object _py_rng
     cdef object _np_rng
-    # Phase 2.12 (MPI sampling): Grove ctor args for spawned workers.
+    # Grove ctor args for spawned workers.
     cdef dict _ctor
-    # Phase 4.1 (PT ladder tuning): per-consecutive-pair monitors (pure
-    # observability; read via ladder_stats()).
+    # Per-consecutive-pair monitors for ladder tuning: pure
+    # observability, read via ladder_stats().
     cdef public cnp.ndarray _swap_attempts
     cdef public cnp.ndarray _swap_accepts
     cdef public cnp.ndarray _xover_attempts
     cdef public cnp.ndarray _xover_accepts
-    # Phase FX (transparent atoms v1): shared flex templates, forwarded to
-    # every Grove; heads pre-registered in the shared Polya (registration
-    # invariance). None => legacy. Appended at block end (layout hygiene).
+    '''Shared flex templates, forwarded to every Grove, with their heads
+    pre-registered in the shared Polya (registration invariance).
+    Declared at block end for layout stability.'''
     cdef public object flex_atoms
-    # Phase MD (2026-07-31): the shared datasets list (Groves hold the
-    # validated copies; Forest keeps the flag for the spawn refusal).
+    # The shared datasets list. Groves hold the validated copies; the
+    # Forest keeps this only to refuse the spawn path.
     cdef public object datasets
     cpdef dict ladder_stats(self)
     cpdef run_all(self, cnp.ndarray[cnp.float64_t, ndim=1] y, int n_steps_per_grove)
@@ -218,13 +217,13 @@ cdef class Forest:
                              object subtree_rebuild_max_height=*)
     cpdef function_treeC.Tree best_tree(self)
 
-# Phase 2.10 (final): burn-in primitive-token resolver (mpi_worker uses it
-# for its 'd1_prim' work items). POSITIONAL calls only.
+# Burn-in primitive-token resolver; mpi_worker uses it for its
+# 'd1_prim' work items. POSITIONAL calls only.
 cpdef function_treeC.Node _burn_in_primitive_node(str prim_str, object domain,
                                                   dict atom_specs,
                                                   str prefix, int name_start)
 
-# Phase 2.10 Stage 3b: cpdef (mpi_worker delegates here; tests drive them).
+# cpdef because mpi_worker delegates here and the tests drive them.
 # Cross-module callers: POSITIONAL ARGS ONLY.
 cpdef tuple _tree_to_wire(function_treeC.Tree tree, double post,
                           bint force_skel=*)
@@ -235,8 +234,7 @@ cpdef function_treeC.Tree _tree_from_wire(object expr, dict name_values,
 
 cdef _bis2_parallel_helper(object x)
 
-# Phase MD (multi-dataset joint evidence, 2026-07-31) — module helpers,
-# appended at file end.
+# Joint-evidence module helpers.
 cdef double _md_dataset_penalty(int k, int n, object sigma)
 cdef double _reduce_joint(list posts, list penalties, str combine,
                           double softmin_beta, object baselines)

@@ -54,3 +54,6 @@ PROMPT_*.md
 *.md
 !PLAN.md
 !README.md
+
+# safety mirror of mr_preprocessing/scripts_mr (canonical copy lives THERE; this one stays uncommitted, 2026-08-09)
+scripts_mr/

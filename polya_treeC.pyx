@@ -24,12 +24,13 @@ from libc.math cimport log
 
 cdef list _OPERATIONS = ["+", "-", "*", "/", "o", "**"]
 
-# Phase 2.10 Stage 3c (vocabulary freeze): the reserved vocabulary key of
-# the SINGLE canonical parameter cell psi_const under unify_params=True.
-# DESIGN_2_10_PRIMITIVES.md §1: the parameter leaf is ONE atom of Psi_1 —
-# parameter NAMES (a0, b3, ...) are bound labels chosen deterministically
-# by new_par and carry no prior mass of their own. '<' cannot appear in a
-# leaf description or a sane atom symbol, so the token cannot collide.
+'''The reserved vocabulary key of the SINGLE canonical parameter cell
+psi_const, used under unify_params=True. Per
+DESIGN_2_10_PRIMITIVES.md §1 the parameter leaf is one atom of Psi_1:
+parameter NAMES (a0, b3, ...) are bound labels chosen deterministically
+by new_par and carry no prior mass of their own. '<' cannot appear in a
+leaf description or in a sane atom symbol, so the token cannot
+collide.'''
 PARAM_CELL_TOKEN = "<param>"
 
 # ---------------------------------------------------------------------------
@@ -44,11 +45,11 @@ cdef class PolyaNode:
         self.depth = depth
         self.alphas = np.ones(n_choices, dtype=np.float64) * alpha_0
         self.alpha_total = float(n_choices) * alpha_0
-        # Phase 2.10: base mass of the unregistered remainder cell. Set by
-        # PolyaTree after construction in dp_mode; 0.0 = legacy. EXCLUDED
-        # from alpha_total (restriction by neutrality: the predictive
-        # normaliser runs over REGISTERED cells only, THEORY_2_13.md §5.4),
-        # so log_prob / sample_choice / update need no changes at all.
+        '''Base mass of the unregistered remainder cell, set by PolyaTree
+        after construction in dp_mode; 0.0 otherwise. It is EXCLUDED from
+        alpha_total by restriction-by-neutrality — the predictive
+        normaliser runs over REGISTERED cells only (THEORY_2_13.md §5.4)
+        — so log_prob, sample_choice and update need no changes.'''
         self.alpha_rem = 0.0
         # Children indexed by (kind, choice_idx). Use a dict so we can have
         # both 'op' and 'prim' continuations from the same decision point.
@@ -89,18 +90,20 @@ cdef class PolyaTree:
     def __init__(self, list operations, list primitives, double alpha_0=1.0,
                  bint auto_register=True, bint strict_ops=True,
                  double remainder_mass=0.0, bint unify_params=False):
-        # Phase 2.10 Stage 3c (vocabulary freeze): unify_params=True maps
-        # EVERY plain parameter leaf onto the single canonical psi_const
-        # cell PARAM_CELL_TOKEN (appended to the vocabulary here) instead
-        # of one cell per parameter NAME. Names are bound labels — new_par
-        # ratchets their indices upward without bound (births after deaths
-        # raise the max index; only crossover compaction resets it), so NO
-        # finite name pool covers the reachable names, and per-name cells
-        # weight alpha-equivalent trees differently. With unify_params the
-        # vocabulary {ops} + {function leaves} + {psi_const} + {atom
-        # templates} is FINITE and CLOSED: auto_register can be False and
-        # the prior is one fixed measure from t = 0 (the Phase 2.3 /
-        # DESIGN §9 item 4 freeze). Default False = bit-identical legacy.
+        '''unify_params=True maps EVERY plain parameter leaf onto the
+        single canonical psi_const cell PARAM_CELL_TOKEN, appended to
+        the vocabulary here, instead of one cell per parameter NAME.
+
+        Why: names are bound labels, and new_par ratchets their indices
+        upward without bound — births after deaths raise the max index,
+        and only crossover compaction resets it — so no finite name pool
+        covers the reachable names, and per-name cells would weight
+        alpha-equivalent trees differently.
+
+        With unify_params the vocabulary {ops} + {function leaves} +
+        {psi_const} + {atom templates} is FINITE and CLOSED, so
+        auto_register can be False and the prior is one fixed measure
+        from t = 0 (the DESIGN §9 item 4 freeze).'''
         cdef list prims = list(primitives)
         self.unify_params = unify_params
         if unify_params:
@@ -122,19 +125,22 @@ cdef class PolyaTree:
         # Root: a "virtual" decision over n_ops + n_prims (op vs prim + which one).
         self.auto_register = auto_register
         self.strict_ops = strict_ops
-        # Phase 4.3: adaptation freeze is OFF by default (set the public
-        # attribute from Python after warm-up to enter the frozen regime;
-        # deliberately NOT a constructor argument — zero call-site churn).
+        '''Adaptation freeze is off by default. Set the public attribute
+        from Python after warm-up to enter the frozen regime; it is
+        deliberately not a constructor argument, to avoid call-site
+        churn.'''
         self.adapt_frozen = False
-        # Phase 2.10 (DP completion, THEORY_2_13.md §5): remainder_mass > 0
-        # activates DP mode. The node-level prior is then the projection of
-        # ONE DP(c, G0) with total base mass
-        #     c = (n_ops + n_prims) * alpha_0 + remainder_mass,
-        # onto {registered cells} + {remainder R}. `base_alphas` holds the
-        # per-cell base masses used to initialise fresh nodes; `rem_base`
-        # the unallocated remainder. add_primitive CARVES mass out of the
-        # remainder (conserving c) instead of appending new mass.
-        # remainder_mass == 0.0 -> legacy mode, bit-identical behaviour.
+        '''remainder_mass > 0 activates DP mode (THEORY_2_13.md §5). The
+        node-level prior is then the projection of ONE DP(c, G0) with
+        total base mass
+
+            c = (n_ops + n_prims) * alpha_0 + remainder_mass,
+
+        onto {registered cells} + {remainder R}. base_alphas holds the
+        per-cell base masses used to initialise fresh nodes and rem_base
+        the unallocated remainder; add_primitive CARVES mass out of the
+        remainder, conserving c, instead of appending new mass.
+        remainder_mass == 0.0 keeps the simple non-DP behaviour.'''
         if remainder_mass < 0.0:
             raise ValueError("PolyaTree: remainder_mass must be >= 0")
         self.dp_mode = remainder_mass > 0.0
@@ -195,8 +201,8 @@ cdef class PolyaTree:
     cpdef double log_prior(self, list construction_path):
         """
         Compute log pi(T | Theta) for a tree with given construction path.
-        (cpdef since Phase 2.10 so tests can probe the prior on hand-built
-        paths without constructing GP trees.)
+        cpdef so tests can probe the prior on hand-built paths without
+        constructing GP trees.
 
         Pure function of the current Pólya tree: does NOT create new nodes.
         Steps that fall in unvisited subtrees contribute -log(n_total) under
@@ -242,9 +248,9 @@ cdef class PolyaTree:
         Reinforce path with diminishing learning rate gamma_t = 1/(1+t).
         Call AFTER an accepted MH step.
         """
-        # Phase 4.3 frozen regime: reinforcement halted, Theta stays at
-        # Theta-bar. One C bool branch — zero measurable cost when off,
-        # and update_path only runs on ACCEPTED moves anyway.
+        # In the frozen regime reinforcement halts and Theta stays at
+        # Theta-bar. One C bool branch, and update_path only runs on
+        # accepted moves anyway, so the cost is unmeasurable.
         if self.adapt_frozen:
             return
         cdef double gamma = 1.0 / (1.0 + <double> self.t)
@@ -285,12 +291,12 @@ cdef class PolyaTree:
         Register a new primitive description in the Pólya vocabulary.
         Returns the (possibly pre-existing) primitive index.
 
-        LEGACY mode (dp_mode False): grows EVERY node's Dirichlet by
-        appending a fresh alpha_0 slot — total mass GROWS, so every
-        registration perturbs every symbol's predictive (the historical
-        behaviour; kept bit-exact for existing tests/users).
+        NON-DP mode (dp_mode False): grows EVERY node's Dirichlet by
+        appending a fresh alpha_0 slot, so total mass GROWS and every
+        registration perturbs every symbol's predictive. This is the
+        historical behaviour, kept bit-exact for existing tests and users.
 
-        DP mode (Phase 2.10, THEORY_2_13.md §5): registration is a
+        DP mode (THEORY_2_13.md §5): registration is a
         MASS-CONSERVING partition refinement. The new cell's base mass
         (`mass`, default alpha_0) is CARVED out of the remainder cell at
         every node: alpha_rem -= mass, new slot = mass, so the total base
@@ -304,9 +310,9 @@ cdef class PolyaTree:
         """
         cdef int idx
         cdef double new_mass
-        # Phase 2.10 Stage 3c: the psi_const token is reserved — silently
-        # returning its index would let e.g. an atom template named like it
-        # merge into the parameter cell.
+        # The psi_const token is reserved: silently returning its index
+        # would let an atom template named like it merge into the
+        # parameter cell.
         if self.unify_params and desc == PARAM_CELL_TOKEN:
             raise ValueError(
                 "add_primitive: %r is the reserved canonical parameter "
@@ -376,23 +382,23 @@ cdef class PolyaTree:
         if node is None:
             return
         if node.is_leaf():
-            # Phase 2.10 Stage 3c: psi_const unification (see
-            # _extract_recursive).
+            # psi_const unification; see _extract_recursive.
             if self.unify_params and node.is_param():
                 path.append(('prim', self._param_idx))
                 return
-            # Phase 2.10 Stage 2: vocab_symbol == description for plain
-            # leaves; for opaque atomic leaves it is the template's canonical
-            # symbol (one vocabulary cell per template, NOT per
-            # instantiation — instantiated descriptions carry tree-specific
-            # parameter names and must never enter the vocabulary).
+            '''vocab_symbol equals the description for plain leaves. For
+            opaque atomic leaves it is instead the template's canonical
+            symbol: one vocabulary cell per template, NOT per
+            instantiation, since instantiated descriptions carry
+            tree-specific parameter names that must never enter the
+            vocabulary.'''
             desc = node.vocab_symbol()
             idx = self._prim_to_idx.get(desc, -1)
             if idx >= 0:
                 path.append(('prim', idx))
             return
-        # Phase FX: template cell + slot subtrie (silent-drop style of this
-        # legacy walker preserved for the cell itself).
+        # Template cell, then the slot subtrie. This walker's silent-drop
+        # style is preserved for the cell itself.
         if node.is_flex():
             idx = self._prim_to_idx.get(node.flex_spec.name, -1)
             if idx >= 0:
@@ -412,28 +418,30 @@ cdef class PolyaTree:
         self._extract_recursive(node.get_right(), path)
 
     cdef void _extract_recursive(self, function_treeC.Node node, list path):
-            """Phase 2.3: no silent drops. Unknown leaves auto-register (default)
-            or raise; unknown ops raise unless explicitly opted out."""
+            """No silent drops here. Unknown leaves auto-register by
+            default, or raise; unknown ops raise unless explicitly opted
+            out."""
             cdef str op, desc
             cdef int idx
             if node is None:
                 return
             if node.is_leaf():
-                # Phase 2.10 Stage 3c: under unify_params every PLAIN
-                # parameter leaf is the single psi_const cell — the name is
-                # a bound label with no prior mass of its own. Opaque
-                # leaves keep their template cells via vocab_symbol below.
+                '''Under unify_params every PLAIN parameter leaf is the
+                single psi_const cell, since the name is a bound label
+                with no prior mass of its own. Opaque leaves keep their
+                template cells via vocab_symbol below.'''
                 if self.unify_params and node.is_param():
                     path.append(('prim', self._param_idx))
                     return
-                # Phase 2.10 Stage 2: canonical vocabulary key (atom template
-                # symbol for opaque leaves, description otherwise).
+                # Canonical vocabulary key: the atom template symbol for
+                # opaque leaves, the description otherwise.
                 desc = node.vocab_symbol()
                 idx = self._prim_to_idx.get(desc, -1)
                 if idx < 0:
                     if self.auto_register:
-                        # Side effect: grows every node's Dirichlet by one slot.
-                        # Phase 1.5 invariance ensures this is well-defined.
+                        # Side effect: grows every node's Dirichlet by one
+                        # slot. The invariance property makes this
+                        # well-defined.
                         idx = self.add_primitive(desc)
                     else:
                         raise KeyError(
@@ -444,11 +452,11 @@ cdef class PolyaTree:
                         )
                 path.append(('prim', idx))
                 return
-            # Phase FX (transparent atoms v1): ONE cell for the template
-            # head, then the slot's construction path continues in the
-            # child subtrie under that cell -- slot-specific reinforcement
-            # is automatic; the frozen interior emits with probability 1
-            # and contributes no steps. Unreachable on legacy trees.
+            '''ONE cell for the template head, then the slot's
+            construction path continues in the child subtrie under that
+            cell, which makes slot-specific reinforcement automatic. The
+            frozen interior emits with probability 1 and contributes no
+            steps. Unreachable on trees without scaffolds.'''
             if node.is_flex():
                 desc = node.flex_spec.name
                 idx = self._prim_to_idx.get(desc, -1)
@@ -517,7 +525,7 @@ cdef class PolyaTree:
         return path
 
         # ------------------------------------------------------------------
-    # Phase 2.3: explicit vocabulary-coverage check (for tests)
+    # Explicit vocabulary-coverage check, used by the tests.
     # ------------------------------------------------------------------
     cpdef assert_covers(self, function_treeC.Node root_node):
         """
@@ -538,11 +546,11 @@ cdef class PolyaTree:
         if node is None:
             return
         if node.is_leaf():
-            # Phase 2.10 Stage 3c: a plain parameter leaf is always covered
-            # by the psi_const cell under unify_params.
+            # Under unify_params a plain parameter leaf is always covered
+            # by the psi_const cell.
             if self.unify_params and node.is_param():
                 return
-            # Phase 2.10 Stage 2: check the canonical vocabulary key.
+            # Check the canonical vocabulary key.
             desc = node.vocab_symbol()
             if desc not in self._prim_to_idx:
                 raise KeyError(
@@ -550,8 +558,8 @@ cdef class PolyaTree:
                     f"is not in the vocabulary."
                 )
             return
-        # Phase FX: the template head must be a registered cell; the slot
-        # is checked like any subtree.
+        # The template head must be a registered cell; the slot is
+        # checked like any other subtree.
         if node.is_flex():
             if node.flex_spec.name not in self._prim_to_idx:
                 raise KeyError(
@@ -570,7 +578,7 @@ cdef class PolyaTree:
         self._assert_covers_recursive(node.get_right())
 
     # ------------------------------------------------------------------
-    # Phase 2.12 (MPI sampling): picklable state snapshot / restore.
+    # Picklable state snapshot / restore, used by MPI sampling.
     #
     # The MPI-parallel EMC loop keeps one PolyaTree REPLICA per worker
     # process and keeps them bit-identical to the master's by (a) shipping
@@ -583,8 +591,8 @@ cdef class PolyaTree:
     # ------------------------------------------------------------------
     cpdef dict get_state(self):
         """Deep, picklable snapshot of the whole Pólya tree (vocabulary,
-        urn counter t, and every node's Dirichlet alphas + children).
-        Phase 2.10: includes the DP-mode fields."""
+        urn counter t, and every node's Dirichlet alphas + children),
+        including the DP-mode fields."""
         return {
             'operations': list(self.operations),
             'primitives': list(self.primitives),
@@ -596,26 +604,26 @@ cdef class PolyaTree:
             'dp_mode': bool(self.dp_mode),
             'rem_base': float(self.rem_base),
             'base_alphas': list(self.base_alphas),
-            # Phase 2.10 Stage 3c: psi_const unification travels with the
-            # state so MPI replicas map parameter leaves identically.
+            # psi_const unification travels with the state so MPI
+            # replicas map parameter leaves identically.
             'unify_params': bool(self.unify_params),
-            # Phase 4.3: frozen-regime flag travels too (legacy snapshots
-            # restore with the False default in set_state).
+            # The frozen-regime flag travels too; older snapshots
+            # restore with the False default in set_state.
             'adapt_frozen': bool(self.adapt_frozen),
         }
 
     cpdef void set_state(self, dict state) except *:
         """Restore a snapshot produced by get_state(). Overwrites the
-        vocabulary, counter and the entire node tree in place.
-        Phase 2.10: DP-mode fields read with legacy-safe defaults, so
-        snapshots produced by pre-2.10 builds restore as legacy trees."""
+        vocabulary, counter and the entire node tree in place. DP-mode
+        fields are read with safe defaults, so older snapshots restore
+        as ordinary non-DP trees."""
         self.operations = list(state['operations'])
         self.primitives = list(state['primitives'])
         self.alpha_0 = <double> state['alpha_0']
         self.t = <int> state['t']
         self.auto_register = <bint> state['auto_register']
         self.strict_ops = <bint> state['strict_ops']
-        # Phase 4.3: legacy-safe default (pre-4.3 snapshots lack the key).
+        # Safe default: older snapshots lack this key.
         self.adapt_frozen = <bint> state.get('adapt_frozen', False)
         self.n_ops = len(self.operations)
         self.n_prims = len(self.primitives)
@@ -627,8 +635,8 @@ cdef class PolyaTree:
             'base_alphas',
             [self.alpha_0] * (self.n_ops + self.n_prims)))
         self.base_reg_total = float(sum(self.base_alphas))
-        # Phase 2.10 Stage 3c: legacy-safe default False; the token is
-        # already inside state['primitives'] when it was ever enabled.
+        # Safe default False; when unification was ever enabled the
+        # token is already inside state['primitives'].
         self.unify_params = <bint> state.get('unify_params', False)
         self._param_idx = self._prim_to_idx.get(PARAM_CELL_TOKEN, -1) \
             if self.unify_params else -1
