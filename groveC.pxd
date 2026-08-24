@@ -89,6 +89,14 @@ cdef class Grove:
     cdef public double md_softmin_beta
     cdef public object md_baselines
 
+    '''Burn-in budget controls (both 0 = the exhaustive historical
+    burn-in). burn_in_top_k keeps the K best depth-1 candidates for
+    stage 2; burn_in_cap subsamples the stage-2 work items, under a
+    dedicated RNG derived from the Grove seed.'''
+    cdef public int burn_in_top_k
+    cdef public int burn_in_cap
+    cdef public object _burn_in_seed
+
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
     cpdef void set_sigmas(self, object new_sigma)
@@ -144,7 +152,11 @@ cdef class Grove:
                          bint replace_all=?, bint optimize_params=?)
 
     cdef  _get_depth1_candidates(self, cnp.ndarray[cnp.float64_t, ndim=1] y, dict tree_cache,
-                                      bint optimize_params=?)    
+                                      bint optimize_params=?)
+
+    # Stage-2 budget: (kept depth-1 candidates, work items or None).
+    cdef tuple _burn_in_stage2_plan(self, list depth1_candidates,
+                                    list all_primitives)
 
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                           list up2depth1_candidates,

@@ -50,7 +50,7 @@ def set_caps(max_depth=MAX_TREE_DEPTH, rebuild=REBUILD_MAX_HEIGHT):
 
 
 def spawn_burn_in(x, y, funcs, ops, sigma, seed, atoms=None, n_workers=3,
-                  depth=2):
+                  depth=2, burn_in_top_k=0, burn_in_cap=0):
     """Run the shared burn-in ONCE and return (roots, posts, wall_s).
 
     roots : candidate root Nodes ranked by BIC posterior (best first) —
@@ -62,6 +62,12 @@ def spawn_burn_in(x, y, funcs, ops, sigma, seed, atoms=None, n_workers=3,
     >= 50 stage-2 combinations or the master's progress loop never
     breaks; any realistic vocabulary (>= 3 primitives, safe-4 ops)
     clears this by orders of magnitude.
+
+    burn_in_top_k / burn_in_cap (both 0 = exhaustive, the historical
+    behaviour) bound stage 2: keep the K best depth-1 candidates, and/or
+    sample at most `cap` stage-2 combinations under the seed. Needed for
+    the d=3 pooled search, where the exhaustive stage 2 reaches ~5e5
+    combinations on 1e4+ rows. Keep cap / n_workers >= 50 (see above).
     """
     t0 = time.perf_counter()
     g = Grove(np.ascontiguousarray(x, dtype=np.float64),
@@ -69,7 +75,8 @@ def spawn_burn_in(x, y, funcs, ops, sigma, seed, atoms=None, n_workers=3,
               1.0, 8, depth, list(funcs), sigma=sigma,
               operations=list(ops), use_gradients=False,
               burn_in=True, use_mpi=int(n_workers), use_spawn=True,
-              seed=seed, atoms=atoms)
+              seed=seed, atoms=atoms,
+              burn_in_top_k=int(burn_in_top_k), burn_in_cap=int(burn_in_cap))
     wall = time.perf_counter() - t0
     roots = [t.get_root() for t in g.trees]
     posts = [float(p) for p in np.asarray(g.root_posteriors)[:len(roots)]]

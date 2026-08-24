@@ -331,7 +331,25 @@ cdef class Grove:
                  object datasets=None,
                  str md_combine='sum',
                  double md_softmin_beta=8.0,
-                 object md_baselines=None):
+                 object md_baselines=None,
+                 int burn_in_top_k=0,
+                 int burn_in_cap=0):
+
+        '''Burn-in budget (both default to the exhaustive historical
+        burn-in, so every existing call is unchanged). burn_in_top_k > 0
+        keeps only the K best depth-1 candidates for stage 2, which
+        bounds the quadratic d1 x d1 block; burn_in_cap > 0 draws that
+        many stage-2 work items uniformly without replacement, from a
+        random.Random seeded off the Grove seed and nothing else, so the
+        chain's own RNG streams are never touched and the subset is
+        reproducible under the seed. The d=3 pooled search needs these:
+        with 10 primitives the exhaustive stage 2 is ~5e5 combinations.'''
+        if burn_in_top_k < 0 or burn_in_cap < 0:
+            raise ValueError("Grove: burn_in_top_k and burn_in_cap must be "
+                             ">= 0 (0 = exhaustive)")
+        self.burn_in_top_k = burn_in_top_k
+        self.burn_in_cap = burn_in_cap
+        self._burn_in_seed = seed
 
         # --- Flexible domain (flexible_domain_plan.md §3) -----------------
         # Resolve and install the variable registry BEFORE any leaf is
@@ -2216,6 +2234,52 @@ cdef class Grove:
             print(f'in get_depth1_candidates: id(dict)={id(cand.name_values)} {id(cand.name_values.keys())}, content={cand.name_values}')
         return candidates
 
+    cdef tuple _burn_in_stage2_plan(self, list depth1_candidates,
+                                    list all_primitives):
+        """Apply the burn-in budget to stage 2.
+
+        Returns (kept, items): `kept` is the depth-1 candidate list after
+        burn_in_top_k (the input list, unchanged, when 0 — it is already
+        sorted best-first by stage 1); `items` is None for the exhaustive
+        path, or the sampled list of work items when burn_in_cap is
+        active and smaller than the full count. Items use the spawn
+        format, ('d1_prim', i, prim_str, op) and ('d1_d1', i, j, op);
+        one 'd1_prim' item covers BOTH operand orders, exactly as one
+        iteration of the exhaustive loops does, so the count is the same
+        quantity the progress bars report. Sampling is uniform without
+        replacement, in original order, from a RNG seeded off the Grove
+        seed alone (a None seed means a non-deterministic subset, the
+        Grove's own convention)."""
+        cdef list kept = depth1_candidates
+        cdef int n_top, total, k
+        cdef list items, idx
+        cdef object rng
+        cdef int i, j
+        cdef str prim_str, op
+        if self.burn_in_top_k > 0 and len(kept) > self.burn_in_top_k:
+            kept = kept[:self.burn_in_top_k]
+        if self.burn_in_cap <= 0:
+            return (kept, None)
+        n_top = len(kept)
+        total = n_top * (n_top + len(all_primitives)) * len(self.operations)
+        if total <= self.burn_in_cap:
+            return (kept, None)
+        items = []
+        for i in range(n_top):
+            for prim_str in all_primitives:
+                for op in self.operations:
+                    items.append(('d1_prim', i, prim_str, op))
+        for i in range(n_top):
+            for j in range(n_top):
+                for op in self.operations:
+                    items.append(('d1_d1', i, j, op))
+        rng = random.Random(None if self._burn_in_seed is None
+                            else "%r:burn_in_cap" % (self._burn_in_seed,))
+        idx = sorted(rng.sample(range(len(items)), self.burn_in_cap))
+        print(f"Stage 2: burn_in_cap active — {self.burn_in_cap} of "
+              f"{len(items)} combinations sampled (seeded)")
+        return (kept, [items[k] for k in idx])
+
     cdef _burn_in_stage2(self, cnp.ndarray[cnp.float64_t, ndim=1] y,
                           list up2depth1_candidates,
                           dict tree_cache,
@@ -2230,12 +2294,16 @@ cdef class Grove:
         cdef dict atom_specs
         all_primitives, atom_specs = self._burn_in_primitives()
         # Filter for only depth-1 candidates (third element == 1)
-        
+
         depth1_candidates = [c for c in up2depth1_candidates if c[2] == 1]
-        
+        cdef list sampled_items
+        depth1_candidates, sampled_items = self._burn_in_stage2_plan(
+            depth1_candidates, all_primitives)
 
         cdef int n_top = len(depth1_candidates)
         cdef int total_combinations = n_top * (n_top + len(all_primitives)) * len(self.operations)
+        if sampled_items is not None:
+            total_combinations = len(sampled_items)
         start_time = time.time()
         pbar = tqdm(total=total_combinations, 
                     desc="Stage 2",
@@ -2253,10 +2321,15 @@ cdef class Grove:
         cdef double post
         cdef int i, j, idx
         cdef function_treeC.Node prim_node
-        
+        # The exhaustive loops below are the historical path, left as
+        # they are; under an active burn_in_cap they run zero times and
+        # the sampled loop after them does the work.
+        cdef int n_loop = n_top if sampled_items is None else 0
+        cdef tuple itm
+
         # 1) depth-1 op primitive (both directions)
-        
-        for i in range(n_top):
+
+        for i in range(n_loop):
             for prim_str in all_primitives:
                 # Token resolver, 'a' band; the combiner renames
                 # whichever side ends up as the right operand.
@@ -2292,24 +2365,66 @@ cdef class Grove:
                     pbar.update(1)
                     pbar.set_postfix({"iter/s": f"{(pbar.n / (time.time() - start_time)):.1f}"})
         # 2) depth-1 op depth-1 (all pairs)
-        for i in range(n_top):
+        for i in range(n_loop):
             for j in range(n_top):
                 for op in self.operations:
                     d1_tree = depth1_candidates[i][0]
                     d1_tree_2 = depth1_candidates[j][0]
                     tree = self._combine_depth1(d1_tree.root, d1_tree_2.root, op)
                     expression = tree.tree_get_description()
-                    
+
                     if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
-                        
+
                         post = tree._log_marginal_bic(y, optimize_params,
                             self.use_gradients if optimize_params else False, self.method_str)
-                        
+
                         tree_cache[expression] = post
                         if np.isfinite(post):
                             candidates.append((tree, post)) # depth 2
                     pbar.update(1)
                     pbar.set_postfix({"iter/s": f"{(pbar.n / (time.time() - start_time)):.1f}"})
+        # 3) sampled stage 2 (burn_in_cap): the same two constructions,
+        #    driven by the seeded subset of work items.
+        if sampled_items is not None:
+            for itm in sampled_items:
+                op = itm[3]
+                if itm[0] == 'd1_prim':
+                    i = itm[1]
+                    prim_str = itm[2]
+                    prim_node = _burn_in_primitive_node(prim_str, self.domain,
+                                                        atom_specs, 'a', 1)
+                    d1_tree = depth1_candidates[i][0]
+                    tree = self._combine_depth1(d1_tree.root, prim_node, op)
+                    expression = tree.tree_get_description()
+                    if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
+                        post = tree._log_marginal_bic(y, optimize_params,
+                            self.use_gradients if optimize_params else False, self.method_str)
+                        tree_cache[expression] = post
+                        if np.isfinite(post):
+                            candidates.append((tree, post))
+                    tree = self._combine_depth1(prim_node, d1_tree.root, op)
+                    expression = tree.tree_get_description()
+                    if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
+                        post = tree._log_marginal_bic(y, optimize_params,
+                            self.use_gradients if optimize_params else False, self.method_str)
+                        tree_cache[expression] = post
+                        if np.isfinite(post):
+                            candidates.append((tree, post))
+                else:
+                    i = itm[1]
+                    j = itm[2]
+                    d1_tree = depth1_candidates[i][0]
+                    d1_tree_2 = depth1_candidates[j][0]
+                    tree = self._combine_depth1(d1_tree.root, d1_tree_2.root, op)
+                    expression = tree.tree_get_description()
+                    if tree is not None and tree.is_valid(self.domain) and expression not in tree_cache:
+                        post = tree._log_marginal_bic(y, optimize_params,
+                            self.use_gradients if optimize_params else False, self.method_str)
+                        tree_cache[expression] = post
+                        if np.isfinite(post):
+                            candidates.append((tree, post))
+                pbar.update(1)
+                pbar.set_postfix({"iter/s": f"{(pbar.n / (time.time() - start_time)):.1f}"})
         pbar.close()
         if len(candidates) == 0:
             print("Warning: No valid depth-2 candidates")
@@ -2614,6 +2729,9 @@ cdef class Grove:
         cdef list all_primitives
         cdef dict atom_specs
         all_primitives, atom_specs = self._burn_in_primitives()
+        cdef list sampled_items
+        depth1_candidates, sampled_items = self._burn_in_stage2_plan(
+            depth1_candidates, all_primitives)
         cdef int n_top = len(depth1_candidates)
 
         if n_top == 0:
@@ -2653,7 +2771,9 @@ cdef class Grove:
             for j in range(n_top):
                 for op in self.operations:
                     work_items.append(('d1_d1', i, j, op))
-        
+        if sampled_items is not None:
+            work_items = sampled_items
+
         cdef int total_work = len(work_items)
         print(f"Stage 2: {n_top} depth-1 trees × {len(all_primitives)} primitives × {len(self.operations)} ops")
         print(f"  Total combinations: {total_work}")
