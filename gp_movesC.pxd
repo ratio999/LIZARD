@@ -136,7 +136,11 @@ cpdef tuple parameter_refresh(function_treeC.Tree tree,
 # Transparent-atom helpers.
 cdef bint _contains_flex(function_treeC.Node node)
 cdef _rename_flex_internals(function_treeC.Node fnode, dict amap)
+'''slot_functions: optional {template name: [per-slot function list]}
+map realizing the K3 masks — the inner move draws its vocabulary (and
+computes its densities) from the chosen slot's restricted list. None =
+the shared `functions` list for every slot (v1 behaviour).'''
 cdef tuple _flex_slot_mutation(function_treeC.Tree tree, list functions,
-                               list operations)
+                               list operations, object slot_functions)
 cpdef tuple flex_slot_mutation(function_treeC.Tree tree, list functions=?,
-                               list operations=?)
+                               list operations=?, object slot_functions=?)

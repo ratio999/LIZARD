@@ -84,13 +84,19 @@ def spawn_burn_in(x, y, funcs, ops, sigma, seed, atoms=None, n_workers=3,
 
 
 def seeded_forest(x, y, ladder, size_per_grove, funcs, ops, sigma, seed,
-                  top_roots, atoms=None, freeze_vocab=True):
+                  top_roots, atoms=None, freeze_vocab=True,
+                  flex_atoms=None, flex_root_lock=False):
     """Forest with EVERY rung seeded from the same top-K burned-in roots.
 
     Each rung receives its own deepcopies; posteriors are computed here
     (warm-started from the burn-in theta-hats, so this is cheap). The
     rungs then evolve by within-grove MH, coupled each round by swaps and
     trans-grove crossovers under the one shared Polya prior.
+
+    flex_atoms (optional, default None = unchanged behaviour): scaffold
+    templates forwarded to the Forest, for populations seeded with
+    transparent scaffolds — burn-in never runs here, so the flex
+    burn-in refusal is not in play.
     """
     k = int(size_per_grove)
     picks = [top_roots[i % len(top_roots)] for i in range(k)]
@@ -100,7 +106,8 @@ def seeded_forest(x, y, ladder, size_per_grove, funcs, ops, sigma, seed,
                     np.asarray(ladder, dtype=np.float64), k, 2,
                     list(funcs), sigma=sigma, node_lists=node_lists,
                     operations=list(ops), use_gradients=False, seed=seed,
-                    freeze_vocab=freeze_vocab, atoms=atoms)
+                    freeze_vocab=freeze_vocab, atoms=atoms,
+                    flex_atoms=flex_atoms, flex_root_lock=flex_root_lock)
     forest.compute_posteriors_all(y)
     return forest
 

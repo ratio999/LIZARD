@@ -657,6 +657,285 @@ def main():
     print("      best: %s  (nrmse %.3g)"
           % (best.tree_get_description(), nrmse), flush=True)
 
+    # =================================================================
+    # FX2 — multi-slot scaffolds, impure templates, per-slot masks (D9)
+    # =================================================================
+
+    # ---------------------------------------------------------------- FX2-a
+    print("[FX2-a] multi-slot / impure spec construction and pickling")
+    specm = real_functionC.FlexAtomSpec(
+        "M", "c0*A + B*tanh(x)", slot_symbols=["A", "B"],
+        allow_variables=True)
+    check("FX2-a1 two slots in declaration order, theta c0, x in template",
+          specm.n_slots == 2 and specm.slot_symbols == ["A", "B"]
+          and specm.slots == ["c0"] and specm.k == 1
+          and specm.template_variables == ["x"]
+          and specm.allow_variables)
+    spec_legacy = real_functionC.FlexAtomSpec("Wb", "c0*tanh(c1*s + c2)")
+    check("FX2-a2 legacy spec via the same class: n_slots 1, v1 pickle "
+          "triple", spec_legacy.n_slots == 1
+          and spec_legacy.slot_symbols == ["s"]
+          and spec_legacy.__reduce__()[1] == ("Wb", "c0*tanh(c1*s + c2)",
+                                              "s"))
+    specm2 = pickle.loads(pickle.dumps(specm))
+    check("FX2-a3 extended pickle round trip",
+          specm2.n_slots == 2 and specm2.slot_symbols == ["A", "B"]
+          and specm2.allow_variables and specm2.template == specm.template)
+    expect_raises("FX2-a4 declared slot absent from template",
+                  ValueError, real_functionC.FlexAtomSpec,
+                  "M2", "c0*A", slot_symbols=["A", "B"])
+    expect_raises("FX2-a5 duplicate slot symbols",
+                  ValueError, real_functionC.FlexAtomSpec,
+                  "M3", "A + B", slot_symbols=["A", "A"])
+    expect_raises("FX2-a6 variables still refused WITHOUT the opt-in",
+                  ValueError, real_functionC.FlexAtomSpec,
+                  "M4", "A + tanh(x)", slot_symbols=["A"])
+    expect_raises("FX2-a7 mask key must be a declared slot",
+                  ValueError, real_functionC.FlexAtomSpec,
+                  "M5", "A + B", slot_symbols=["A", "B"],
+                  slot_variables={"Z": ("x",)})
+    expect_raises("FX2-a8 mask entries must be registered variables",
+                  ValueError, real_functionC.FlexAtomSpec,
+                  "M6", "A + B", slot_symbols=["A", "B"],
+                  slot_variables={"A": ("q9",)})
+
+    # ---------------------------------------------------------------- FX2-b
+    print("[FX2-b] multi-slot node: evaluation, k, wire, copy, print")
+    # node_from_skel keeps EXPLICIT parameter names (expr_to_tree would
+    # canonicalize each slot's names to a0 and couple the slots).
+    Xc = np.ascontiguousarray(X, dtype=np.float64)
+    rootA = function_treeC.node_from_skel(
+        ('O', '*', ('L', 'a0'), ('L', 'x')), Xc, None)
+    rootB = function_treeC.node_from_skel(
+        ('O', '*', ('L', 'a1'), ('L', 'sin(x)')), Xc, None)
+    fnode = function_treeC.make_flex_node(
+        specm, [rootA, rootB], ["c0"], {"c0": 3.0})
+    tm = function_treeC.Tree(0, list(FUNCS), Xc, node=fnode)
+    tm.set_sigma(1.0)
+    tm.set_g_tau(1.0)
+    for p in tm.get_params():
+        nmp = p.get_fun().get_description()
+        p.set_value(2.0 if nmp == "a0" else 0.5)
+    tm.tree_update(tm.get_root())
+    nv = dict(tm.get_param_dicts()[1])
+    check("FX2-b1 name_values spans both slots + theta",
+          sorted(nv) == ["a0", "a1", "c0"], nv)
+    ref = 3.0 * (2.0 * X) + (0.5 * np.sin(X)) * np.tanh(X)
+    out = np.asarray(tm.evaluate(), dtype=np.float64)
+    check("FX2-b2 numeric composition exact (c0*A + B*tanh(x))",
+          np.allclose(out, ref), float(np.max(np.abs(out - ref))))
+    check("FX2-b3 head prints unexpanded with both slot exprs",
+          tm.tree_get_description().startswith("M(")
+          and "sin" in tm.tree_get_description())
+    check("FX2-b4 depth = 1 + max(slot depths), node_count sums slots",
+          fnode.depth() == 2 and fnode.node_count() == 7,
+          (fnode.depth(), fnode.node_count()))
+    lp = tm.log_marginal_bic(np.asarray(ref + 0.01, dtype=np.float64),
+                             True)
+    check("FX2-b5 BIC finite on the 2-slot tree (k = 3)",
+          np.isfinite(lp), lp)
+    # NB the optimizing BIC call above wrote theta-hat back into tm, so
+    # compare against the CURRENT value, not the hand-set 0.5.
+    a1_now = float(dict(tm.get_param_dicts()[1])["a1"])
+    tcopy = copy.deepcopy(tm)
+    for p in tcopy.get_params():
+        if p.get_fun().get_description() == "a1":
+            p.set_value(9.0)
+    tcopy.tree_update(tcopy.get_root())
+    check("FX2-b6 deepcopy isolates slot 2",
+          float(dict(tm.get_param_dicts()[1])["a1"]) == a1_now
+          and float(dict(tcopy.get_param_dicts()[1])["a1"]) == 9.0
+          and a1_now != 9.0)
+    skel = function_treeC.tree_to_skel(tm.get_root())
+    check("FX2-b7 multi-slot skeleton: 4th field is a tuple of skels",
+          skel[0] == 'F' and isinstance(skel[3][0], tuple)
+          and len(skel[3]) == 2)
+    skel_p = pickle.loads(pickle.dumps(skel))
+    reb = function_treeC.node_from_skel(
+        skel_p, np.ascontiguousarray(X, dtype=np.float64),
+        {"M": specm})
+    treb = function_treeC.Tree(0, list(FUNCS),
+                               np.ascontiguousarray(X, dtype=np.float64),
+                               node=reb)
+    treb.tree_update(treb.get_root())
+    check("FX2-b8 wire round trip preserves the description",
+          treb.tree_get_description() == tm.tree_get_description())
+    s1 = function_treeC.tree_to_skel(
+        make_flex_tree(spec_legacy, "a0*x", ["c0", "c1", "c2"], X,
+                       FUNCS).get_root())
+    check("FX2-b9 single-slot skeleton keeps the exact v1 form",
+          s1[0] == 'F' and isinstance(s1[3][0], str) and len(s1) == 4, s1)
+    check("FX2-b10 tree printer renders both slots",
+          str(tm).count("└──") + str(tm).count("├──") >= 5)
+    expect_raises("FX2-b11 wrong slot count refused at seeding",
+                  ValueError, function_treeC.make_flex_node,
+                  specm, [copy.deepcopy(rootA)], ["c0"], None)
+
+    # ---------------------------------------------------------------- FX2-c
+    print("[FX2-c] Polya path + pricing mirror on multi-slot")
+    polya2 = polya_treeC.PolyaTree(list(OPS4), list(FUNCS), alpha_0=1.0,
+                                   auto_register=False, strict_ops=True,
+                                   remainder_mass=0.0, unify_params=True)
+    polya2.add_primitive("M", None)
+    path = polya2.extract_path(tm.get_root())
+    check("FX2-c1 path = template cell + slot paths in order (7 steps)",
+          len(path) == 7, path)
+    lp0 = polya2.log_prior(path)
+    check("FX2-c2 t=0 prior = -7*log(n_total)",
+          abs(lp0 + 7.0 * np.log(polya2.n_prims + 6)) < 1e-9, lp0)
+    import i3b_polya_pricing as _pp
+    jj = _pp.skel_to_json(skel)
+    check("FX2-c3 pricing codec round trip on the multi-slot skeleton",
+          _pp.skel_from_json(jj) == skel)
+    check("FX2-c4 skel_n_nodes matches the kernel path length",
+          _pp.skel_n_nodes(skel) == len(path),
+          (_pp.skel_n_nodes(skel), len(path)))
+    s1j = _pp.skel_to_json(s1)
+    check("FX2-c5 pricing codec round trip on the v1 single-slot form",
+          _pp.skel_from_json(s1j) == s1)
+
+    # ---------------------------------------------------------------- FX2-d
+    print("[FX2-d] per-slot masks: seeding, vocabulary, no-mint chain")
+    try:
+        real_functionC.set_variables(("x0", "x1"))
+        F2 = ["x0", "x1", "tanh(x0)", "tanh(x1)"]
+        X2 = np.ascontiguousarray(np.vstack([
+            np.random.default_rng(7).uniform(0.5, 2.0, 48),
+            np.random.default_rng(8).uniform(0.5, 2.0, 48)]))
+        specd = real_functionC.FlexAtomSpec(
+            "D", "A*tanh(x0) + B", slot_symbols=["A", "B"],
+            allow_variables=True,
+            slot_variables={"A": ("x1",), "B": ("x1",)})
+        sA = function_treeC.node_from_skel(
+            ('O', '*', ('L', 'a0'), ('L', 'x1')), X2, None)
+        sB = function_treeC.node_from_skel(
+            ('O', '*', ('L', 'a1'), ('L', 'tanh(x1)')), X2, None)
+        fn2 = function_treeC.make_flex_node(specd, [sA, sB], [])
+        check("FX2-d1 masked seeding accepts in-mask slots",
+              fn2 is not None)
+        sBad = function_treeC.node_from_skel(
+            ('O', '*', ('L', 'a2'), ('L', 'x0')), X2, None)
+        expect_raises("FX2-d2 masked seeding rejects an out-of-mask "
+                      "variable", ValueError,
+                      function_treeC.make_flex_node, specd,
+                      [sBad, copy.deepcopy(sB)], [])
+        y2 = np.asarray(1.5 * X2[1] * np.tanh(X2[0]) + 0.3 * np.tanh(X2[1])
+                        + np.random.default_rng(9).normal(0, 0.02, 48),
+                        dtype=np.float64)
+        nodes2 = []
+        for _ in range(4):
+            _sa = function_treeC.node_from_skel(
+                ('O', '*', ('L', 'a0'), ('L', 'x1')), X2, None)
+            _sb = function_treeC.node_from_skel(
+                ('O', '*', ('L', 'a1'), ('L', 'x1')), X2, None)
+            nodes2.append(function_treeC.make_flex_node(
+                specd, [_sa, _sb], []))
+        gm = Grove(X2, y2, 1.0, 4, 2, list(F2), sigma=0.02,
+                   node_list=nodes2, operations=list(OPS4), seed=77,
+                   g_tau=1.0, flex_atoms=[specd], variables=("x0", "x1"))
+        check("FX2-d3 Grove precomputes the restricted slot vocabularies",
+              gm._flex_slot_funcs is not None
+              and gm._flex_slot_funcs["D"][0] == ["x1", "tanh(x1)"]
+              and gm._flex_slot_funcs["D"][1] == ["x1", "tanh(x1)"])
+        gm.compute_posteriors(y2, False)
+        gm.run(y2, 250)
+        bad = 0
+        moved = 0
+        for t in gm.trees:
+            for fx in function_treeC.collect_flex_nodes(t.get_root(),
+                                                        None):
+                for si, sl in enumerate(fx.flex_slots):
+                    desc = sl.get_fun().get_description()
+                    leaf_vars = {str(s) for lf in sl.get_leaves(None)
+                                 for s in lf.get_fun().get_variables()}
+                    if "x0" in leaf_vars:
+                        bad += 1
+                    if desc not in ("a0*x1", "a1*x1"):
+                        moved += 1
+        check("FX2-d4 250-step chain NEVER minted a masked-out variable "
+              "in any slot", bad == 0, bad)
+        check("FX2-d5 the chain actually moved the slots", moved > 0)
+        n_acc = sum(gm.move_accepts.values())
+        check("FX2-d6 chain healthy (accepts > 0, posteriors finite)",
+              n_acc > 0 and np.isfinite(np.asarray(
+                  gm.root_posteriors, dtype=np.float64)).all())
+        gm_b = Grove(X2, y2, 1.0, 4, 2, list(F2), sigma=0.02,
+                     node_list=[copy.deepcopy(n) for n in nodes2],
+                     operations=list(OPS4), seed=77, g_tau=1.0,
+                     flex_atoms=[specd], variables=("x0", "x1"))
+        gm_b.compute_posteriors(y2, False)
+        gm_b.run(y2, 250)
+        check("FX2-d7 masked runs reproduce under the seed",
+              [t.tree_get_description() for t in gm.trees]
+              == [t.tree_get_description() for t in gm_b.trees])
+        expect_raises("FX2-d8 empty restricted vocabulary refused at "
+                      "construction", ValueError, Grove,
+                      X2, y2, 1.0, 4, 2, ["x0", "tanh(x0)"], sigma=0.02,
+                      node_list=[nodes2[0]], operations=list(OPS4),
+                      seed=1, flex_atoms=[specd],
+                      variables=("x0", "x1"))
+    finally:
+        real_functionC.set_variables(("x",))
+
+    # ---------------------------------------------------------------- FX2-e
+    print("[FX2-e] multi-slot immortality + slot move")
+    tri = function_treeC.Tree(0, list(FUNCS),
+                              np.ascontiguousarray(X, dtype=np.float64),
+                              node=copy.deepcopy(fnode))
+    tri.tree_update(tri.get_root())
+    gp_movesC.set_rng(random.Random(5), np.random.default_rng(5))
+    lqf, lqr = gp_movesC.subtree_mutation(tri)
+    check("FX2-e1 subtree_mutation force-rejects the 2-slot scaffold",
+          lqr == NEG_INF)
+    seen_slots = set()
+    for it in range(60):
+        tcand = copy.deepcopy(tm)
+        before = [function_treeC.tree_to_skel(s)
+                  for s in function_treeC.collect_flex_nodes(
+                      tcand.get_root(), None)[0].flex_slots]
+        lqf, lqr = gp_movesC.flex_slot_mutation(tcand, list(FUNCS),
+                                                list(OPS4), None)
+        after = [function_treeC.tree_to_skel(s)
+                 for s in function_treeC.collect_flex_nodes(
+                     tcand.get_root(), None)[0].flex_slots]
+        for si in range(2):
+            if before[si] != after[si]:
+                seen_slots.add(si)
+    check("FX2-e2 the slot move reaches BOTH slots", seen_slots == {0, 1},
+          seen_slots)
+    tno = make_tree("a0*x", X, FUNCS)
+    lqf, lqr = gp_movesC.flex_slot_mutation(tno, list(FUNCS), list(OPS4),
+                                            None)
+    check("FX2-e3 flex-free tree still hard-rejects", lqr == NEG_INF)
+
+    # ---------------------------------------------------------------- FX2-f
+    print("[FX2-f] root lock (opt-in): the model IS the template")
+    spec1b = real_functionC.FlexAtomSpec("Gl", "c0*tanh(s)")
+    rng_f = np.random.default_rng(6)
+    y_f = (2.0 * np.tanh(1.5 * X - 1.0)
+           + rng_f.normal(0.0, 0.02, X.size)).astype(np.float64)
+    lock_nodes = []
+    for _ in range(4):
+        tsd = make_flex_tree(spec1b, "a0*x", ["c0"], X, FUNCS,
+                             slot_values={"a0": 1.0})
+        lock_nodes.append(tsd.get_root())
+    gl = Grove(X, y_f, 1.0, 4, 2, list(FUNCS), sigma=0.02,
+               node_list=lock_nodes, operations=list(OPS4), seed=55,
+               g_tau=1.0, flex_atoms=[spec1b], flex_root_lock=True)
+    check("FX2-f1 default is OFF (a plain flex Grove reads False)",
+          bool(g_e2e.flex_root_lock) is False)
+    gl.compute_posteriors(y_f, False)
+    gl.run(y_f, 200)
+    check("FX2-f2 200 locked steps: every root is STILL the bare "
+          "scaffold", all(t.get_root().is_flex() for t in gl.trees))
+    check("FX2-f3 the locked chain still moves and stays finite",
+          sum(gl.move_accepts.values()) > 0 and np.isfinite(
+              np.asarray(gl.root_posteriors, dtype=np.float64)).all())
+    expect_raises("FX2-f4 lock without scaffolds is refused",
+                  ValueError, Grove, X, y_f, 1.0, 4, 2, list(FUNCS),
+                  sigma=0.02, operations=list(OPS4), seed=1,
+                  flex_root_lock=True)
+
     # ------------------------------------------------------------- summary
     print("=" * 66)
     print("test_phaseFX: %d passed, %d failed" % (N_PASS, N_FAIL))

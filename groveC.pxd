@@ -97,6 +97,18 @@ cdef class Grove:
     cdef public int burn_in_cap
     cdef public object _burn_in_seed
 
+    '''K3 masks, precomputed: {flex template name: [per-slot function
+    list or None]} built once at construction by filtering self.funcs
+    against each slot's variable allowlist. None when no registered
+    scaffold declares masks (the dispatch then passes None through and
+    the move runs its v1 path).'''
+    cdef public object _flex_slot_funcs
+
+    '''Root lock (opt-in, default False = v1): restrict the target to
+    trees whose root IS the scaffold; off-class proposals hard-reject
+    in _step. The wave-level searches run with this on.'''
+    cdef public bint flex_root_lock
+
     cdef  _init_trees(self, list node_list, int Npars,
                             object init_value)
     cpdef void set_sigmas(self, object new_sigma)

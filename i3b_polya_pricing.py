@@ -195,9 +195,24 @@ def expr_to_skel(expr, funcs, variables=VARIABLES_I3B):
     return rec(expr)
 
 
+def _is_multislot_f(field):
+    """The 'F' 4th field is one slot skeleton (its [0] is a tag string)
+    or a sequence of slot skeletons (its [0] is itself a sequence) —
+    the same mechanical disambiguation the wire uses."""
+    return not isinstance(field[0], str)
+
+
 def skel_n_nodes(skel):
+    """Construction steps of a skeleton = the Polya path length under
+    the frozen measure. A flex scaffold ('F') is ONE step (its template
+    cell) plus its slots' steps; the internal theta names carry no
+    steps, mirroring extract_path."""
     if skel[0] == 'O':
         return 1 + skel_n_nodes(skel[2]) + skel_n_nodes(skel[3])
+    if skel[0] == 'F':
+        if _is_multislot_f(skel[3]):
+            return 1 + sum(skel_n_nodes(s) for s in skel[3])
+        return 1 + skel_n_nodes(skel[3])
     return 1
 
 
@@ -207,6 +222,11 @@ def skel_to_json(skel):
         return ['O', skel[1], skel_to_json(skel[2]), skel_to_json(skel[3])]
     if skel[0] == 'A':
         return ['A', skel[1], list(skel[2])]
+    if skel[0] == 'F':
+        if _is_multislot_f(skel[3]):
+            return ['F', skel[1], list(skel[2]),
+                    [skel_to_json(s) for s in skel[3]]]
+        return ['F', skel[1], list(skel[2]), skel_to_json(skel[3])]
     return ['L', skel[1]]
 
 
@@ -215,6 +235,11 @@ def skel_from_json(obj):
         return ('O', obj[1], skel_from_json(obj[2]), skel_from_json(obj[3]))
     if obj[0] == 'A':
         return ('A', obj[1], list(obj[2]))
+    if obj[0] == 'F':
+        if _is_multislot_f(obj[3]):
+            return ('F', obj[1], tuple(obj[2]),
+                    tuple(skel_from_json(s) for s in obj[3]))
+        return ('F', obj[1], tuple(obj[2]), skel_from_json(obj[3]))
     return ('L', obj[1])
 
 

@@ -166,3 +166,13 @@ cdef class FlexAtomSpec:
     cdef public int k
     cdef public object expr
     cdef public object compiled
+    '''Multi-slot / impure-template extension (all legacy-consistent for
+    single-slot pure specs: slot_symbols == [slot_symbol], n_slots == 1,
+    template_variables == [], var_indices == [], slot_variables None,
+    allow_variables False).'''
+    cdef public list slot_symbols
+    cdef public int n_slots
+    cdef public bint allow_variables
+    cdef public list template_variables
+    cdef public list var_indices
+    cdef public object slot_variables

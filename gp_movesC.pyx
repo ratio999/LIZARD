@@ -2351,23 +2351,36 @@ cpdef tuple etr_mutation(function_treeC.Tree tree, list functions=None,
 # Phase FX (transparent atoms v1): the dedicated SLOT move.
 # ---------------------------------------------------------------------------
 cdef tuple _flex_slot_mutation(function_treeC.Tree tree, list functions,
-                               list operations):
-    """Pick a flex scaffold uniformly, apply ONE standard kernel move to
-    its SLOT subtree (wrapped as a Tree), and pass the inner move's
-    (log_q_fwd, log_q_rev) through.
+                               list operations, object slot_functions):
+    """Pick a (scaffold, slot) pair uniformly over ALL slots of all flex
+    nodes, apply ONE standard kernel move to that slot subtree (wrapped
+    as a Tree), and pass the inner move's (log_q_fwd, log_q_rev)
+    through.
 
     Densities
     ---------
-        q(T'|T) = p_slotmove * (1/n_flex) * (1/7) * q_inner(s'|s)
-    n_flex is INVARIANT (this move never creates or destroys scaffolds),
-    the inner move is drawn uniformly from a 7-set that contains BOTH
-    members of each birth/death pair (add_node<->leaf_hoist,
-    split<->internal_hoist; point/subtree/ETR are self-inverse), so every
-    factor except q_inner cancels between forward and reverse -- the
-    returned correction is exactly the inner move's. Inner moves run with
-    atoms=None (no opaque births inside slots; flex nesting is impossible
-    by construction) and inherit every inner convention verbatim: depth
+        q(T'|T) = p_slotmove * (1/n_slots_total) * (1/7) * q_inner(s'|s)
+    n_slots_total is INVARIANT (this move never creates or destroys
+    scaffolds or slots), the inner move is drawn uniformly from a 7-set
+    that contains BOTH members of each birth/death pair
+    (add_node<->leaf_hoist, split<->internal_hoist; point/subtree/ETR
+    are self-inverse), so every factor except q_inner cancels between
+    forward and reverse -- the returned correction is exactly the inner
+    move's. For single-slot scaffolds the pick reduces to the v1 uniform
+    scaffold pick, same single RNG draw. Inner moves run with atoms=None
+    (no opaque births inside slots; flex nesting is impossible by
+    construction) and inherit every inner convention verbatim: depth
     caps on the slot-as-a-tree, force-rejects, perfect-binary supports.
+
+    K3 masks: `slot_functions`, when given, maps a template name to its
+    per-slot RESTRICTED function lists; the chosen slot's list replaces
+    `functions` for the inner move, so the vocabulary the move draws
+    from and the vocabulary its densities count are the same restricted
+    set by construction — masked variables are unmintable at proposal
+    time, and (lqf, lqr) stay consistent. Reverse-support note: the
+    restriction is state-independent (a fixed property of the (template,
+    slot) pair), so forward and reverse inner densities are computed
+    over the same choice set.
 
     Name discipline: the slot Tree's name pool is pre-seeded with the
     FULL outer name_values keys before dispatch, so inner births can
@@ -2387,9 +2400,37 @@ cdef tuple _flex_slot_mutation(function_treeC.Tree tree, list functions,
         # was a guaranteed accept that re-reinforced the incumbent's
         # Polya path on ~p_flex of draws -- an adaptation bias.)
         return (0.0, -np.inf)
-    cdef function_treeC.Node fnode = flexes[_PY_RNG.randrange(n_flex)]
+    # Uniform over (scaffold, slot): enumerate the slot count per
+    # scaffold, draw ONE index over the total. All-single-slot trees
+    # (every v1 configuration) keep n_total == n_flex, so the draw and
+    # its RNG stream are exactly the v1 scaffold pick.
+    cdef function_treeC.Node fn
+    cdef int n_total = 0
+    cdef list counts = []
+    for fn in flexes:
+        counts.append(1 if fn.flex_slots is None else len(fn.flex_slots))
+        n_total += counts[len(counts) - 1]
+    cdef int pick = _PY_RNG.randrange(n_total)
+    cdef int fi = 0
+    cdef int slot_idx = pick
+    while slot_idx >= <int> counts[fi]:
+        slot_idx -= <int> counts[fi]
+        fi += 1
+    cdef function_treeC.Node fnode = flexes[fi]
+    cdef function_treeC.Node slot_root = (
+        fnode.left if fnode.flex_slots is None
+        else <function_treeC.Node> fnode.flex_slots[slot_idx])
+    # K3: the chosen slot's restricted vocabulary (None entries and an
+    # absent map both mean the shared list).
+    cdef list inner_functions = functions
+    cdef object per_slot
+    if slot_functions is not None and fnode.flex_spec is not None:
+        per_slot = (<dict> slot_functions).get(
+            (<object> fnode.flex_spec).name)
+        if per_slot is not None and per_slot[slot_idx] is not None:
+            inner_functions = list(per_slot[slot_idx])
     cdef function_treeC.Tree slot_tree = function_treeC.Tree(
-        0, functions, tree.domain, fnode.left, 0, 1, tree.T, 0.01,
+        0, inner_functions, tree.domain, slot_root, 0, 1, tree.T, 0.01,
         tree.sigma, tree.g_tau, None)
     # Pool injection. INVARIANT (review 2026-07-29): every inner move
     # reads its name pool from tree.name_values BEFORE its first
@@ -2406,24 +2447,32 @@ cdef tuple _flex_slot_mutation(function_treeC.Tree tree, list functions,
     cdef int mi = _PY_RNG.randrange(7)
     cdef double lqf, lqr
     if mi == 0:
-        lqf, lqr = _point_mutation(slot_tree, functions, operations, None)
+        lqf, lqr = _point_mutation(slot_tree, inner_functions, operations,
+                                   None)
     elif mi == 1:
-        lqf, lqr = _add_node(slot_tree, functions, operations, None)
+        lqf, lqr = _add_node(slot_tree, inner_functions, operations, None)
     elif mi == 2:
-        lqf, lqr = _leaf_hoist(slot_tree, functions, operations, None)
+        lqf, lqr = _leaf_hoist(slot_tree, inner_functions, operations, None)
     elif mi == 3:
-        lqf, lqr = _split(slot_tree, functions, operations, None)
+        lqf, lqr = _split(slot_tree, inner_functions, operations, None)
     elif mi == 4:
-        lqf, lqr = _internal_hoist(slot_tree, functions, operations, None)
+        lqf, lqr = _internal_hoist(slot_tree, inner_functions, operations,
+                                   None)
     elif mi == 5:
-        lqf, lqr = _subtree_mutation(slot_tree, functions, operations)
+        lqf, lqr = _subtree_mutation(slot_tree, inner_functions, operations)
     else:
-        lqf, lqr = _etr_mutation(slot_tree, functions, operations, None)
+        lqf, lqr = _etr_mutation(slot_tree, inner_functions, operations,
+                                 None)
 
     # Reattach (the inner move may have replaced the slot ROOT object)
-    # and rebuild the scaffold composition + every ancestor.
-    if slot_tree.root is not fnode.left:
-        fnode.assign_left(slot_tree.root, False)
+    # and rebuild the scaffold composition + every ancestor. Slot 0 also
+    # updates node.left (the legacy mirror); higher slots live only in
+    # flex_slots.
+    if slot_tree.root is not slot_root:
+        if fnode.flex_slots is not None:
+            fnode.flex_slots[slot_idx] = slot_tree.root
+        if slot_idx == 0:
+            fnode.assign_left(slot_tree.root, False)
     fnode.update_func()
     tree.tree_update(fnode)
     # OUTER depth cap (review 2026-07-29): the inner caps bound the
@@ -2442,14 +2491,19 @@ cdef tuple _flex_slot_mutation(function_treeC.Tree tree, list functions,
 
 
 cpdef tuple flex_slot_mutation(function_treeC.Tree tree, list functions=None,
-                               list operations=None):
+                               list operations=None,
+                               object slot_functions=None):
     """Phase FX public entry point. Returns (log_q_fwd, log_q_rev); the
-    correction reduces to the inner move's (see _flex_slot_mutation)."""
+    correction reduces to the inner move's (see _flex_slot_mutation).
+    `slot_functions` optionally carries the per-slot restricted
+    vocabularies of the K3 masks ({template name: [list per slot]});
+    None is the v1 behaviour. Cross-module callers: POSITIONAL ONLY."""
     if functions is None:
         functions = tree.functions
     if operations is None:
         operations = ["+", "-", "*", "/", "**", "o"]
-    return _flex_slot_mutation(tree, list(functions), list(operations))
+    return _flex_slot_mutation(tree, list(functions), list(operations),
+                               slot_functions)
 
 
 def generate_subtree_with_size(int size, list functions, cnp.ndarray[cnp.float32_t, ndim=1] x):

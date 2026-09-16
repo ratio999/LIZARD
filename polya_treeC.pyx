@@ -470,6 +470,14 @@ cdef class PolyaTree:
                             f"construction) or enable auto_register."
                         )
                 path.append(('prim', idx))
+                '''One cell for the template head, then EVERY slot's
+                construction path continues in the child subtrie, in
+                declaration order (a single slot is the historical
+                left-descent, bit-identical).'''
+                if node.flex_slots is not None:
+                    for _slot in node.flex_slots:
+                        self._extract_recursive(_slot, path)
+                    return
                 self._extract_recursive(node.get_left(), path)
                 return
             op = node.get_op()

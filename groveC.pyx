@@ -333,7 +333,8 @@ cdef class Grove:
                  double md_softmin_beta=8.0,
                  object md_baselines=None,
                  int burn_in_top_k=0,
-                 int burn_in_cap=0):
+                 int burn_in_cap=0,
+                 bint flex_root_lock=False):
 
         '''Burn-in budget (both default to the exhaustive historical
         burn-in, so every existing call is unchanged). burn_in_top_k > 0
@@ -350,6 +351,13 @@ cdef class Grove:
         self.burn_in_top_k = burn_in_top_k
         self.burn_in_cap = burn_in_cap
         self._burn_in_seed = seed
+        '''Root lock: only meaningful for scaffolded populations; a lock
+        without scaffolds would freeze the whole chain (every structural
+        candidate off-class), so refuse the configuration loudly.'''
+        if flex_root_lock and flex_atoms is None:
+            raise ValueError(
+                "Grove: flex_root_lock=True requires flex_atoms")
+        self.flex_root_lock = flex_root_lock
 
         # --- Flexible domain (flexible_domain_plan.md §3) -----------------
         # Resolve and install the variable registry BEFORE any leaf is
@@ -486,13 +494,62 @@ cdef class Grove:
                                 "Grove: flex template %r collides with an "
                                 "opaque atom name (or its pin-suffixed "
                                 "base)" % _f.name)
-            # Re-validate under the CURRENT variable registry (mirrors the
-            # AtomSpec re-derivation above; deterministic).
+            '''Re-validate under the CURRENT variable registry (mirrors
+            the AtomSpec re-derivation above; deterministic). The
+            reconstruction arguments come from the spec's own
+            __reduce__, so the multi-slot / impure-template / mask
+            configuration is forwarded intact; a v1 spec reduces to the
+            historical (name, template, slot_symbol) triple and takes
+            the identical path.'''
             flex_atoms = [real_functionC.FlexAtomSpec(
-                _f.name, _f.template, _f.slot_symbol) for _f in flex_atoms]
+                *(_f.__reduce__()[1])) for _f in flex_atoms]
             self.flex_atoms = list(flex_atoms)
+            '''K3: precompute each masked slot's restricted vocabulary
+            once. A vocabulary entry is allowed inside a slot iff every
+            registered variable it references is in the slot's
+            allowlist (an entry with no variables — none exist in
+            practice — would pass any mask). Unmasked slots get None =
+            the shared funcs list. The whole map stays None when no
+            spec declares masks, keeping the dispatch argument inert.'''
+            _any_mask = any(_f.slot_variables is not None
+                            for _f in self.flex_atoms)
+            if _any_mask:
+                # NB self.funcs is assigned later in this ctor; the
+                # local argument is the authoritative vocabulary here.
+                _fvars = {}
+                for _fs in funcs:
+                    _fvars[_fs] = {
+                        str(_s) for _s in sp.sympify(_fs).free_symbols
+                        if real_functionC.is_variable_name(str(_s))}
+                _map = {}
+                for _f in self.flex_atoms:
+                    if _f.slot_variables is None:
+                        _map[_f.name] = None
+                        continue
+                    _lists = []
+                    for _sv in _f.slot_symbols:
+                        _mask = _f.slot_variables.get(_sv)
+                        if _mask is None:
+                            _lists.append(None)
+                        else:
+                            _allowed = [
+                                _fs for _fs in funcs
+                                if _fvars[_fs] <= set(_mask)]
+                            if not _allowed:
+                                raise ValueError(
+                                    "Grove: the mask %r of slot %r "
+                                    "(template %r) leaves an EMPTY slot "
+                                    "vocabulary — no inner move could "
+                                    "ever propose a leaf"
+                                    % (tuple(_mask), _sv, _f.name))
+                            _lists.append(_allowed)
+                    _map[_f.name] = _lists
+                self._flex_slot_funcs = _map
+            else:
+                self._flex_slot_funcs = None
         else:
             self.flex_atoms = None
+            self._flex_slot_funcs = None
         '''Structural-constraint prior tilt, opt-in; None turns it off.
         The callable is validated here (see _sp).
 
@@ -990,6 +1047,16 @@ cdef class Grove:
             this line.'''
             probs = np.concatenate(
                 (probs * 0.80, np.array([0.20], dtype=np.float64)))
+            '''Under the root lock every OUTER structural move has empty
+            support (each is guarded off the scaffold and off its
+            slots, and any wrap leaves the model class), so proposing
+            them only burns iterations. The restricted kernel is the
+            flex move alone; it is self-inverse, so its selection
+            probability cancels in the correction and any fixed weight
+            is balance-safe. PR keeps its own front-of-queue gate.'''
+            if self.flex_root_lock:
+                probs = np.concatenate(
+                    (probs[:8] * 0.0, np.array([1.0], dtype=np.float64)))
         return probs
 
     cpdef cnp.ndarray get_move_probs(self):
@@ -1193,7 +1260,8 @@ cdef class Grove:
                 node the move returns (0, -inf), a hard reject, the same
                 convention as every structurally impossible move.'''
                 lqf, lqr = gp_movesC.flex_slot_mutation(
-                    cand, self.funcs, self.operations)
+                    cand, self.funcs, self.operations,
+                    self._flex_slot_funcs)
             else:
                 lqf, lqr = gp_movesC.point_mutation(
                     cand, self.funcs, self.operations,
@@ -1373,6 +1441,22 @@ cdef class Grove:
 
         # Validity-failed proposal -> hard reject (already counted as proposed).
         if cand is None or not np.isfinite(lqr):
+            self._adapt_move(move_name, False)
+            return False
+
+        '''Root lock (opt-in, D9): the target is restricted to trees
+        whose ROOT is the scaffold — the model IS the template, with no
+        structure outside the slots. Any proposal leaving that class
+        (e.g. a split wrapping the scaffold in a fresh operation, which
+        plain immortality permits) hard-rejects, the standard restricted-
+        support convention: off-support candidates are rejected, on-
+        support proposals and their densities are untouched, so the
+        restricted chain is a valid MH sampler on the model class.'''
+        if self.flex_root_lock and not cand.get_root().is_flex():
+            self._adapt_move(move_name, False)
+            return False
+        if self.flex_root_lock and cand2 is not None \
+                and not cand2.get_root().is_flex():
             self._adapt_move(move_name, False)
             return False
 
@@ -3257,7 +3341,8 @@ cdef class Forest:
                  object datasets=None,
                  str md_combine='sum',
                  double md_softmin_beta=8.0,
-                 object md_baselines=None):
+                 object md_baselines=None,
+                 bint flex_root_lock=False):
         self.temperatures = np.asarray(temperatures, dtype=np.float64)
         self.groves = []
         self.n_procs = n_procs
@@ -3426,9 +3511,12 @@ cdef class Forest:
                     "Forest: burn_in=True with flex_atoms is not "
                     "supported in v1 (burn-in constant folding is not "
                     "flex-aware)")
+            '''Re-validation via each spec's own __reduce__ arguments,
+            exactly as in Grove.__init__: the multi-slot / impure /
+            masked configuration is forwarded intact, and a v1 spec
+            takes the historical 3-argument path.'''
             flex_atoms = [real_functionC.FlexAtomSpec(
-                _spec_obj.name, _spec_obj.template, _spec_obj.slot_symbol)
-                for _spec_obj in flex_atoms]
+                *(_spec_obj.__reduce__()[1])) for _spec_obj in flex_atoms]
             _polya_any = self.polya
             for _spec_obj in flex_atoms:
                 _polya_any.add_primitive(_spec_obj.name, None)
@@ -3475,7 +3563,8 @@ cdef class Forest:
                       datasets=datasets,
                       md_combine=md_combine,
                       md_softmin_beta=md_softmin_beta,
-                      md_baselines=md_baselines)
+                      md_baselines=md_baselines,
+                      flex_root_lock=flex_root_lock)
             )
         # Stashed for the spawn refusal below; the Groves hold the
         # validated copies, the Forest only needs the flag.

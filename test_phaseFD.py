@@ -978,6 +978,75 @@ def test_FD3_m_burnin_budget():
           "candidates in %.1fs)" % (n_ex, t_ex, len(g_c1.trees), t_c))
 
 
+def test_FD46_wide_domains():
+    """d = 4 and d = 6 sanity (I3-B D9 K4): the d-generic claims of the
+    d=3 certification, exercised at the widths the wave-level scaffolds
+    use, with CONSTANT-PER-SIMULATION pin columns riding the domain.
+
+    Pin columns are constant within a simulation's rows and vary only
+    across simulations, so any single-sim slice is degenerate in them —
+    pooled scoring is what must stay healthy."""
+    print("[FD46] d=4 and d=6 domains with constant-per-sim pin columns")
+    rng = np.random.default_rng(46)
+    n_sims, m = 12, 20
+    n = n_sims * m
+    for d, vars_d in ((4, ('x0', 'x1', 'x2', 'x3')),
+                      (6, ('x0', 'x1', 'x2', 'x3', 'x4', 'x5'))):
+        try:
+            set_variables(vars_d)
+            rows = [np.concatenate([rng.uniform(0.5, 3.0, m)
+                                    for _ in range(n_sims)])]
+            for j in range(1, d):
+                # constant per simulation, varying across simulations
+                vals = rng.uniform(0.5, 2.0, n_sims)
+                rows.append(np.repeat(vals, m))
+            X = np.ascontiguousarray(np.vstack(rows).astype(np.float64))
+            assert get_variables() == vars_d and n_variables() == d
+            # coordinate rows come back exactly; pins constant per block
+            for j in range(d):
+                assert np.array_equal(
+                    RealFunctionC.from_string(vars_d[j], X).get_eval(X),
+                    X[j])
+            assert np.all(X[1][:m] == X[1][0])
+            # compound evaluate against numpy, using a pin column
+            rf = RealFunctionC.from_string('a0*x1*x0 + x%d' % (d - 1), X)
+            ref = 1.5 * X[1] * X[0] + X[d - 1]
+            assert np.allclose(rf.get_eval(X, {'a0': 1.5}), ref)
+            # BIC scoring + a short chain on the wide domain
+            y = (2.0 * X[0] * X[1] + X[2]
+                 + rng.normal(0.0, 0.05, n)).astype(np.float64)
+            skel = ('O', '+', ('O', '*', ('O', '*', ('L', 'a0'),
+                                          ('L', 'x0')), ('L', 'x1')),
+                    ('L', 'x2'))
+            root = node_from_skel(skel, X, None)
+            t = Tree(0, [v for v in vars_d], X, root, 0, 1.0, 1.0, 0.01,
+                     0.05)
+            lp = t.log_marginal_bic(y, True)
+            assert np.isfinite(lp), (d, lp)
+            nv = dict(t.get_param_dicts()[1])
+            assert abs(nv['a0'] - 2.0) < 0.1, nv
+            g = Grove(X, y, T=1.0, size=3, depth=2,
+                      funcs=[v for v in vars_d], Npars=1, init_value=1.0,
+                      operations=OPS4, base_temp=1.0, use_gradients=False,
+                      seed=17, g_tau=1.0, sigma=0.05)
+            g.run(y, 40)
+            assert np.isfinite(np.asarray(g.root_posteriors,
+                                          dtype=np.float64)).all()
+            for tr in g.trees:
+                wire = _tree_to_wire(tr, 0.0)
+                assert not (set(wire[1]) & set(vars_d)), \
+                    "parameter minted with a variable name at d=%d" % d
+            # archive-style evaluate on a foreign-length domain
+            m2 = 37
+            X2 = np.ascontiguousarray(np.vstack(
+                [rng.uniform(0.5, 2.0, m2) for _ in range(d)]))
+            p = np.asarray(t.evaluate(X2), dtype=np.float64)
+            assert p.shape == (m2,)
+        finally:
+            set_variables(LEGACY)
+        print("      OK  d=%d" % d)
+
+
 def test_FD3_j_timing():
     print("[FD3-j] evaluate timing at d=3 (informational)")
     n = 64
@@ -1086,6 +1155,7 @@ def main():
     test_FD3_i_wire()
     test_FD3_h_archive_eval()
     test_FD3_m_burnin_budget()
+    test_FD46_wide_domains()
     test_FD3_j_timing()
     if '--mpi' in sys.argv:
         test_FD3_i2_spawn()

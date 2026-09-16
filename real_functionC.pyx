@@ -1388,11 +1388,36 @@ cdef class FlexAtomSpec:
         The slot's symbol inside `template` (default "s").
     """
 
-    def __init__(self, str name, str template, str slot_symbol="s"):
+    def __init__(self, str name, str template, str slot_symbol="s",
+                 object slot_symbols=None, bint allow_variables=False,
+                 object slot_variables=None):
+        '''Multi-slot / impure-template extension (opt-in, D9):
+
+        slot_symbols : sequence of slot symbols, in DECLARATION order
+            (this order is the slot order everywhere: seeding lists,
+            the wire, the Polya path, the printed description). None
+            keeps the single-slot form with `slot_symbol`.
+        allow_variables : True lets the frozen template reference
+            REGISTERED variables directly (the wave templates need t
+            and the rate coordinates in the frozen shape). The slots
+            then no longer carry all x-dependence. Default False keeps
+            the v1 slot-purity validation verbatim.
+        slot_variables : {slot_symbol: sequence of variable names} —
+            per-slot ALLOWLIST of registered variables that may appear
+            inside that slot's subtree (K3 masks). A slot absent from
+            the dict is unrestricted. Enforcement lives at seeding
+            (make_flex_node) and at proposal time (flex_slot_mutation's
+            restricted vocabulary); the spec only validates and carries
+            the masks. None = no masks (legacy).
+
+        A spec constructed with all three defaults is bit-identical in
+        behaviour and pickle format to the v1 class.'''
         cdef object head, expr, s
         cdef list slots = []
-        cdef bint has_slot = False
-        cdef str s_str
+        cdef list sym_list
+        cdef set sym_set, seen_slots
+        cdef bint legacy
+        cdef str s_str, nm, sv
         if name is None or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name) is None:
             raise ValueError(
                 "FlexAtomSpec: name %r must be a plain identifier" % (name,))
@@ -1414,48 +1439,118 @@ cdef class FlexAtomSpec:
             raise ValueError(
                 "FlexAtomSpec: name %r shadows a known sympy function -- "
                 "descriptions would silently evaluate/fold" % (name,))
-        if (slot_symbol is None or len(slot_symbol) == 0
-                or re.fullmatch(r'[a-zA-Z]\d+', slot_symbol)
-                or is_variable_name(slot_symbol) or slot_symbol == 'y'):
-            raise ValueError(
-                "FlexAtomSpec: slot_symbol %r must be a plain symbol that "
-                "is neither a placeholder parameter, a registered variable "
-                "nor 'y'" % (slot_symbol,))
+        legacy = (slot_symbols is None and not allow_variables
+                  and slot_variables is None)
+        if slot_symbols is None:
+            sym_list = [slot_symbol]
+        else:
+            sym_list = [str(x) for x in slot_symbols]
+            if len(sym_list) == 0:
+                raise ValueError(
+                    "FlexAtomSpec: slot_symbols must name at least one "
+                    "slot")
+            if len(set(sym_list)) != len(sym_list):
+                raise ValueError(
+                    "FlexAtomSpec: duplicate slot symbols in %r"
+                    % (sym_list,))
+        for sv in sym_list:
+            if (sv is None or len(sv) == 0
+                    or re.fullmatch(r'[a-zA-Z]\d+', sv)
+                    or is_variable_name(sv) or sv == 'y'):
+                raise ValueError(
+                    "FlexAtomSpec: slot_symbol %r must be a plain symbol "
+                    "that is neither a placeholder parameter, a registered "
+                    "variable nor 'y'" % (sv,))
+        sym_set = set(sym_list)
+        seen_slots = set()
+        cdef list tvars = []
         expr = sp.sympify(template)
         for s in expr.free_symbols:
             s_str = str(s)
-            if s_str == slot_symbol:
-                has_slot = True
+            if s_str in sym_set:
+                seen_slots.add(s_str)
             elif re.fullmatch(r'[a-zA-Z]\d+', s_str) and not is_variable_name(s_str):
                 slots.append(s_str)
+            elif allow_variables and is_variable_name(s_str):
+                tvars.append(s_str)
             else:
                 raise ValueError(
                     "FlexAtomSpec %r: free symbol %r is neither the slot "
                     "%r nor a placeholder parameter (registered variables "
                     "are forbidden inside templates -- slot-purity)"
-                    % (name, s_str, slot_symbol))
-        if not has_slot:
+                    % (name, s_str, sym_list[0] if len(sym_list) == 1
+                       else tuple(sym_list)))
+        if len(seen_slots) != len(sym_list):
+            if legacy or slot_symbols is None:
+                raise ValueError(
+                    "FlexAtomSpec %r: template must contain the slot "
+                    "symbol %r (a slot-free template is an opaque "
+                    "AtomSpec)" % (name, slot_symbol))
             raise ValueError(
-                "FlexAtomSpec %r: template must contain the slot symbol %r "
-                "(a slot-free template is an opaque AtomSpec)"
-                % (name, slot_symbol))
+                "FlexAtomSpec %r: every declared slot must appear in the "
+                "template; missing %r"
+                % (name, sorted(set(sym_list) - seen_slots)))
+        # Masks: validate names now, against the CURRENT registry (specs
+        # are constructed after set_variables by contract; Grove
+        # re-validates its own copies).
+        cdef dict masks = None
+        if slot_variables is not None:
+            masks = {}
+            for sv in slot_variables:
+                if str(sv) not in sym_set:
+                    raise ValueError(
+                        "FlexAtomSpec %r: slot_variables key %r is not a "
+                        "declared slot" % (name, sv))
+                vs = tuple(str(v) for v in slot_variables[sv])
+                for nm in vs:
+                    if not is_variable_name(nm):
+                        raise ValueError(
+                            "FlexAtomSpec %r: mask entry %r for slot %r "
+                            "is not a registered variable"
+                            % (name, nm, sv))
+                masks[str(sv)] = vs
+        # Template variables in REGISTRY order, with their row indices
+        # cached for evaluation ((d, n) row lookup without a per-call
+        # registry search). The registry cannot change mid-run.
+        cdef list reg = list(get_variables())
+        tvars = [nm for nm in reg if nm in set(tvars)]
         slots.sort(key=_slot_sort_key)
         self.name = name
         self.template = template
-        self.slot_symbol = slot_symbol
+        self.slot_symbol = sym_list[0]
+        self.slot_symbols = sym_list
+        self.n_slots = len(sym_list)
+        self.allow_variables = allow_variables
+        self.template_variables = tvars
+        self.var_indices = [reg.index(nm) for nm in tvars]
+        self.slot_variables = masks
         self.slots = slots
         self.k = len(slots)
         self.expr = expr
-        # Compile ONCE over (slot_values, *placeholders); reused by every
-        # instantiation's closure (function_treeC._flex_function).
+        # Compile ONCE over (*template_vars, *slot_values, *placeholders);
+        # reused by every instantiation's closure
+        # (function_treeC._flex_function). For a legacy spec the argument
+        # list is exactly the v1 (slot, *placeholders).
         self.compiled = sp.lambdify(
-            [sp.Symbol(slot_symbol)] + [sp.Symbol(nm) for nm in slots],
+            [sp.Symbol(nm) for nm in tvars]
+            + [sp.Symbol(sv) for sv in sym_list]
+            + [sp.Symbol(nm) for nm in slots],
             expr, "numpy")
 
     def __reduce__(self):
-        # Wire/pickle contract identical to AtomSpec: (name, template,
-        # slot_symbol) fully determines the spec; __init__ re-validates.
-        return (FlexAtomSpec, (self.name, self.template, self.slot_symbol))
+        '''Wire/pickle contract: the v1 3-tuple whenever the spec uses no
+        extension (old pickles and old consumers keep working, and a v1
+        spec pickled by this build is byte-identical to one pickled by
+        the v1 build); the 6-tuple otherwise. __init__ re-validates.'''
+        if (self.n_slots == 1 and not self.allow_variables
+                and self.slot_variables is None):
+            return (FlexAtomSpec, (self.name, self.template,
+                                   self.slot_symbol))
+        return (FlexAtomSpec, (self.name, self.template, self.slot_symbol,
+                               tuple(self.slot_symbols),
+                               self.allow_variables,
+                               (None if self.slot_variables is None
+                                else dict(self.slot_variables))))
 
 
 cdef is_parameter(str name):

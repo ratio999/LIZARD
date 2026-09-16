@@ -101,6 +101,12 @@ cdef class Node:
     self.left, and self.right is None.'''
     cdef public object flex_spec
     cdef public object flex_names
+    '''flex_slots is the AUTHORITATIVE ordered slot list of a flex node
+    (list of Node, len == spec.n_slots), with self.left kept ==
+    flex_slots[0] so every legacy unary walk still sees slot 0. None on
+    every non-flex node. Appended after the v1 fields for vtab
+    stability.'''
+    cdef public object flex_slots
     cpdef bint is_flex(self)
 
 cdef class Tree:
@@ -252,11 +258,11 @@ cdef _parameter_simplifier(object expr, list used_params)
 # Transparent-atom machinery. See function_treeC.pyx for the contracts;
 # cross-module calls POSITIONAL ONLY.
 cdef real_functionC.RealFunctionC _flex_function(object spec_obj, list names,
-                                                 Node slot)
+                                                 list slots)
 cdef list _collect_flex_nodes(Node node, list out)
 cpdef list collect_flex_nodes(Node node, list out=?)
 cpdef bint tree_has_flex(Node node)
-cpdef Node make_flex_node(object spec_obj, Node slot, list fresh_names,
+cpdef Node make_flex_node(object spec_obj, object slot, list fresh_names,
                           object theta=?)
 
 # Reader for the BIC-penalty ablation switch.
