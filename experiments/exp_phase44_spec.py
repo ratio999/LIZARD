@@ -46,9 +46,14 @@ Run (spawn arms need the mpiexec -n 1 launcher):
 
 import json
 import os
+import sys
 import time
 
 import numpy as np
+
+_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 import gp_movesC
 import groveC
