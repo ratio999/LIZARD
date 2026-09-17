@@ -18,9 +18,6 @@ cdef class Node:
     cdef _rebuild_ancestor_functions(self, Node node)
     cpdef set_value(self, cnp.float64_t value=?)
     cdef bint bis_param
-    '''Internal-parameter values of an opaque atomic leaf (name ->
-    float), None on every other node. It lives on the Node so that tree
-    deepcopies isolate it, exactly like a parameter leaf's .value.'''
     cdef public object theta
     cpdef is_atomic(self)
     cpdef int leaf_k(self)
@@ -94,18 +91,10 @@ cdef class Node:
     cpdef update_func(self, list params_list=?, str user_prefix=?)
     cpdef flag_constants(self, list constants=?)
     cdef replace_constants_with_pars(self, dict name_values=?)
-    '''Transparent-atom fields, declared at the END of the Node block to
-    keep the vtab layout stable. flex_spec is a
-    real_functionC.FlexAtomSpec or None; flex_names the ordered
-    internal-parameter names; the mutable slot subtree lives in
-    self.left, and self.right is None.'''
+    
     cdef public object flex_spec
     cdef public object flex_names
-    '''flex_slots is the AUTHORITATIVE ordered slot list of a flex node
-    (list of Node, len == spec.n_slots), with self.left kept ==
-    flex_slots[0] so every legacy unary walk still sees slot 0. None on
-    every non-flex node. Appended after the v1 fields for vtab
-    stability.'''
+    
     cdef public object flex_slots
     cpdef bint is_flex(self)
 
@@ -201,9 +190,7 @@ cdef class Tree:
                                dict cand_name_values,
                                double sigma)
 
-    '''Per-point-sigma companion of _log_likelihood_at, consumed by
-    gp_movesC.parameter_refresh when the run's sigma is an array. The
-    scalar method above is untouched.'''
+    
     cdef double _log_likelihood_at_sigma_arr(self,
                                cnp.ndarray[cnp.float64_t, ndim=1] y,
                                dict cand_name_values,
@@ -214,9 +201,7 @@ cdef class Tree:
     cdef _root_replacement(self, object replacement=?, int replace_all = ?, dict kwargs= ?, str op = ?,
                             int new_depth=?, bint ensure_valid=?)
 
-    '''Explicit-argument scoring for multi-dataset joint evidence,
-    declared at the END of the Tree block to keep the vtab layout
-    stable. The y-only methods above are untouched.'''
+    
     cdef double _log_marginal_bic_x(self,
                                     cnp.ndarray x,
                                     cnp.ndarray[cnp.float64_t, ndim=1] y,
@@ -233,7 +218,6 @@ cdef class Tree:
 
 cdef _post_order_update(Node node)
 
-# Structural (skeleton) serialization for the MPI wire.
 cpdef object tree_to_skel(Node node)
 cpdef Node node_from_skel(object skel,
                           cnp.ndarray domain,
@@ -255,8 +239,7 @@ cdef list _symbol_values(dict name_values)
 
 cdef _parameter_simplifier(object expr, list used_params)
 
-# Transparent-atom machinery. See function_treeC.pyx for the contracts;
-# cross-module calls POSITIONAL ONLY.
+
 cdef real_functionC.RealFunctionC _flex_function(object spec_obj, list names,
                                                  list slots)
 cdef list _collect_flex_nodes(Node node, list out)
@@ -265,5 +248,5 @@ cpdef bint tree_has_flex(Node node)
 cpdef Node make_flex_node(object spec_obj, object slot, list fresh_names,
                           object theta=?)
 
-# Reader for the BIC-penalty ablation switch.
+
 cpdef bint get_bic_penalty()
