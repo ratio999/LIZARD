@@ -12,9 +12,7 @@ token.txt
 .env.*
 
 # ---------------------------------------------------------------------------
-# Build artifacts. The .c files here are Cython-GENERATED from the .pyx
-# sources; the hand-written C under numerical_backend/ is tracked source
-# and is re-included below.
+# Build artifacts. The .c files are Cython-GENERATED from the .pyx sources.
 # ---------------------------------------------------------------------------
 build/
 cython_debug/
@@ -23,7 +21,6 @@ __pycache__/
 *.so
 *.o
 *.c
-!numerical_backend/*.c
 
 # ---------------------------------------------------------------------------
 # Editor / scratch
@@ -42,17 +39,18 @@ Untitled*.ipynb
 # Kept on disk, deliberately never committed.
 # ---------------------------------------------------------------------------
 PROMPT_*.md
+PROMPT_*.txt
+
+# Local certification logs (baseline and post-move battery runs)
+cert/
 
 # ---------------------------------------------------------------------------
 # ALL markdown is local-only by user decision (2026-08-03) — planning,
-# theory and review notes stay on disk, never in the repo. PLAN.md (the
-# project logbook) and README.md are the tracked exceptions. NB
-# .gitignore does not untrack files already in the index: the one-time
-#   git rm --cached <files>
-# was left to the user (agent git-mutation ban).
+# theory and review notes stay on disk, never in the repo. On the release
+# branch README.md is the only tracked exception; PLAN.md (the project
+# logbook) stays on master.
 # ---------------------------------------------------------------------------
 *.md
-!PLAN.md
 !README.md
 
 # safety mirror of mr_preprocessing/scripts_mr (canonical copy lives THERE; this one stays uncommitted, 2026-08-09)
