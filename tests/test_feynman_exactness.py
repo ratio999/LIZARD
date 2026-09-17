@@ -10,10 +10,16 @@ gate but must NOT grade exact, vanishing-term degeneracies (exact, but
 flagged), pi-flavoured constants, parameter-free descriptions,
 multivariate records, and unparsable descriptions.
 """
+import os
 import sys
 import time
 
 import numpy as np
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SRC = os.path.join(os.path.dirname(_HERE), "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 from feynman_exactness import grade_record
 

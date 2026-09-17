@@ -19,6 +19,9 @@ import sympy as sp
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+_SRC = os.path.join(os.path.dirname(_HERE), "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 import real_functionC
 import i3b_pool

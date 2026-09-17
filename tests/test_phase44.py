@@ -54,9 +54,15 @@ Run (T7 spawns 2 workers):
   $ENV/bin/mpiexec -n 1 $ENV/bin/python test_phase44.py
 """
 
+import os
 import sys
 
 import numpy as np
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SRC = os.path.join(os.path.dirname(_HERE), "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 import groveC
 import exp_constraints as XC

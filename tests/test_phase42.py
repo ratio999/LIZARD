@@ -32,6 +32,11 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+_SRC = os.path.join(os.path.dirname(_HERE), "src")
+_EXP = os.path.join(os.path.dirname(_HERE), "experiments")
+for _p in (_EXP, _SRC):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 

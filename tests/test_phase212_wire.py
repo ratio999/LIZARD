@@ -46,10 +46,16 @@ Run:  mpiexec -n 1 python test_phase212_wire.py     (W3 spawns workers)
 Additive: new file, new name — no existing suite touched.
 """
 
+import os
 import pickle
 import sys
 
 import numpy as np
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SRC = os.path.join(os.path.dirname(_HERE), "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 import function_treeC as ftc
 import groveC

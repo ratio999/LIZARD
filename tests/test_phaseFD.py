@@ -10,12 +10,18 @@ The variable registry is module-global state: every test that installs a
 non-legacy registry restores ('x',) in a finally block, so tests are order-
 independent and the legacy default is always left behind.
 """
+import os
 import sys
 import time
 import pickle
 
 import numpy as np
 import sympy as sp
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SRC = os.path.join(os.path.dirname(_HERE), "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 from real_functionC import (RealFunctionC, AtomSpec, set_variables,
                             get_variables, n_variables, is_variable_name,

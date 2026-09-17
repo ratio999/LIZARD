@@ -39,7 +39,7 @@ import numpy as np
 
 # Allow running as `python tests/test_phase23.py` from repo root
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.abspath(os.path.join(_HERE, os.pardir)))
+sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "src"))
 
 import sympy as sp
 import gp_movesC
