@@ -11,11 +11,7 @@ try:
 except ImportError:
     mpi_include = None
 
-# For the actual MPI library headers, you may also need:
-# On Linux: usually /usr/include/mpi or from mpicc --showme:compile
-# On Windows with MS-MPI: typically C:\Program Files (x86)\Microsoft SDKs\MPI\Include
 
-# Try to get MPI include from mpicc (Linux/WSL)
 import subprocess
 try:
     result = subprocess.run(['mpicc', '--showme:compile'], capture_output=True, text=True)
@@ -30,12 +26,10 @@ if os.name == 'nt':
     if os.path.exists(ms_mpi_include):
         mpi_include_dirs.append(ms_mpi_include)
 
-# The kernel sources live in src/ under flat module names. Run this script
-# from the repository root; package_dir maps the top-level module namespace
-# onto src/, so build_ext --inplace places every extension next to its .pyx.
+
 SRC = os.path.abspath("src")
 
-# Combine all includes for groveC
+
 grove_includes = [np.get_include(), SRC]
 if mpi_include:
     grove_includes.append(mpi_include)
