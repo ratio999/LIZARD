@@ -31,6 +31,20 @@ warnings.filterwarnings('ignore', message=r'divide by zero encountered.*', categ
 warnings.filterwarnings('ignore', message=r'overflow encountered.*', category=RuntimeWarning)
 warnings.filterwarnings('ignore', message=r'underflow encountered.*', category=RuntimeWarning)
 
+'''
+A spawned MPI worker is a fresh interpreter whose working directory need
+not contain the kernel, so the spawn command puts this module's directory
+on sys.path before importing mpi_worker. Modules named by a
+structural_prior_spec (exp_constraints) live in the same directory and
+become importable in the worker the same way.
+'''
+_KERNEL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _worker_spawn_code(entry):
+    return ("import sys; sys.path.insert(0, %r); from mpi_worker import %s; %s()"
+            % (_KERNEL_DIR, entry, entry))
+
 cdef inline double _safe_exp(double x) nogil:
     # mild guard for very negative x
     if x < -700.0:
@@ -251,7 +265,8 @@ def _resolve_structural_prior_spec(spec):
     triple; each process — the master AND every run_mpi_spawn worker —
     imports the named module locally and calls builder(**kwargs) on
     code it already has. The named module must therefore be importable
-    in the worker processes (same cwd / sys.path as the master). The
+    in the worker processes: the spawn command adds the kernel directory
+    to sys.path, and the environment's PYTHONPATH is inherited. The
     kernel stays decoupled from the experiment layer: the import is
     lazy and name-driven, nothing here references exp_constraints.
     """
@@ -2873,7 +2888,7 @@ cdef class Grove:
         # MPI.COMM_SELF is the communicator for just this process
         intercomm = MPI.COMM_SELF.Spawn(
             sys.executable,  # Python interpreter
-            args=["-c", "from mpi_worker import worker_main; worker_main()"],
+            args=["-c", _worker_spawn_code("worker_main")],
             maxprocs=n_workers
         )
         
@@ -3964,7 +3979,7 @@ cdef class Forest:
         # --- Spawn -------------------------------------------------------
         intercomm = MPI.COMM_SELF.Spawn(
             sys.executable,
-            args=["-c", "from mpi_worker import sampler_main; sampler_main()"],
+            args=["-c", _worker_spawn_code("sampler_main")],
             maxprocs=G)
 
         cdef dict config = {
