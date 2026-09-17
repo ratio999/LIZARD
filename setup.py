@@ -30,8 +30,13 @@ if os.name == 'nt':
     if os.path.exists(ms_mpi_include):
         mpi_include_dirs.append(ms_mpi_include)
 
+# The kernel sources live in src/ under flat module names. Run this script
+# from the repository root; package_dir maps the top-level module namespace
+# onto src/, so build_ext --inplace places every extension next to its .pyx.
+SRC = os.path.abspath("src")
+
 # Combine all includes for groveC
-grove_includes = [np.get_include(), os.path.abspath(".")]
+grove_includes = [np.get_include(), SRC]
 if mpi_include:
     grove_includes.append(mpi_include)
 grove_includes.extend(mpi_include_dirs)
@@ -40,26 +45,26 @@ grove_includes.extend(mpi_include_dirs)
 
 
 extensions = [
-    Extension("real_functionC", sources=["real_functionC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    Extension("function_treeC", sources=["function_treeC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    Extension("gp_movesC", sources=["gp_movesC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    Extension("polya_treeC", sources=["polya_treeC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    Extension("groveC", sources=["groveC.pyx"], include_dirs=grove_includes),
-    #Extension("samplerC", sources=["samplerC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    #Extension("num_wrapC", sources=["num_wrapC.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    Extension("mpi_worker", sources=["mpi_worker.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-    Extension("loss_function", sources=["loss_function.pyx"], include_dirs=[np.get_include(), os.path.abspath(".")]),
-   
-    Extension("utils.pointer_utils", 
-              sources=["utils/pointer_utils.pyx"], 
-              include_dirs=[np.get_include(), os.path.abspath(".")],
-              
-              library_dirs=[os.path.join(os.path.abspath("."), "utils")],
-              libraries=[])  
+    Extension("real_functionC", sources=["src/real_functionC.pyx"], include_dirs=[np.get_include(), SRC]),
+    Extension("function_treeC", sources=["src/function_treeC.pyx"], include_dirs=[np.get_include(), SRC]),
+    Extension("gp_movesC", sources=["src/gp_movesC.pyx"], include_dirs=[np.get_include(), SRC]),
+    Extension("polya_treeC", sources=["src/polya_treeC.pyx"], include_dirs=[np.get_include(), SRC]),
+    Extension("groveC", sources=["src/groveC.pyx"], include_dirs=grove_includes),
+    Extension("mpi_worker", sources=["src/mpi_worker.pyx"], include_dirs=[np.get_include(), SRC]),
+    Extension("loss_function", sources=["src/loss_function.pyx"], include_dirs=[np.get_include(), SRC]),
+
+    Extension("utils.pointer_utils",
+              sources=["src/utils/pointer_utils.pyx"],
+              include_dirs=[np.get_include(), SRC],
+
+              library_dirs=[os.path.join(SRC, "utils")],
+              libraries=[])
 ]
 
 
 setup(
-    ext_modules=cythonize(extensions, compiler_directives={'cdivision': True, 'boundscheck': True}, gdb_debug=True),
-    include_dirs=[np.get_include(), os.path.abspath(".")],
+    package_dir={"": "src"},
+    ext_modules=cythonize(extensions, compiler_directives={'cdivision': True, 'boundscheck': True}, gdb_debug=True,
+                          include_path=[SRC]),
+    include_dirs=[np.get_include(), SRC],
 )
